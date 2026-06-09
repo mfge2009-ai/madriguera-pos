@@ -230,6 +230,7 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
     <button data-v="devoluciones">Devoluciones</button>
     <button data-v="facturas">Facturas</button>
     <button data-v="clientes">Clientes</button>
+    <button data-v="consigna">Consignación</button>
   </nav>
   <div id="mc"></div>
 </div>
@@ -445,7 +446,8 @@ const CAT_COLORS={
   'Café':'#fff3e0|#8a4f00','Bebidas':'#e3f2fd|#1a3f8b','Bubble Tea':'#f3e5f5|#5b1a8b',
   'Platos fuertes':'#fce4ec|#8b1a2a','Postres':'#ede7f6|#4527a0',
   'Bebidas con alcohol':'#fbe9e7|#6d1f0f','Taller & Merch':'#e8f5e9|#1f6b45',
-  'Libros':'#e0f2f1|#00695c'
+  'Libros':'#e0f2f1|#00695c',
+  'Consignados':'#fbeaf0|#993556'
 };
 
 // ── Firebase ─────────────────────────────────────────────────
@@ -458,9 +460,14 @@ const fbSet=async(k,v)=>{try{await setDoc(doc(db,'madu',k),{v});}catch(e){consol
 let P=[],T=[],S=[];
 let turnoUser=localStorage.getItem('madu_turno')||'';
 let CL=[]; // clientes frecuentes
+let CG={consignantes:[],libros:[],liquidaciones:[]}; // consignación
+let consignaSub='libros',editConsignante=null,addLibrosTo=null,csearch='',liquidarTo=null;
+const PCT_CONSIGNANTE=0.60; // 60% al consignante
+const PLAZO_DIAS=120;
 let selT=null,selPay='Efectivo',cobConf=false,pagosParciales=[],modoParcial=false,itemSel=null,splitMode=false,splitItems={},cobrando=false,personaMode=false,personaActual=1,numPersonas=2,cancelModal=null;
 let editP=null,cajaConf=false,editStk=null,stkV='',prodSearch='';
 let view='pos',online=false;
+let descuento=0,descuentoTipo='monto';
 let sq='',scat='Todos';
 let vtarget=null,vsize='Mediano',vmilk='Entera';
 
@@ -531,6 +538,7 @@ const sP=()=>_write('products',P);
 const sT=()=>_write('tables',T);
 const sS=()=>_write('sales',S);
 const sCL=()=>_write('clientes',CL);
+const sCG=()=>_write('consigna',CG);
 const fmt=n=>'$'+parseFloat(n).toFixed(2);
 const today=()=>new Date().toISOString().slice(0,10);
 const isVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada;
@@ -576,13 +584,14 @@ function subRT(){
     }, 400);
   }
 
-  ['products','tables','sales','clientes'].forEach(k=>{
+  ['products','tables','sales','clientes','consigna'].forEach(k=>{
     onSnapshot(doc(db,'madu',k),snap=>{
       if(snap.exists()){
         if(k==='products'){P=snap.data().v||[];setTimeout(patchProducts,3000);}
         if(k==='tables')T=snap.data().v||[];
         if(k==='sales')S=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
+        if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
       }
       _loaded[k]=true;
       if(_loaded['tables']&&_loaded['sales']){
@@ -651,6 +660,7 @@ function render(){
   else if(view==='devoluciones'){mc.innerHTML=`<div class="sc">${rDevoluciones()}</div>`;attachDevoluciones();}
   else if(view==='facturas'){mc.innerHTML=`<div class="sc">${rFacturas()}</div>`;attachFacturas();}
   else if(view==='clientes'){mc.innerHTML=`<div class="sc">${rClientes()}</div>`;attachClientes();}
+  else if(view==='consigna'){mc.innerHTML=`<div class="sc">${rConsigna()}</div>`;attachConsigna();}
 }
 
 // ── Turno modal ───────────────────────────────────────────────
@@ -710,7 +720,7 @@ function rPOS(){
   }).join('');
 
   // Category tabs
-  const cats=['Todos','Café','Bebidas','Bubble Tea','Platos fuertes','Postres','Bebidas con alcohol','Taller & Merch','Libros'];
+  const cats=['Todos','Café','Bebidas','Bubble Tea','Platos fuertes','Postres','Bebidas con alcohol','Taller & Merch','Libros','Consignados'];
   const ctabs=cats.map(c=>`<button class="ctab${scat===c?' on':''}" data-cat="${c}">${c}</button>`).join('');
 
   // Filter products
@@ -809,17 +819,19 @@ function rPOS(){
         const sinAsignar=t.order.filter(i=>!i.persona);
         const totSinAsignar=sinAsignar.reduce((a,i)=>a+i.price*i.qty,0);
         ftr=`<div id="oftr">
-          <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:8px">Cobrar por persona</div>
-          ${personaResumen.map(p=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-bottom:5px;border-radius:var(--rs);background:${p.hasItems?'var(--bg3)':'var(--bg)'};border:1px solid ${p.hasItems?'var(--border)':'transparent'};">
-            <div>
-              <span style="font-weight:700;font-size:12px">Persona ${p.num}</span>
-              ${p.hasItems?`<span style="font-size:10px;color:var(--text3);margin-left:6px">${p.items.map(i=>i.qty+'× '+i.name).join(', ')}</span>`:`<span style="font-size:10px;color:var(--text3);margin-left:6px">sin ítems</span>`}
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px">💰 Cobrar por persona</div>
+          ${personaResumen.map(p=>`<div style="padding:10px 12px;margin-bottom:8px;border-radius:10px;background:${p.hasItems?'#fff':'var(--bg)'};border:1.5px solid ${p.hasItems?'var(--acc)':'var(--border)'};${p.hasItems?'box-shadow:0 1px 4px rgba(0,0,0,.06)':''}">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${p.hasItems?'8px':'0'}">
+              <span style="font-weight:700;font-size:14px;color:var(--acc)">Persona ${p.num}</span>
+              ${p.hasItems?`<span style="font-weight:700;font-size:15px">${fmt(p.total)}</span>`:`<span style="font-size:12px;color:var(--text3)">sin ítems</span>`}
             </div>
-            ${p.hasItems?`<button class="btn btn-ok btn-sm" style="flex-shrink:0" data-cobrar-persona="${p.num}">Cobrar ${fmt(p.total)}</button>`:`<span style="font-size:11px;color:var(--text3)">—</span>`}
+            ${p.hasItems?`<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:10px">${p.items.map(i=>`<div style="display:flex;justify-content:space-between"><span>${i.qty}× ${i.name}${i.variant?' <span style="color:var(--text3)">('+i.variant+')</span>':''}</span><span style="color:var(--text3)">${fmt(i.price*i.qty)}</span></div>`).join('')}</div>
+            <button class="btn btn-ok" style="width:100%;padding:10px;font-size:13px" data-cobrar-persona="${p.num}">Cobrar Persona ${p.num} · ${fmt(p.total)}</button>`:''}
           </div>`).join('')}
-          ${sinAsignar.length>0?`<div style="padding:7px 10px;margin-bottom:5px;border-radius:var(--rs);background:var(--abg);border:1px solid var(--abrd)">
-            <span style="font-size:11px;font-weight:700;color:var(--amber)">Sin asignar:</span>
-            <span style="font-size:10px;color:var(--amber);margin-left:6px">${sinAsignar.map(i=>i.qty+'× '+i.name).join(', ')} · ${fmt(totSinAsignar)}</span>
+          ${sinAsignar.length>0?`<div style="padding:10px 12px;margin-bottom:8px;border-radius:10px;background:var(--abg);border:1.5px solid var(--abrd)">
+            <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:4px">⚠ Sin asignar · ${fmt(totSinAsignar)}</div>
+            <div style="font-size:11px;color:var(--amber);line-height:1.5">${sinAsignar.map(i=>i.qty+'× '+i.name).join(', ')}</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:5px">Toca cada ítem arriba para asignarlo a una persona</div>
           </div>`:''}
           <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;display:flex;gap:6px">
             <button class="btn btn-b btn-sm" id="bcomanda" style="flex:1">${yaEnviado?'+ Comanda':'Comanda'}</button>
@@ -905,6 +917,7 @@ function rPOS(){
               <button id="bcancelpersona" style="padding:2px 8px;border-radius:12px;font-size:11px;cursor:pointer;border:1px solid #c8c2b5;background:#fff;color:#8b1a1a;font-family:inherit">✕ Salir</button>
             </div>
           </div>
+          <div style="font-size:10px;color:#7a6a4a;margin-bottom:6px">1) Elige una persona  ·  2) Toca los ítems para asignarlos</div>
           <div style="display:flex;gap:5px;flex-wrap:wrap">
             ${Array.from({length:numPersonas},(_,pi)=>{
               const isA=personaActual===pi+1;
@@ -1009,15 +1022,20 @@ function attachPOS(){
         if(e.target.closest('.qb')||e.target.closest('[data-cancelitem]')) return;
         const t=T.find(x=>x.id===selT);if(!t)return;
         const it=t.order.find(i=>i.lid===el.dataset.assignLid);if(!it)return;
+        const oldLid=it.lid;
         // If item already has this persona, remove assignment
         if(it.persona===personaActual){
           it.persona=null;
-          // Update lid to remove persona suffix
-          it.lid=it.productId+'_'+(it.variant||'base');
+          it.lid=it.productId+'_'+(it.variant||'base')+'_'+Date.now();
         } else {
           it.persona=personaActual;
-          // Update lid to include persona
-          it.lid=it.productId+'_'+(it.variant||'base')+'_p'+personaActual;
+          it.lid=it.productId+'_'+(it.variant||'base')+'_p'+personaActual+'_'+Date.now();
+        }
+        // Keep comanda reference in sync so sent-status isn't lost
+        if(t.comandas){
+          t.comandas.forEach(cmd=>{
+            if(cmd.items)cmd.items.forEach(ci=>{ if(ci.lid===oldLid)ci.lid=it.lid; });
+          });
         }
         render();
         sT();
@@ -1092,8 +1110,9 @@ function attachPOS(){
     if(splitOrder.length===0) return;
     const splitTot=splitOrder.reduce((a,i)=>a+i.price*i.qty,0);
     // Register sale for split items only
-    S.push({id:`s${Date.now()}`,tableId:t.id,tableName:t.name,items:splitOrder,total:splitTot,paymentMethod:selPay,date:new Date().toISOString(),closed:false,user:turnoUser,esParcial:true});
-    await sS();
+    const splitSale={id:`s${Date.now()}`,tableId:t.id,tableName:t.name,items:splitOrder,total:splitTot,paymentMethod:selPay,date:new Date().toISOString(),closed:false,user:turnoUser,esParcial:true};
+    procesarVentaConsigna(splitSale);
+    S.push(splitSale);
     // Reduce quantities from table order
     Object.entries(splitItems).forEach(([lid,qty])=>{
       const item=t.order.find(i=>i.lid===lid); if(!item)return;
@@ -1107,17 +1126,16 @@ function attachPOS(){
         if(p&&p.stock<999) p.stock=Math.max(0,p.stock-i.qty);
       }
     });
-    await sP();
     // If no items left, free the table
-    if(t.order.length===0){t.status='libre';t.openedAt=null;t.comandas=[];}
-    splitMode=false;splitItems={};
-    render();
-    sT();
-    // Print ticket for split
-    imprimirTicketSplit(splitOrder, splitTot, t.name);
+    if(t.order.length===0){t.status='libre';t.openedAt=null;t.comandas=[];selT=null;}
     splitMode=false; splitItems={}; cobConf=false; modoParcial=false; pagosParciales=[];
-    if(t.order.length===0){selT=null;}
+    // If items remain assigned to personas, re-enter persona mode to continue charging
+    if(t.order.length>0 && t.order.some(i=>i.persona)){ personaMode=true; }
+    // Update UI immediately
     render();
+    // Print and save in background
+    imprimirTicketSplit(splitOrder, splitTot, t.name);
+    sS(); sP(); sT();
   });
   mc.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];render();});
   mc.querySelector('#badd-pago')?.addEventListener('click',()=>{
@@ -1333,7 +1351,9 @@ window.anularVenta=anularVenta;
 async function confirmarCobro(){
   if(cobrando)return;
   const t=T.find(x=>x.id===selT);if(!t||t.order.length===0)return;
-  const total=t.order.reduce((a,i)=>a+i.price*i.qty,0);
+  const subtotal=t.order.reduce((a,i)=>a+i.price*i.qty,0);
+  const descMonto=descuentoTipo==='porcentaje'?(subtotal*descuento/100):descuento;
+  const total=Math.max(0,subtotal-descMonto);
   // VALIDACIÓN: pagos parciales deben sumar el total
   if(modoParcial){
     const sumaPagos=pagosParciales.reduce((a,p)=>a+p.monto,0);
@@ -1346,7 +1366,7 @@ async function confirmarCobro(){
   cobrando=true;
   try{
     const metodo=modoParcial?pagosParciales.map(p=>p.metodo+' '+fmt(p.monto)).join(' / '):selPay;
-    const venta={id:`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:new Date().toISOString(),closed:false,user:turnoUser};
+    const venta={id:`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),subtotal,descuento:descMonto>0?descMonto:0,descuentoTipo:descMonto>0?descuentoTipo:null,total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:new Date().toISOString(),closed:false,user:turnoUser};
     // Snapshot before clearing
     const ticketItems=t.order.map(i=>({...i}));
     const ticketTotal=total;
@@ -1361,12 +1381,14 @@ async function confirmarCobro(){
     });
     // Clear table
     t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;
-    cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};
+    cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};descuento=0;descuentoTipo='monto';
     selT=null;
+    // Marcar ventas de libros consignados y actualizar saldo del consignante
+    procesarVentaConsigna(venta);
     // Add to local array for instant UI
     S.push(venta);
     render();
-    imprimirTicketData(ticketItems,ticketTotal,ticketMesa,ticketPay);
+    imprimirTicketData(ticketItems,ticketTotal,ticketMesa,ticketPay,{monto:descMonto,subtotal:subtotal,tipo:descuentoTipo,pct:descuento});
     // Save: transaction-safe append for the sale, regular write for tables/products
     await _appendSale(venta);
     sT(); sP();
@@ -1379,26 +1401,32 @@ async function confirmarCobro(){
   }
 }
 
-function imprimirTicketData(items, total, mesa, payMethod){
+function imprimirTicketData(items, total, mesa, payMethod, descInfo){
   const now=new Date();
-  const html=`
-    <div class="center bold" style="font-size:14px">LA MADRIGUERA</div>
-    <div class="center" style="margin-bottom:8px">--- TICKET DE VENTA ---</div>
-    <div>${mesa}</div>
-    <div>Fecha: ${now.toLocaleDateString('es-EC')} ${now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}</div>
-    <div>Cajero: ${turnoUser}</div>
-    <div class="line"></div>
-    ${items.map(i=>`<div class="row"><span>${i.qty}x ${i.name}${i.variant?' ('+i.variant+')':''}</span><span>${fmt(i.price*i.qty)}</span></div>`).join('')}
-    <div class="line"></div>
-    <div class="row bold"><span>TOTAL</span><span>${fmt(total)}</span></div>
-    <div>Pago: ${payMethod}</div>
-    <div style="margin-top:12px;text-align:center">Gracias por tu visita!</div>
-  `;
-  const pw=window.open('','_blank','width=400,height=600');
-  if(!pw){alert('Permite ventanas emergentes para imprimir');return;}
-  pw.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:monospace;font-size:12px;padding:10px;width:80mm}.center{text-align:center}.bold{font-weight:bold}.line{border-top:1px dashed #000;margin:8px 0}.row{display:flex;justify-content:space-between}</style></head><body>'+html+'</body></html>');
-  pw.document.close();
-  setTimeout(()=>{pw.print();},400);
+  const fecha=now.toLocaleDateString('es-EC')+' '+now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'});
+  let b='';
+  b+='<div class="c b" style="font-size:13pt">LA MADRIGUERA</div>';
+  b+='<div class="c">Cafe-Libreria - Urdesa Central</div>';
+  b+='<div class="line"></div>';
+  b+='<div>'+sanitize(mesa)+'</div>';
+  b+='<div>Fecha: '+fecha+'</div>';
+  b+='<div>Cajero: '+sanitize(turnoUser)+'</div>';
+  b+='<div class="line"></div>';
+  items.forEach(function(i){
+    var nm=sanitize(i.name)+(i.variant?' ('+sanitize(i.variant)+')':'');
+    var sub='$'+(+(i.price||0)*(+(i.qty||1))).toFixed(2);
+    b+='<div class="row"><span>'+i.qty+'x '+nm+'</span><span>'+sub+'</span></div>';
+  });
+  b+='<div class="line"></div>';
+  if(descInfo&&descInfo.monto>0){
+    b+='<div class="row"><span>Subtotal</span><span>$'+descInfo.subtotal.toFixed(2)+'</span></div>';
+    b+='<div class="row"><span>Descuento'+(descInfo.tipo==='porcentaje'?' ('+descInfo.pct+'%)':'')+'</span><span>-$'+descInfo.monto.toFixed(2)+'</span></div>';
+  }
+  b+='<div class="row b"><span>TOTAL</span><span>$'+total.toFixed(2)+'</span></div>';
+  b+='<div>Pago: '+sanitize(payMethod)+'</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="c">Gracias por tu visita!</div>';
+  printViaIframe(b);
 }
 // Keep old name as alias for bticket manual print
 
@@ -1406,7 +1434,15 @@ function imprimirTicketData(items, total, mesa, payMethod){
 function rResults(){
   const active=P.filter(p=>p.active);
   let filtered=active;
-  if(scat!=='Todos')filtered=filtered.filter(p=>p.category===scat);
+  if(scat==='⭐ Rápidos'){
+    // Top 20 most-sold products from sales history
+    const ventaCount={};
+    S.filter(s=>isVenta(s)).forEach(s=>s.items?.forEach(i=>{
+      ventaCount[i.name]=(ventaCount[i.name]||0)+i.qty;
+    }));
+    const topNames=Object.entries(ventaCount).sort((a,b)=>b[1]-a[1]).slice(0,20).map(e=>e[0]);
+    filtered=active.filter(p=>topNames.includes(p.name)).sort((a,b)=>(ventaCount[b.name]||0)-(ventaCount[a.name]||0));
+  } else if(scat!=='Todos')filtered=filtered.filter(p=>p.category===scat);
   if(sq.trim()){
     const q=sq.trim().toLowerCase();
     filtered=filtered.filter(p=>
@@ -1523,14 +1559,24 @@ function rFooter(){
       await confirmarCobro();
     },{once:true});
   } else {
+    const descMonto=descuentoTipo==='porcentaje'?(tot*descuento/100):descuento;
+    const totalConDesc=Math.max(0,tot-descMonto);
     ftr.innerHTML=`
-      <div class="tot"><span>Total</span><span>${fmt(tot)}</span></div>
+      <div class="tot"><span>Subtotal</span><span>${fmt(tot)}</span></div>
+      ${descMonto>0?`<div class="tot" style="color:var(--red);font-size:13px"><span>Descuento${descuentoTipo==='porcentaje'?' ('+descuento+'%)':''}</span><span>-${fmt(descMonto)}</span></div>
+      <div class="tot" style="font-weight:700;border-top:1px solid var(--border);padding-top:4px"><span>Total a pagar</span><span>${fmt(totalConDesc)}</span></div>`:''}
+      <div style="display:flex;gap:5px;margin:8px 0;align-items:center">
+        <span style="font-size:10px;color:var(--text3);font-weight:700">DESC:</span>
+        <button class="btn btn-g btn-sm" style="font-size:10px;padding:5px 8px" id="bdesc-pct">%</button>
+        <button class="btn btn-g btn-sm" style="font-size:10px;padding:5px 8px" id="bdesc-monto">$</button>
+        ${descMonto>0?`<button class="btn btn-g btn-sm" style="font-size:10px;padding:5px 8px;color:var(--red)" id="bdesc-clear">✕ Quitar</button>`:''}
+      </div>
       <div style="font-size:11px;font-weight:700;margin-bottom:7px">Método de pago</div>
       <div class="pgrid">${PAY.map(m=>`<button class="payb${selPay===m?' on':''}" data-pay="${m}">${m}</button>`).join('')}</div>
       <div style="display:flex;gap:6px;margin-bottom:6px">
         <button class="btn btn-g btn-sm" id="bccc">Atrás</button>
         <button class="btn" style="padding:9px;font-size:11px;background:#dbeafe;color:#1a3f8b;border:1px solid #93c5fd" id="bfactura2">🧾 Factura</button>
-        <button class="btn btn-ok" style="flex:2;padding:9px" id="bconf">✓ Confirmar pago</button>
+        <button class="btn btn-ok" style="flex:2;padding:9px" id="bconf">✓ Cobrar ${fmt(totalConDesc)}</button>
       </div>
       <button class="btn btn-g btn-full" style="font-size:11px" id="bparcial">Dividir en varios métodos de pago</button>`;
     ftr.querySelectorAll('.payb').forEach(el=>el.addEventListener('click',()=>{selPay=el.dataset.pay;rFooter();}));
@@ -1538,6 +1584,23 @@ function rFooter(){
     ftr.querySelector('#bconf')?.addEventListener('click',async()=>await confirmarCobro(),{once:true});
     ftr.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];rFooter();});
     ftr.querySelector('#bfactura2')?.addEventListener('click',()=>{window.openFacturaModal();});
+    // Discount handlers
+    ftr.querySelector('#bdesc-pct')?.addEventListener('click',()=>{
+      const v=prompt('Descuento en porcentaje (%):', descuentoTipo==='porcentaje'?descuento:'10');
+      if(v===null)return;
+      const n=parseFloat(v);
+      if(isNaN(n)||n<0||n>100){alert('Ingresa un porcentaje válido (0-100)');return;}
+      descuento=n;descuentoTipo='porcentaje';rFooter();
+    });
+    ftr.querySelector('#bdesc-monto')?.addEventListener('click',()=>{
+      const v=prompt('Descuento en dólares ($):', descuentoTipo==='monto'?descuento:'1');
+      if(v===null)return;
+      const n=parseFloat(v);
+      if(isNaN(n)||n<0){alert('Ingresa un monto válido');return;}
+      if(n>tot){alert('El descuento no puede ser mayor al total');return;}
+      descuento=n;descuentoTipo='monto';rFooter();
+    });
+    ftr.querySelector('#bdesc-clear')?.addEventListener('click',()=>{descuento=0;rFooter();});
   }
 }
 
@@ -1626,13 +1689,13 @@ function attachProd(){
     const obj={name,category,subcategory,price,stock,code,author,active:true,stockControl,hasVariants};
     if(editP==='new'){P.push({...obj,id:`p${Date.now()}`});}
     else{const p=P.find(x=>x.id===editP);if(p)Object.assign(p,obj);}
-    await sP();editP=null;render();
+    editP=null;render();sP();
   });
   mc.querySelectorAll('[data-pe]').forEach(el=>el.addEventListener('click',()=>{editP=el.dataset.pe;render();}));
   mc.querySelectorAll('[data-pt]').forEach(el=>el.addEventListener('click',async()=>{
     const pwd=prompt('PIN de autorización:');
     if(pwd!==CORRECT_PIN){alert('PIN incorrecto.');return;}
-    const p=P.find(x=>x.id===el.dataset.pt);if(p){p.active=!p.active;await sP();}
+    const p=P.find(x=>x.id===el.dataset.pt);if(p){p.active=!p.active;render();sP();}
   }));
 
   // CSV Import
@@ -1984,7 +2047,7 @@ function attachCaja(){
     } else {
       S.push({id:`g${Date.now()}`,esGasto:true,desc,cat,total:monto,paymentMethod:payM,obs,date:new Date().toISOString(),user:turnoUser,closed:false});
     }
-    await sS();gastoForm=false;editGasto=null;
+    sS();gastoForm=false;editGasto=null;render();
   });
   mc.querySelectorAll('[data-gedit]').forEach(el=>el.addEventListener('click',()=>{
     const g=S.find(s=>s.id===el.dataset.gedit);if(!g)return;
@@ -2005,7 +2068,7 @@ function attachCaja(){
     } else {
       S.push({id:'ap'+Date.now(),esApertura:true,inicio,sueltos,date:new Date().toISOString(),user:turnoUser,total:0,closed:false});
     }
-    await sS();
+    sS();
     alert('✓ Inicio de caja guardado: $'+inicio.toFixed(2)+(sueltos?' + sueltos $'+sueltos.toFixed(2):''));
   });
   mc.querySelector('#bcerrar')?.addEventListener('click',async()=>{
@@ -2060,12 +2123,17 @@ function attachInv(){
     const i=document.getElementById('si2');if(i){i.focus();i.select();}
   }));
   mc.querySelector('#bcs2')?.addEventListener('click',()=>{editStk=null;render();});
-  mc.querySelectorAll('[data-sv]').forEach(el=>{if(el.tagName==='BUTTON'&&el.textContent==='OK')el.addEventListener('click',async()=>{const v=parseInt(document.getElementById('si2')?.value)||0;const p=P.find(x=>x.id===el.dataset.sv);if(p){p.stock=v;await sP();}editStk=null;});});
+  mc.querySelectorAll('[data-sv]').forEach(el=>{if(el.tagName==='BUTTON'&&el.textContent==='OK')el.addEventListener('click',async()=>{const v=parseInt(document.getElementById('si2')?.value)||0;const p=P.find(x=>x.id===el.dataset.sv);if(p){p.stock=v;}editStk=null;render();sP();});});
   document.getElementById('si2')?.addEventListener('input',e=>stkV=e.target.value);
 }
 
 // ── MONITOR ──────────────────────────────────────────────────
 function rMonitor(){
+  // Auto-cleanup: clear openedAt for tables with no orders (phantom tables)
+  let _fixed=false;
+  T.forEach(t=>{ if(t.openedAt&&(!t.order||t.order.length===0)){t.openedAt=null;t.status='libre';t.comandas=[];_fixed=true;} });
+  if(_fixed){ sT(); }
+
   const ocp=T.filter(t=>t.status!=='libre');
   const lib=T.filter(t=>t.status==='libre');
   const ts=openS(),tot=ts.reduce((a,x)=>a+x.total,0);
@@ -2095,9 +2163,9 @@ function rMonitor(){
       }).join('')}
     </div>
     <div style="font-weight:700;font-size:13px;margin-bottom:10px">Mesas con más de 30 min</div>
-    ${T.filter(t=>t.openedAt&&Math.floor((Date.now()-new Date(t.openedAt).getTime())/60000)>30).length===0
+    ${T.filter(t=>t.openedAt&&t.order&&t.order.length>0&&Math.floor((Date.now()-new Date(t.openedAt).getTime())/60000)>30).length===0
       ?'<div style="color:var(--text3);font-size:13px">Ninguna</div>'
-      :T.filter(t=>t.openedAt&&Math.floor((Date.now()-new Date(t.openedAt).getTime())/60000)>30).map(t=>{
+      :T.filter(t=>t.openedAt&&t.order&&t.order.length>0&&Math.floor((Date.now()-new Date(t.openedAt).getTime())/60000)>30).map(t=>{
         const mins=Math.floor((Date.now()-new Date(t.openedAt).getTime())/60000);
         const tT=t.order.reduce((a,i)=>a+i.price*i.qty,0);
         return `<div class="mrow" style="margin-bottom:6px;border-color:#fcd34d;background:#fffbe6">
@@ -2189,11 +2257,11 @@ function attachDevoluciones(){
     if(qty<=0){alert('La cantidad debe ser mayor a 0');return;}
     // Restore stock
     prod.stock=Math.max(0,(prod.stock||0)+qty);
-    await sP();
+    sP();
     // Register devolution
     S.push({id:`dev${Date.now()}`,esDevolucion:true,prodName:prod.name,prodCode:prod.code||'',prodId:prod.id,proveedor:prov,qty,motivo,obs,date:new Date().toISOString(),user:turnoUser,total:0,closed:false});
-    await sS();
-    devForm=false;alert(`✓ Devolución registrada. Stock de "${prod.name}" actualizado a ${prod.stock} uds.`);
+    sS();
+    devForm=false;render();alert(`✓ Devolución registrada. Stock de "${prod.name}" actualizado a ${prod.stock} uds.`);
   });
 }
 
@@ -2307,7 +2375,10 @@ function rReportes(){
   return `<div>
     <div class="rb" style="margin-bottom:12px">
       <span class="stitle" style="margin:0">Reportes</span>
-      <button class="btn btn-acc btn-sm" id="bexport">↓ Exportar CSV</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-g btn-sm" id="bbackup" title="Descargar respaldo completo">💾 Respaldo</button>
+        <button class="btn btn-acc btn-sm" id="bexport">↓ Exportar CSV</button>
+      </div>
     </div>
 
     <!-- Filtros -->
@@ -2467,8 +2538,42 @@ function rReportes(){
   </div>`;
 }
 
+function descargarRespaldo(){
+  const backup={
+    fecha:new Date().toISOString(),
+    productos:P,
+    mesas:T,
+    ventas:S,
+    clientes:CL
+  };
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='respaldo_madriguera_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+window.descargarRespaldo=descargarRespaldo;
+
+// Auto-backup reminder: prompt download once per day
+function checkAutoBackup(){
+  try{
+    const last=localStorage.getItem('madu_last_backup');
+    const today=new Date().toISOString().slice(0,10);
+    if(last!==today && S.length>0){
+      // Just store a flag; actual download is manual via button
+      localStorage.setItem('madu_backup_pending','1');
+    }
+  }catch(e){}
+}
+
 function attachReportes(){
   const mc=document.getElementById('mc');
+  mc.querySelector('#bbackup')?.addEventListener('click',()=>{
+    descargarRespaldo();
+    try{localStorage.setItem('madu_last_backup',new Date().toISOString().slice(0,10));localStorage.removeItem('madu_backup_pending');}catch(e){}
+  });
   mc.querySelectorAll('[data-periodo]').forEach(el=>el.addEventListener('click',()=>{repPeriodo=el.dataset.periodo;render();}));
   mc.querySelectorAll('[data-repcat]').forEach(el=>el.addEventListener('click',()=>{repCatFilter=el.dataset.repcat;render();}));
   mc.querySelectorAll('[data-catfilter]').forEach(el=>el.addEventListener('click',()=>{repCatFilter=el.dataset.catfilter;render();}));
@@ -2674,6 +2779,333 @@ function attachClientes(){
   }));
 }
 
+
+// ══════════════════════════════════════════════════════════════
+//  MÓDULO DE CONSIGNACIÓN — La Madriguera
+//  CG = { consignantes:[], libros:[], liquidaciones:[] }
+//  consignante: {id,nombre,cedula,telefono,email,formaPago,fecha,notas}
+//  libro: {id, titulo, autor, precio, code, consignanteId, fechaIngreso,
+//          fechaVence, estado: 'disponible'|'vendido'|'devuelto'|'cedido',
+//          fechaVenta, ventaId}
+//  liquidacion: {id, consignanteId, fecha, periodo, libroIds:[], totalVenta,
+//                pago60, metodo, user}
+// ══════════════════════════════════════════════════════════════
+
+function diasEntre(d1,d2){ return Math.round((new Date(d2)-new Date(d1))/86400000); }
+function fechaCorta(iso){ if(!iso)return '—'; const d=new Date(iso); return d.toLocaleDateString('es-EC',{day:'2-digit',month:'short',year:'numeric'}); }
+function nombreConsignante(id){ const c=CG.consignantes.find(x=>x.id===id); return c?c.nombre:'(desconocido)'; }
+
+// Inyecta los libros consignados DISPONIBLES como productos virtuales en P,
+// para que aparezcan en el POS y se vendan con el flujo normal.
+// Los virtuales llevan id "cg_<libroId>" y bandera esConsignado.
+function injectConsignaProducts(){
+  // Quitar virtuales previos
+  P = P.filter(p=>!p.esConsignado);
+  const virtuales = (CG.libros||[])
+    .filter(l=>l.estado==='disponible')
+    .map(l=>({
+      id:'cg_'+l.id,
+      name:l.titulo,
+      category:'Consignados',
+      subcategory:nombreConsignante(l.consignanteId),
+      price:l.precio,
+      stock:1,
+      code:l.code||'',
+      author:l.autor||'',
+      active:true,
+      stockControl:'unidad',
+      hasVariants:false,
+      esConsignado:true,
+      consignanteId:l.consignanteId,
+      libroConsignadoId:l.id
+    }));
+  P = P.concat(virtuales);
+}
+
+// Al cobrar: detecta items consignados, marca el libro como vendido y
+// guarda info en la venta para trazabilidad.
+function procesarVentaConsigna(venta){
+  if(!venta || !venta.items) return;
+  let tocó=false;
+  venta.itemsConsigna = venta.itemsConsigna || [];
+  venta.items.forEach(it=>{
+    const p = P.find(x=>x.id===it.productId);
+    if(p && p.esConsignado){
+      const libro = CG.libros.find(l=>l.id===p.libroConsignadoId);
+      if(libro && libro.estado==='disponible'){
+        libro.estado='vendido';
+        libro.fechaVenta=new Date().toISOString();
+        libro.ventaId=venta.id;
+        libro.precioVendido=it.price;
+        venta.itemsConsigna.push({
+          libroId:libro.id, titulo:libro.titulo,
+          consignanteId:libro.consignanteId,
+          precio:it.price, pct60:+(it.price*PCT_CONSIGNANTE).toFixed(2)
+        });
+        tocó=true;
+      }
+    }
+  });
+  if(tocó){
+    venta.esConsignaVenta=true;
+    injectConsignaProducts(); // refrescar virtuales (quitar el vendido)
+    sCG();
+  }
+}
+
+// Saldo pendiente de pago a un consignante: libros vendidos no liquidados
+function saldoConsignante(cid){
+  const liquidados=new Set();
+  CG.liquidaciones.filter(l=>l.consignanteId===cid).forEach(l=>(l.libroIds||[]).forEach(id=>liquidados.add(id)));
+  const pendientes=CG.libros.filter(l=>l.consignanteId===cid && l.estado==='vendido' && !liquidados.has(l.id));
+  const totalVenta=pendientes.reduce((a,l)=>a+(l.precioVendido||l.precio),0);
+  return { libros:pendientes, totalVenta:+totalVenta.toFixed(2), pago60:+(totalVenta*PCT_CONSIGNANTE).toFixed(2) };
+}
+
+function rConsigna(){
+  const subs=[['libros','Libros'],['consignantes','Consignantes'],['liquidaciones','Liquidaciones']];
+  const tabs=subs.map(([k,l])=>`<button class="ctab${consignaSub===k?' on':''}" data-csub="${k}">${l}</button>`).join('');
+
+  // KPIs
+  const totLibros=CG.libros.length;
+  const disp=CG.libros.filter(l=>l.estado==='disponible').length;
+  const vend=CG.libros.filter(l=>l.estado==='vendido').length;
+  let porPagar=0;
+  CG.consignantes.forEach(c=>{porPagar+=saldoConsignante(c.id).pago60;});
+  const vencidos=CG.libros.filter(l=>l.estado==='disponible' && l.fechaVence && new Date(l.fechaVence)<new Date()).length;
+
+  const kpis=`<div class="stats-grid" style="margin-bottom:14px">
+    <div class="stat"><div class="stat-n">${disp}</div><div class="stat-l">En consignación</div></div>
+    <div class="stat"><div class="stat-n">${vend}</div><div class="stat-l">Vendidos</div></div>
+    <div class="stat"><div class="stat-n">${fmt(porPagar)}</div><div class="stat-l">Por pagar (60%)</div></div>
+    <div class="stat"><div class="stat-n" style="color:${vencidos>0?'#b03030':'inherit'}">${vencidos}</div><div class="stat-l">Vencidos (+${PLAZO_DIAS}d)</div></div>
+  </div>`;
+
+  let body='';
+  if(consignaSub==='consignantes') body=rConsignantes();
+  else if(consignaSub==='libros') body=rConsignaLibros();
+  else body=rLiquidaciones();
+
+  return `<h2 style="margin:0 0 4px">Consignación de libros</h2>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Programa «Tu libro tiene otra vida» · 60% consignante / 40% local · plazo ${PLAZO_DIAS} días</div>
+    ${kpis}
+    <div class="ctabs" style="margin-bottom:14px">${tabs}</div>
+    ${body}`;
+}
+
+// ── Sub-vista: Consignantes ───────────────────────────────────
+function rConsignantes(){
+  if(editConsignante){
+    const c = editConsignante==='new'?{}:CG.consignantes.find(x=>x.id===editConsignante)||{};
+    return `<div class="card" style="padding:16px;max-width:520px">
+      <h3 style="margin:0 0 14px">${editConsignante==='new'?'Nuevo consignante':'Editar consignante'}</h3>
+      <div class="fg"><label>Nombre completo *</label><input id="cg-nombre" value="${(c.nombre||'').replace(/"/g,'&quot;')}"></div>
+      <div class="fg"><label>Cédula</label><input id="cg-cedula" value="${(c.cedula||'').replace(/"/g,'&quot;')}"></div>
+      <div class="two-col">
+        <div class="fg"><label>Teléfono</label><input id="cg-tel" value="${(c.telefono||'').replace(/"/g,'&quot;')}"></div>
+        <div class="fg"><label>Correo</label><input id="cg-email" value="${(c.email||'').replace(/"/g,'&quot;')}"></div>
+      </div>
+      <div class="fg"><label>Forma de pago (cuenta / banco)</label><input id="cg-pago" value="${(c.formaPago||'').replace(/"/g,'&quot;')}"></div>
+      <div class="fg"><label>Notas</label><input id="cg-notas" value="${(c.notas||'').replace(/"/g,'&quot;')}"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-g" id="cg-cancel">Cancelar</button>
+        <button class="btn btn-acc" style="flex:1" id="cg-save">Guardar</button>
+      </div>
+    </div>`;
+  }
+  const rows = CG.consignantes.map(c=>{
+    const s=saldoConsignante(c.id);
+    const nLibros=CG.libros.filter(l=>l.consignanteId===c.id && l.estado==='disponible').length;
+    return `<div class="mrow">
+      <div style="flex:1;min-width:0">
+        <span style="font-weight:600;font-size:13px">${c.nombre}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">${c.telefono||''} ${c.cedula?'· '+c.cedula:''}</span>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${nLibros} en consignación${s.pago60>0?` · <b style="color:#0a7a4a">por pagar ${fmt(s.pago60)}</b>`:''}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-g btn-sm" data-cgadd="${c.id}">+ Libros</button>
+        <button class="btn btn-g btn-sm" data-cgedit="${c.id}">Editar</button>
+      </div>
+    </div>`;
+  }).join('') || '<div style="color:var(--text3);font-size:13px;padding:16px">Aún no hay consignantes. Crea el primero.</div>';
+
+  return `<div style="margin-bottom:12px"><button class="btn btn-acc" id="cg-new">+ Nuevo consignante</button></div>${rows}`;
+}
+
+// ── Sub-vista: Libros ─────────────────────────────────────────
+function rConsignaLibros(){
+  if(addLibrosTo){
+    const c=CG.consignantes.find(x=>x.id===addLibrosTo);
+    return `<div class="card" style="padding:16px;max-width:560px">
+      <h3 style="margin:0 0 4px">Ingresar libros</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Consignante: <b>${c?c.nombre:''}</b> · vencen en ${PLAZO_DIAS} días</div>
+      <div class="two-col"><div class="fg" style="grid-column:1/3"><label>Título *</label><input id="lb-titulo" placeholder="Título del libro"></div></div>
+      <div class="two-col">
+        <div class="fg"><label>Autor</label><input id="lb-autor"></div>
+        <div class="fg"><label>Precio de venta (USD) *</label><input id="lb-precio" type="number" step="0.25" placeholder="0.00"></div>
+      </div>
+      <div class="fg"><label>Código de barras (opcional)</label><input id="lb-code" placeholder="Escanea o deja vacío para autogenerar"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-g" id="lb-cancel">Cerrar</button>
+        <button class="btn btn-acc" style="flex:1" id="lb-save">+ Agregar libro</button>
+      </div>
+      <div id="lb-recientes" style="margin-top:16px"></div>
+    </div>`;
+  }
+  // listado con filtro
+  const q=csearch.trim().toLowerCase();
+  let libros=[...CG.libros].sort((a,b)=>new Date(b.fechaIngreso)-new Date(a.fechaIngreso));
+  if(q) libros=libros.filter(l=>(l.titulo||'').toLowerCase().includes(q)||(l.autor||'').toLowerCase().includes(q)||nombreConsignante(l.consignanteId).toLowerCase().includes(q));
+
+  const estBadge=l=>{
+    if(l.estado==='disponible'){
+      const venc = l.fechaVence && new Date(l.fechaVence)<new Date();
+      const dias = l.fechaVence? diasEntre(new Date(), l.fechaVence):null;
+      if(venc) return '<span class="badge br">Vencido</span>';
+      if(dias!==null && dias<=15) return `<span class="badge ba">Vence en ${dias}d</span>`;
+      return '<span class="badge bg">Disponible</span>';
+    }
+    if(l.estado==='vendido') return '<span class="badge" style="background:#e0f2f1;color:#00695c">Vendido</span>';
+    if(l.estado==='devuelto') return '<span class="badge" style="background:#eee;color:#777">Devuelto</span>';
+    if(l.estado==='cedido') return '<span class="badge" style="background:#eee;color:#777">Cedido</span>';
+    return '';
+  };
+
+  const rows=libros.map(l=>`<div class="mrow">
+    <div style="flex:1;min-width:0">
+      <span style="font-weight:600;font-size:13px">${l.titulo}</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:6px">${l.autor||''}</span>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">${nombreConsignante(l.consignanteId)} · ${fmt(l.precio)} · ingresó ${fechaCorta(l.fechaIngreso)}${l.estado==='disponible'?' · vence '+fechaCorta(l.fechaVence):''}</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      ${estBadge(l)}
+      ${l.estado==='disponible'?`<button class="btn btn-g btn-sm" data-lbdev="${l.id}">Devolver</button>`:''}
+    </div>
+  </div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:16px">No hay libros que coincidan.</div>';
+
+  return `<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input id="cg-search" placeholder="Buscar libro, autor o consignante..." value="${csearch.replace(/"/g,'&quot;')}" style="flex:1">
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Para ingresar libros, ve a la pestaña Consignantes y pulsa «+ Libros».</div>
+    ${rows}`;
+}
+
+// ── Sub-vista: Liquidaciones ──────────────────────────────────
+function rLiquidaciones(){
+  if(liquidarTo){
+    const c=CG.consignantes.find(x=>x.id===liquidarTo);
+    const s=saldoConsignante(liquidarTo);
+    const filas=s.libros.map(l=>`<div class="mrow"><div style="flex:1"><span style="font-weight:600;font-size:13px">${l.titulo}</span><div style="font-size:11px;color:var(--text3)">vendido ${fechaCorta(l.fechaVenta)} · ${fmt(l.precioVendido||l.precio)}</div></div><div style="font-weight:700;color:#0a7a4a">${fmt((l.precioVendido||l.precio)*PCT_CONSIGNANTE)}</div></div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:12px">No hay ventas pendientes de liquidar.</div>';
+    return `<div class="card" style="padding:16px;max-width:560px">
+      <h3 style="margin:0 0 4px">Liquidar a ${c?c.nombre:''}</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px">${c&&c.formaPago?'Pago a: '+c.formaPago:'Sin forma de pago registrada'}</div>
+      ${filas}
+      <div style="display:flex;justify-content:space-between;padding:12px 0;border-top:1px solid var(--border);margin-top:8px">
+        <div><div style="font-size:11px;color:var(--text3)">Total vendido</div><div style="font-weight:700">${fmt(s.totalVenta)}</div></div>
+        <div style="text-align:right"><div style="font-size:11px;color:var(--text3)">A pagar (60%)</div><div style="font-weight:700;font-size:18px;color:#0a7a4a">${fmt(s.pago60)}</div></div>
+      </div>
+      <div class="fg"><label>Método de pago</label><select id="liq-metodo"><option>Efectivo</option><option>Transferencia</option></select></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-g" id="liq-cancel">Cancelar</button>
+        <button class="btn btn-acc" style="flex:1" id="liq-pagar" ${s.libros.length===0?'disabled style="opacity:.4"':''}>Registrar pago de ${fmt(s.pago60)}</button>
+      </div>
+    </div>`;
+  }
+  // lista de consignantes con saldo
+  const conSaldo=CG.consignantes.map(c=>({c,s:saldoConsignante(c.id)})).filter(x=>x.s.pago60>0);
+  const rows=conSaldo.map(({c,s})=>`<div class="mrow">
+      <div style="flex:1"><span style="font-weight:600;font-size:13px">${c.nombre}</span><div style="font-size:11px;color:var(--text3)">${s.libros.length} libro(s) vendido(s) · total ${fmt(s.totalVenta)}</div></div>
+      <div style="display:flex;gap:8px;align-items:center"><div style="font-weight:700;color:#0a7a4a">${fmt(s.pago60)}</div><button class="btn btn-acc btn-sm" data-liq="${c.id}">Liquidar</button></div>
+    </div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:16px">No hay saldos pendientes de pago.</div>';
+
+  // historial
+  const hist=[...CG.liquidaciones].sort((a,b)=>new Date(b.fecha)-new Date(a.fecha)).slice(0,20).map(l=>`<div class="mrow" style="opacity:.85">
+      <div style="flex:1"><span style="font-size:12px">${nombreConsignante(l.consignanteId)}</span><div style="font-size:11px;color:var(--text3)">${fechaCorta(l.fecha)} · ${(l.libroIds||[]).length} libro(s) · ${l.metodo}</div></div>
+      <div style="font-weight:700">${fmt(l.pago60)}</div></div>`).join('') || '<div style="color:var(--text3);font-size:12px;padding:12px">Sin liquidaciones aún.</div>';
+
+  return `<h3 style="margin:0 0 10px;font-size:14px">Pendientes de pago</h3>${rows}
+    <h3 style="margin:20px 0 10px;font-size:14px">Historial de liquidaciones</h3>${hist}`;
+}
+
+function attachConsigna(){
+  const mc=document.getElementById('mc');
+  // sub-tabs
+  mc.querySelectorAll('[data-csub]').forEach(b=>b.addEventListener('click',()=>{consignaSub=b.dataset.csub;editConsignante=null;addLibrosTo=null;liquidarTo=null;render();}));
+
+  // ── Consignantes ──
+  mc.querySelector('#cg-new')?.addEventListener('click',()=>{editConsignante='new';render();});
+  mc.querySelector('#cg-cancel')?.addEventListener('click',()=>{editConsignante=null;render();});
+  mc.querySelector('#cg-save')?.addEventListener('click',async()=>{
+    const nombre=document.getElementById('cg-nombre').value.trim();
+    if(!nombre){alert('El nombre es obligatorio');return;}
+    const data={nombre,
+      cedula:document.getElementById('cg-cedula').value.trim(),
+      telefono:document.getElementById('cg-tel').value.trim(),
+      email:document.getElementById('cg-email').value.trim(),
+      formaPago:document.getElementById('cg-pago').value.trim(),
+      notas:document.getElementById('cg-notas').value.trim()};
+    if(editConsignante==='new'){CG.consignantes.push({id:'cn'+Date.now(),fecha:new Date().toISOString(),...data});}
+    else{const c=CG.consignantes.find(x=>x.id===editConsignante);if(c)Object.assign(c,data);}
+    await sCG();editConsignante=null;render();
+  });
+  mc.querySelectorAll('[data-cgedit]').forEach(el=>el.addEventListener('click',()=>{editConsignante=el.dataset.cgedit;render();}));
+  mc.querySelectorAll('[data-cgadd]').forEach(el=>el.addEventListener('click',()=>{addLibrosTo=el.dataset.cgadd;consignaSub='libros';render();}));
+
+  // ── Libros ──
+  const search=mc.querySelector('#cg-search');
+  if(search) search.addEventListener('input',e=>{csearch=e.target.value;
+    const cur=e.target.selectionStart; render();
+    const ns=document.getElementById('cg-search'); if(ns){ns.focus();ns.setSelectionRange(cur,cur);}
+  });
+  mc.querySelector('#lb-cancel')?.addEventListener('click',()=>{addLibrosTo=null;render();});
+  mc.querySelector('#lb-save')?.addEventListener('click',async()=>{
+    const titulo=document.getElementById('lb-titulo').value.trim();
+    const precio=parseFloat(document.getElementById('lb-precio').value);
+    if(!titulo){alert('El título es obligatorio');return;}
+    if(!precio||precio<=0){alert('Ingresa un precio válido');return;}
+    const now=new Date();
+    const vence=new Date(now.getTime()+PLAZO_DIAS*86400000);
+    let code=document.getElementById('lb-code').value.trim();
+    if(!code) code='CG'+Date.now().toString().slice(-8);
+    CG.libros.push({id:'lb'+Date.now()+Math.random().toString(36).slice(2,5),
+      titulo, autor:document.getElementById('lb-autor').value.trim(),
+      precio:+precio.toFixed(2), code, consignanteId:addLibrosTo,
+      fechaIngreso:now.toISOString(), fechaVence:vence.toISOString(), estado:'disponible'});
+    await sCG(); injectConsignaProducts();
+    // mantener el formulario abierto y mostrar recientes
+    render();
+    // refrescar lista de recientes
+    const cont=document.getElementById('lb-recientes');
+    if(cont){
+      const recientes=CG.libros.filter(l=>l.consignanteId===addLibrosTo).sort((a,b)=>new Date(b.fechaIngreso)-new Date(a.fechaIngreso)).slice(0,8);
+      cont.innerHTML='<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px">ÚLTIMOS INGRESADOS</div>'+
+        recientes.map(l=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">${l.titulo} · ${fmt(l.precio)}</div>`).join('');
+    }
+  });
+  mc.querySelectorAll('[data-lbdev]').forEach(el=>el.addEventListener('click',async()=>{
+    if(!confirm('¿Marcar este libro como devuelto al consignante?'))return;
+    const l=CG.libros.find(x=>x.id===el.dataset.lbdev);
+    if(l){l.estado='devuelto';l.fechaDevolucion=new Date().toISOString();}
+    await sCG();injectConsignaProducts();render();
+  }));
+
+  // ── Liquidaciones ──
+  mc.querySelectorAll('[data-liq]').forEach(el=>el.addEventListener('click',()=>{liquidarTo=el.dataset.liq;render();}));
+  mc.querySelector('#liq-cancel')?.addEventListener('click',()=>{liquidarTo=null;render();});
+  mc.querySelector('#liq-pagar')?.addEventListener('click',async()=>{
+    const s=saldoConsignante(liquidarTo);
+    if(s.libros.length===0)return;
+    const metodo=document.getElementById('liq-metodo').value;
+    if(!confirm(`Registrar pago de ${fmt(s.pago60)} a ${nombreConsignante(liquidarTo)} por ${metodo}?`))return;
+    CG.liquidaciones.push({id:'lq'+Date.now(), consignanteId:liquidarTo,
+      fecha:new Date().toISOString(), periodo:today().slice(0,7),
+      libroIds:s.libros.map(l=>l.id), totalVenta:s.totalVenta, pago60:s.pago60,
+      metodo, user:turnoUser});
+    await sCG();liquidarTo=null;render();
+    alert('Liquidación registrada. Recuerda entregar el comprobante al consignante.');
+  });
+}
+
 // ── Nav ───────────────────────────────────────────────────────
 document.querySelectorAll('nav button').forEach(btn=>btn.addEventListener('click',()=>{
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
@@ -2713,14 +3145,24 @@ let selectedCancelMotivo = '';
         ? (document.getElementById('cancel-obs').value.trim() || 'Otro')
         : selectedCancelMotivo;
       var lid=cancelModal.lid, item=cancelModal.item, table=cancelModal.table;
+      // Register cancellation
       S.push({id:'canc'+Date.now(), esCancelacion:true, prodName:item.name,
         qty:item.qty, motivo:motivo, mesa:table.name,
         date:new Date().toISOString(), user:turnoUser, total:0, closed:false});
-      await sS();
+      // Remove item from order
       table.order = table.order.filter(function(i){ return i.lid!==lid; });
+      // Also remove from comandas record so it doesn't show as sent
+      if(table.comandas){
+        table.comandas.forEach(function(cmd){
+          if(cmd.items) cmd.items = cmd.items.filter(function(ci){ return ci.lid!==lid; });
+        });
+      }
       if(table.order.length===0){ table.status='libre'; table.openedAt=null; table.comandas=[]; }
-      await sT();
+      // Close modal and refresh UI IMMEDIATELY (before Firebase)
       modal.style.display='none'; cancelModal=null; selectedCancelMotivo='';
+      render();
+      // Save to Firebase in background (no await - non-blocking)
+      sS(); sT();
     });
   }
   if(document.readyState==='loading'){
@@ -2842,8 +3284,9 @@ function llenarFormCliente(cl){
         email:email,telefono:tel,mesa:facturaVentaRef?facturaVentaRef.mesa:'',
         total:facturaVentaRef?facturaVentaRef.total:0,items:facturaVentaRef?facturaVentaRef.items:[],
         fecha:new Date().toISOString(),user:turnoUser,estado:'pendiente',closed:false});
-      await sS();
+      sS();
       modal.style.display='none'; facturaVentaRef=null;
+      render();
       alert('✓ Guardada en Facturas pendientes'+(tipo!=='Consumidor Final'?' y cliente registrado':'')+'.');
     });
   });
