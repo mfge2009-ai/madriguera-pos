@@ -438,6 +438,20 @@ const INIT_PRODUCTS = [{"id":"p0","name":"ANGELES Y ANCESTROS LIBRO Y CARTAS ORA
 const MESA_NAMES=['Mesa 1','Mesa 2','Mesa 3','Mesa 4','Mesa 5','Mesa 6','Mesa 7','Mesa 8','Mesa 9','Mesa 10','Mesa 11','Mesa 12','Mesa 13','Cliente individual','Servientrega'];
 const INIT_TABLES=MESA_NAMES.map((n,i)=>({id:`t${i+1}`,name:n,status:'libre',order:[],comandas:[],openedAt:null}));
 const PAY=['Efectivo','T.Crédito','T.Débito','Transferencia'];
+// Categorías de gasto: [nombre, tipo] donde tipo = 'fijo' o 'variable'
+const GASTO_CATS=[
+  ['Costo mercadería (café)','variable'],
+  ['Costo de cocina','variable'],
+  ['Compra de libros propios','variable'],
+  ['Arriendo','fijo'],
+  ['Servicios básicos','fijo'],
+  ['Nómina / personal','fijo'],
+  ['Marketing','variable'],
+  ['Mantenimiento / suministros','variable'],
+  ['Impuestos y permisos','fijo'],
+  ['Otros','variable']
+];
+const catTipo=(cat)=>{const f=GASTO_CATS.find(g=>g[0]===cat);return f?f[1]:'variable';};
 const SIZES=['Pequeño','Mediano','Grande'];
 const MILKS=['Entera','Deslactosada','Vegetal','Sin leche'];
 const CAJEROS=['María Fernanda','Steven','Alex','Otro'];
@@ -461,6 +475,7 @@ let P=[],T=[],S=[];
 let turnoUser=localStorage.getItem('madu_turno')||'';
 let CL=[]; // clientes frecuentes
 let CG={consignantes:[],libros:[],liquidaciones:[]}; // consignación
+let actaConsignante=null,actaLibros=[];
 let consignaSub='libros',editConsignante=null,addLibrosTo=null,csearch='',liquidarTo=null;
 const PCT_CONSIGNANTE=0.60; // 60% al consignante
 const PLAZO_DIAS=120;
@@ -541,7 +556,7 @@ const sCL=()=>_write('clientes',CL);
 const sCG=()=>_write('consigna',CG);
 const fmt=n=>'$'+parseFloat(n).toFixed(2);
 const today=()=>new Date().toISOString().slice(0,10);
-const isVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada;
+const isVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada&&!s.esActaDevolucion;
 const openS=()=>S.filter(s=>isVenta(s)&&s.date.startsWith(today())&&!s.closed);
 
 // ── Realtime ─────────────────────────────────────────────────
@@ -905,7 +920,7 @@ function rPOS(){
           <span id="omesa">${t?t.name:'Sin mesa'}</span>
           <div style="display:flex;gap:5px;align-items:center">
             ${t&&t.order.length>0?`<button class="btn btn-sm" id="breimprimir" title="Reimprimir comanda" style="background:var(--bg3);border:1px solid var(--border);color:var(--text2);font-size:13px;padding:4px 8px">🖨</button>`:''}
-            ${t&&t.order.length>0?`<button class="btn btn-sm" id="bpersona" style="background:${personaMode?'#5c4a2a':'var(--bg3)'};border:1px solid ${personaMode?'#5c4a2a':'var(--border)'};color:${personaMode?'#fff':'var(--text2)'};font-size:13px;padding:4px 8px">👥</button>`:''}
+            
             ${t?`<button class="btn btn-g btn-sm" id="bcm">✕</button>`:''}
           </div>
         </div>
@@ -1818,59 +1833,64 @@ function attachProd(){
 // ── DASHBOARD ─────────────────────────────────────────────────
 function rDash(){
   const ts=openS(),tT=ts.reduce((a,x)=>a+x.total,0);
-  const allT=S.reduce((a,x)=>a+x.total,0);
   const mes=new Date().toISOString().slice(0,7);
   const mesS=S.filter(s=>isVenta(s)&&s.date.startsWith(mes)),mesT=mesS.reduce((a,x)=>a+x.total,0);
   const dias=new Set(mesS.map(s=>s.date.slice(0,10))).size||1;
   const prom=mesT/dias;
-  const dm=new Date(new Date().getFullYear(),new Date().getMonth()+1,0).getDate();
+  // Compare today vs daily average
+  const vsProm=prom>0?((tT-prom)/prom*100):0;
   const last7=Array.from({length:7},(_,i)=>{
     const d=new Date();d.setDate(d.getDate()-(6-i));
     const ds=d.toISOString().slice(0,10);
-    const dS=S.filter(s=>s.date&&s.date.startsWith(ds)&&!s.esFactura&&!s.esGasto&&!s.esCierre);
+    const dS=S.filter(s=>isVenta(s)&&s.date.startsWith(ds));
     return{l:d.toLocaleDateString('es-EC',{weekday:'short'}),t:dS.reduce((a,x)=>a+x.total,0),td:ds===today()};
   });
   const mx=Math.max(...last7.map(d=>d.t),1);
-  const byPay=PAY.map(m=>{let t=0,ct=0;ts.forEach(s=>{if(s.pagosParciales&&s.pagosParciales.length>0){const pp=s.pagosParciales.filter(p=>p.metodo===m);if(pp.length>0){t+=pp.reduce((a,p)=>a+p.monto,0);ct++;}}else if(s.paymentMethod===m){t+=s.total;ct++;}});return{m,t,c:ct};});
-  const imap={};ts.forEach(s=>s.items.forEach(i=>{if(!imap[i.name])imap[i.name]={q:0,r:0};imap[i.name].q+=i.qty;imap[i.name].r+=i.price*i.qty;}));
-  const top=Object.entries(imap).sort((a,b)=>b[1].r-a[1].r).slice(0,8);
+  // Top sellers today
+  const imap={};ts.forEach(s=>(s.items||[]).forEach(i=>{if(!imap[i.name])imap[i.name]={q:0,r:0};imap[i.name].q+=i.qty;imap[i.name].r+=i.price*i.qty;}));
+  const top=Object.entries(imap).sort((a,b)=>b[1].q-a[1].q).slice(0,5);
+
   return `<div>
-    <div class="sg3">
-      <div class="scard"><div class="slbl">Ventas hoy</div><div class="sval">${fmt(tT)}</div><div class="ssub">${ts.length} pedidos</div></div>
-      <div class="scard"><div class="slbl">Ticket prom.</div><div class="sval">${fmt(ts.length?tT/ts.length:0)}</div></div>
-      <div class="scard"><div class="slbl">Histórico</div><div class="sval">${fmt(allT)}</div><div class="ssub">${S.length} total</div></div>
+    <!-- PREGUNTA 1: ¿Cuánto vendí hoy? -->
+    <div class="card" style="padding:20px;margin-bottom:12px;text-align:center;background:linear-gradient(135deg,#5c4a2a,#7a6340);color:#fff">
+      <div style="font-size:12px;opacity:.85;margin-bottom:4px">Ventas de hoy</div>
+      <div style="font-size:34px;font-weight:800;line-height:1.1">${fmt(tT)}</div>
+      <div style="font-size:12px;opacity:.85;margin-top:4px">${ts.length} pedido${ts.length!==1?'s':''} · ticket promedio ${fmt(ts.length?tT/ts.length:0)}</div>
     </div>
-    <div class="sg3">
-      <div class="scard"><div class="slbl">Mes</div><div class="sval">${fmt(mesT)}</div><div class="ssub">${mesS.length} ped.</div></div>
-      <div class="scard"><div class="slbl">Prom. diario</div><div class="sval">${fmt(prom)}</div></div>
-      <div class="scard"><div class="slbl">Proyección</div><div class="sval">${fmt(prom*dm)}</div></div>
-    </div>
-    <div class="sg2">
-      <div class="card"><div style="font-weight:600;font-size:12px;margin-bottom:9px">Últimos 7 días</div>
-        <div class="barchart">${last7.map(d=>`<div class="bw">
-          ${d.t>0?`<div class="bv">${fmt(d.t)}</div>`:''}
-          <div class="bar${d.td?' td':''}" style="height:${Math.max((d.t/mx)*70,d.t>0?4:1)}px"></div>
-          <div class="bl">${d.l}</div></div>`).join('')}
-        </div>
+
+    <!-- PREGUNTA 2: ¿Cómo voy vs promedio? -->
+    <div class="sg2" style="margin-bottom:12px">
+      <div class="card" style="padding:16px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">vs. día promedio</div>
+        <div style="font-size:22px;font-weight:800;color:${vsProm>=0?'var(--grn)':'var(--red)'}">${vsProm>=0?'▲':'▼'} ${Math.abs(vsProm).toFixed(0)}%</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">promedio: ${fmt(prom)}/día</div>
       </div>
-      <div class="card"><div style="font-weight:600;font-size:12px;margin-bottom:9px">Métodos (hoy)</div>
-        ${byPay.map(p=>`<div style="margin-bottom:9px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px"><span>${p.m}</span><span style="font-weight:700">${fmt(p.t)}</span></div>
-          <div style="height:3px;background:var(--bg3);border-radius:2px"><div style="height:3px;background:var(--acc);border-radius:2px;width:${tT>0?Math.round(p.t/tT*100):0}%"></div></div>
-        </div>`).join('')}
+      <div class="card" style="padding:16px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Total del mes</div>
+        <div style="font-size:22px;font-weight:800">${fmt(mesT)}</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">${dias} día${dias!==1?'s':''} con ventas</div>
       </div>
     </div>
-    ${top.length>0?`<div class="card" style="margin-bottom:12px"><div style="font-weight:600;font-size:12px;margin-bottom:9px">Más vendidos hoy</div>
-      ${top.map(([n,d])=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:.5px solid var(--border);font-size:12px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;margin-right:8px">${n}</span><span style="color:var(--text3);flex-shrink:0">${d.q}× <strong>${fmt(d.r)}</strong></span></div>`).join('')}
-    </div>`:''}
-    <div class="stitle">Pedidos de hoy</div>
-    ${ts.length===0?`<div style="text-align:center;padding:30px;color:var(--text3)">Sin pedidos hoy</div>`:
-      [...ts].reverse().slice(0,20).map(s=>`<div class="mrow" style="margin-bottom:5px">
-        <div style="min-width:0;flex:1"><span style="font-weight:700;font-size:12px">${s.tableName}</span><span style="color:var(--text3);font-size:11px;margin-left:7px">${s.items.map(i=>`${i.qty}× ${i.name}${i.variant?' ('+i.variant+')':''}`).join(', ')}</span></div>
-        <div style="display:flex;align-items:center;gap:7px;flex-shrink:0"><span style="font-size:10px;color:var(--text3)">${s.paymentMethod}</span><span style="font-weight:700;font-size:12px">${fmt(s.total)}</span></div>
-      </div>`).join('')}
+
+    <!-- Tendencia visual -->
+    <div class="card" style="margin-bottom:12px">
+      <div style="font-weight:600;font-size:12px;margin-bottom:12px">Últimos 7 días</div>
+      <div class="barchart">${last7.map(d=>`<div class="bw">
+        ${d.t>0?`<div class="bv">${fmt(d.t)}</div>`:''}
+        <div class="bar${d.td?' td':''}" style="height:${Math.max((d.t/mx)*70,d.t>0?4:1)}px"></div>
+        <div class="bl">${d.l}</div></div>`).join('')}
+      </div>
+    </div>
+
+    <!-- PREGUNTA 3: ¿Qué se vende más? -->
+    ${top.length>0?`<div class="card" style="margin-bottom:12px"><div style="font-weight:600;font-size:12px;margin-bottom:10px">Más vendidos hoy</div>
+      ${top.map(([n,d])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:.5px solid var(--border);font-size:13px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;margin-right:8px">${n}</span><span style="color:var(--text3);flex-shrink:0"><strong>${d.q}</strong> vendidos · ${fmt(d.r)}</span></div>`).join('')}
+    </div>`:`<div class="card" style="text-align:center;padding:24px;color:var(--text3);font-size:13px">Aún no hay ventas hoy</div>`}
+
+    <div style="text-align:center;font-size:11px;color:var(--text3);padding:8px">Para análisis detallado, exportar o anular ventas, ve a <strong>Reportes</strong></div>
   </div>`;
 }
+
 
 // ── CAJA ─────────────────────────────────────────────────
 let cajaTab='resumen';
@@ -1893,7 +1913,7 @@ function rCaja(){
 
   const cierresAnteriores=S.filter(s=>s.esCierre&&s.date).sort((a,b)=>b.date.localeCompare(a.date));
   const tabs=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto;scrollbar-width:none">
-    ${['resumen','gastos','cierre','historial'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='cierre'?'Cuadre':'Historial ('+cierresAnteriores.length+')'}</button>`).join('')}
+    ${['resumen','gastos','contabilidad','cierre','historial'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?'Cuadre':'Historial ('+cierresAnteriores.length+')'}</button>`).join('')}
   </div>`;
 
   let body='';
@@ -1917,7 +1937,7 @@ function rCaja(){
       <div style="font-size:12px;font-weight:700;margin-bottom:8px">Pedidos de hoy</div>
       ${ts.length===0?`<div style="text-align:center;padding:24px;color:var(--text3)">Sin pedidos hoy</div>`:
         [...ts].reverse().slice(0,15).map(s=>`<div class="mrow" style="margin-bottom:4px">
-          <div style="min-width:0;flex:1"><span style="font-weight:700;font-size:11px">${s.tableName}</span><span style="color:var(--text3);font-size:10px;margin-left:6px">${s.items.map(i=>`${i.qty}x${i.name}`).join(', ')}</span></div>
+          <div style="min-width:0;flex:1"><span style="font-weight:700;font-size:11px">${s.tableName}</span><span style="color:var(--text3);font-size:10px;margin-left:6px">${(s.items||[]).map(i=>`${i.qty}x${i.name}`).join(', ')}</span></div>
           <div style="flex-shrink:0;display:flex;gap:5px;align-items:center"><span style="font-size:10px;color:var(--text3)">${s.paymentMethod}</span><span style="font-weight:700;font-size:11px">${fmt(s.total)}</span></div>
         </div>`).join('')}`;
   }
@@ -1927,7 +1947,7 @@ function rCaja(){
       <div style="font-weight:700;font-size:13px;margin-bottom:12px">${editGasto?'Editar gasto':'Nuevo gasto'}</div>
       <div class="fgrid">
         <div class="fg"><label>Descripción</label><input id="gdesc" placeholder="Ej: Compra de leche" value="${editGasto?.desc||''}"></div>
-        <div class="fg"><label>Categoría</label><select id="gcat">${['Insumos','Servicios','Personal','Mantenimiento','Transporte','Varios'].map(ct=>`<option${editGasto?.cat===ct?' selected':''}>${ct}</option>`).join('')}</select></div>
+        <div class="fg"><label>Categoría contable</label><select id="gcat">${GASTO_CATS.map(([ct,tp])=>`<option${editGasto?.cat===ct?' selected':''} value="${ct}">${ct} (${tp})</option>`).join('')}</select></div>
         <div class="fg"><label>Monto ($)</label><input id="gmonto" type="number" step="0.01" placeholder="0.00" value="${editGasto?.total||''}"></div>
         <div class="fg"><label>Método</label><select id="gpay">${PAY.map(m=>`<option${editGasto?.paymentMethod===m?' selected':''}>${m}</option>`).join('')}</select></div>
       </div>
@@ -1950,6 +1970,107 @@ function rCaja(){
         </div></div>`).join('')}`;
   }
 
+  else if(cajaTab==='contabilidad'){
+    // Month selector
+    const mesActual=window._contaMes||new Date().toISOString().slice(0,7);
+    const mesAnt=(()=>{const d=new Date(mesActual+'-15');d.setMonth(d.getMonth()-1);return d.toISOString().slice(0,7);})();
+    // Ventas del mes (excluyendo anuladas y registros especiales)
+    const ventasMes=S.filter(s=>isVenta(s)&&s.date.startsWith(mesActual));
+    const ventasMesAnt=S.filter(s=>isVenta(s)&&s.date.startsWith(mesAnt));
+    const totalVentas=ventasMes.reduce((a,s)=>a+s.total,0);
+    const totalVentasAnt=ventasMesAnt.reduce((a,s)=>a+s.total,0);
+    // Ventas por línea de negocio (según categoría de producto)
+    const lineas={'Café/Bebidas':0,'Cocina':0,'Libros':0,'Merch/Otros':0};
+    ventasMes.forEach(s=>(s.items||[]).forEach(i=>{
+      const p=P.find(x=>x.id===i.productId||x.name===i.name);
+      const cat=p?p.category:'';
+      const monto=i.price*i.qty;
+      if(['Café','Bebidas','Bubble Tea','Bebidas con alcohol'].includes(cat))lineas['Café/Bebidas']+=monto;
+      else if(['Platos fuertes','Postres'].includes(cat))lineas['Cocina']+=monto;
+      else if(cat==='Libros'||cat==='Consignados')lineas['Libros']+=monto;
+      else lineas['Merch/Otros']+=monto;
+    }));
+    // Gastos del mes por categoría
+    const gastosMes=S.filter(s=>s.esGasto&&s.date&&s.date.startsWith(mesActual));
+    const totalGastosMes=gastosMes.reduce((a,g)=>a+g.total,0);
+    const gastosMesAnt=S.filter(s=>s.esGasto&&s.date&&s.date.startsWith(mesAnt)).reduce((a,g)=>a+g.total,0);
+    const porCat={};
+    GASTO_CATS.forEach(([ct])=>porCat[ct]=0);
+    gastosMes.forEach(g=>{const ct=g.cat||'Otros';porCat[ct]=(porCat[ct]||0)+g.total;});
+    const catsSorted=Object.entries(porCat).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+    const maxCat=Math.max(...catsSorted.map(c=>c[1]),1);
+    // Fijos vs variables
+    const fijos=gastosMes.filter(g=>(g.tipoGasto||catTipo(g.cat))==='fijo').reduce((a,g)=>a+g.total,0);
+    const variables=gastosMes.filter(g=>(g.tipoGasto||catTipo(g.cat))==='variable').reduce((a,g)=>a+g.total,0);
+    // Utilidad
+    const utilidad=totalVentas-totalGastosMes;
+    const utilidadAnt=totalVentasAnt-gastosMesAnt;
+    const margenPct=totalVentas>0?(utilidad/totalVentas*100):0;
+    const mesNombre=new Date(mesActual+'-15').toLocaleDateString('es-EC',{month:'long',year:'numeric'});
+
+    body=`
+      <div class="rb" style="margin-bottom:14px">
+        <span style="font-weight:700;font-size:14px;text-transform:capitalize">${mesNombre}</span>
+        <input type="month" id="conta-mes" value="${mesActual}" style="padding:6px 10px;border-radius:7px;border:1.5px solid var(--b2);font-family:inherit;font-size:12px">
+      </div>
+
+      <!-- Utilidad neta destacada -->
+      <div class="card" style="padding:18px;margin-bottom:12px;text-align:center;background:${utilidad>=0?'linear-gradient(135deg,#2d6a4f,#40916c)':'linear-gradient(135deg,#9b2226,#bb3e03)'};color:#fff">
+        <div style="font-size:12px;opacity:.85">Utilidad neta del mes</div>
+        <div style="font-size:32px;font-weight:800;line-height:1.1">${fmt(utilidad)}</div>
+        <div style="font-size:12px;opacity:.85;margin-top:3px">Margen: ${margenPct.toFixed(1)}% ${utilidadAnt!==0?'· mes anterior: '+fmt(utilidadAnt):''}</div>
+      </div>
+
+      <!-- Ventas vs Gastos -->
+      <div class="sg2" style="margin-bottom:12px">
+        <div class="card" style="padding:14px;text-align:center">
+          <div style="font-size:11px;color:var(--text3)">Ingresos</div>
+          <div style="font-size:20px;font-weight:800;color:var(--grn)">${fmt(totalVentas)}</div>
+          ${totalVentasAnt>0?`<div style="font-size:10px;color:var(--text3)">${totalVentas>=totalVentasAnt?'▲':'▼'} vs ${fmt(totalVentasAnt)}</div>`:''}
+        </div>
+        <div class="card" style="padding:14px;text-align:center">
+          <div style="font-size:11px;color:var(--text3)">Gastos</div>
+          <div style="font-size:20px;font-weight:800;color:var(--red)">${fmt(totalGastosMes)}</div>
+          ${gastosMesAnt>0?`<div style="font-size:10px;color:var(--text3)">${totalGastosMes>=gastosMesAnt?'▲':'▼'} vs ${fmt(gastosMesAnt)}</div>`:''}
+        </div>
+      </div>
+
+      <!-- Ventas por línea de negocio -->
+      <div class="card" style="margin-bottom:12px">
+        <div style="font-weight:600;font-size:12px;margin-bottom:10px">Ingresos por línea de negocio</div>
+        ${Object.entries(lineas).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([ln,v])=>`<div style="margin-bottom:9px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${ln}</span><span style="font-weight:700">${fmt(v)} <span style="color:var(--text3);font-weight:400">(${totalVentas>0?(v/totalVentas*100).toFixed(0):0}%)</span></span></div>
+          <div style="height:5px;background:var(--bg3);border-radius:3px"><div style="height:5px;background:var(--acc);border-radius:3px;width:${totalVentas>0?(v/totalVentas*100):0}%"></div></div>
+        </div>`).join('')||'<div style="color:var(--text3);font-size:12px;text-align:center;padding:12px">Sin ventas este mes</div>'}
+      </div>
+
+      <!-- A dónde se va el dinero (gastos por categoría) -->
+      <div class="card" style="margin-bottom:12px">
+        <div style="font-weight:600;font-size:12px;margin-bottom:10px">A dónde se va el dinero</div>
+        ${catsSorted.length===0?'<div style="color:var(--text3);font-size:12px;text-align:center;padding:12px">Sin gastos registrados este mes</div>':
+          catsSorted.map(([ct,v])=>`<div style="margin-bottom:9px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${ct} <span style="font-size:9px;color:var(--text3)">(${catTipo(ct)})</span></span><span style="font-weight:700">${fmt(v)} <span style="color:var(--text3);font-weight:400">(${(v/totalGastosMes*100).toFixed(0)}%)</span></span></div>
+            <div style="height:5px;background:var(--bg3);border-radius:3px"><div style="height:5px;background:${catTipo(ct)==='fijo'?'#9b2226':'#e67e22'};border-radius:3px;width:${(v/maxCat*100)}%"></div></div>
+          </div>`).join('')}
+      </div>
+
+      <!-- Fijos vs Variables -->
+      <div class="sg2" style="margin-bottom:12px">
+        <div class="card" style="padding:14px;text-align:center;border-left:3px solid #9b2226">
+          <div style="font-size:11px;color:var(--text3)">Gastos fijos</div>
+          <div style="font-size:18px;font-weight:800">${fmt(fijos)}</div>
+          <div style="font-size:10px;color:var(--text3)">arriendo, sueldos, servicios</div>
+        </div>
+        <div class="card" style="padding:14px;text-align:center;border-left:3px solid #e67e22">
+          <div style="font-size:11px;color:var(--text3)">Gastos variables</div>
+          <div style="font-size:18px;font-weight:800">${fmt(variables)}</div>
+          <div style="font-size:10px;color:var(--text3)">mercadería, insumos</div>
+        </div>
+      </div>
+
+      <div style="text-align:center;font-size:11px;color:var(--text3);padding:6px">Registra tus gastos en la pestaña "Gastos" con su categoría para que aparezcan aquí</div>
+    `;
+  }
   else if(cajaTab==='cierre'){
     const yaHayCierre=!!todayCierre;
     const diffColor=Math.abs(diferencia)<0.5?'var(--grn)':diferencia>0?'var(--blu)':'var(--red)';
@@ -2031,6 +2152,7 @@ function rCaja(){
 function attachCaja(){
   const mc=document.getElementById('mc');
   mc.querySelector('#bctcambio')?.addEventListener('click',()=>{turnoUser='';localStorage.removeItem('madu_turno');view='pos';render();});
+  mc.querySelector('#conta-mes')?.addEventListener('change',e=>{window._contaMes=e.target.value;render();});
   mc.querySelectorAll('[data-cajatab]').forEach(el=>el.addEventListener('click',()=>{cajaTab=el.dataset.cajatab;gastoForm=false;editGasto=null;render();}));
   mc.querySelector('#bgnew')?.addEventListener('click',()=>{gastoForm=true;editGasto=null;render();});
   mc.querySelector('#bgcancel')?.addEventListener('click',()=>{gastoForm=false;editGasto=null;render();});
@@ -2043,9 +2165,9 @@ function attachCaja(){
     if(!desc||isNaN(monto)||monto<=0)return alert('Descripción y monto son requeridos');
     if(editGasto){
       const g=S.find(s=>s.id===editGasto.id);
-      if(g)Object.assign(g,{desc,cat,total:monto,paymentMethod:payM,obs});
+      if(g)Object.assign(g,{desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs});
     } else {
-      S.push({id:`g${Date.now()}`,esGasto:true,desc,cat,total:monto,paymentMethod:payM,obs,date:new Date().toISOString(),user:turnoUser,closed:false});
+      S.push({id:`g${Date.now()}`,esGasto:true,desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs,date:new Date().toISOString(),user:turnoUser,closed:false});
     }
     sS();gastoForm=false;editGasto=null;render();
   });
@@ -2077,10 +2199,40 @@ function attachCaja(){
     const conteo2=parseFloat(document.getElementById('cconteo')?.value)||0;
     const resp=document.getElementById('cresp')?.value||turnoUser;
     const obs=document.getElementById('cobs')?.value||'';
-    if(!conteo2&&!confirm('El conteo es $0.00 ¿Confirmar cierre?'))return;
-    S.push({id:`cierre${Date.now()}`,esCierre:true,inicio,sueltos:sueltos2,conteo:conteo2,responsable:resp,obs,date:new Date().toISOString(),total:0,closed:false});
-    S.forEach(s=>{if(!s.esCierre&&!s.esGasto&&s.date.startsWith(today()))s.closed=true;});
+    // Calculate expected cash
+    const ventasHoy=S.filter(s=>isVenta(s)&&s.date.startsWith(today())&&!s.closed);
+    let efectivoEsperado=0;
+    ventasHoy.forEach(s=>{
+      if(s.pagosParciales&&s.pagosParciales.length>0){
+        s.pagosParciales.forEach(p=>{if(p.metodo==='Efectivo')efectivoEsperado+=p.monto;});
+      } else if(s.paymentMethod==='Efectivo'){ efectivoEsperado+=s.total; }
+    });
+    const gastosHoy=S.filter(s=>s.esGasto&&s.date.startsWith(today())&&s.paymentMethod==='Efectivo').reduce((a,g)=>a+g.total,0);
+    const esperadoEnCaja=inicio+sueltos2+efectivoEsperado-gastosHoy;
+    const diferencia=conteo2-esperadoEnCaja;
+    // Show summary and require confirmation
+    let msg='RESUMEN DE CIERRE\n\n';
+    msg+='Inicio de caja: $'+inicio.toFixed(2)+'\n';
+    msg+='Sueltos: $'+sueltos2.toFixed(2)+'\n';
+    msg+='Ventas efectivo: $'+efectivoEsperado.toFixed(2)+'\n';
+    msg+='Gastos efectivo: -$'+gastosHoy.toFixed(2)+'\n';
+    msg+='─────────────\n';
+    msg+='Esperado en caja: $'+esperadoEnCaja.toFixed(2)+'\n';
+    msg+='Conteo real: $'+conteo2.toFixed(2)+'\n';
+    msg+='DIFERENCIA: '+(diferencia>=0?'+':'')+'$'+diferencia.toFixed(2)+'\n\n';
+    if(Math.abs(diferencia)>0.5){ msg+='⚠ Hay una diferencia de $'+Math.abs(diferencia).toFixed(2)+'\n\n'; }
+    msg+='¿Confirmar cierre de caja?';
+    if(!confirm(msg))return;
+    // Require PIN to close
+    const pin=prompt('Ingresa el PIN para cerrar la caja:');
+    if(pin!==CORRECT_PIN){if(pin!==null)alert('PIN incorrecto');return;}
+    S.push({id:`cierre${Date.now()}`,esCierre:true,inicio,sueltos:sueltos2,conteo:conteo2,
+      efectivoEsperado,gastosEfectivo:gastosHoy,esperadoEnCaja,diferencia,
+      responsable:resp,obs,date:new Date().toISOString(),total:0,closed:false});
+    // Only close actual ventas, not other records
+    S.forEach(s=>{if(isVenta(s)&&s.date.startsWith(today()))s.closed=true;});
     render();sS();
+    alert('✓ Caja cerrada. Diferencia: '+(diferencia>=0?'+':'')+'$'+diferencia.toFixed(2));
   });
 }
 // ── INVENTARIO ────────────────────────────────────────────────
@@ -2863,7 +3015,7 @@ function saldoConsignante(cid){
 }
 
 function rConsigna(){
-  const subs=[['libros','Libros'],['consignantes','Consignantes'],['liquidaciones','Liquidaciones']];
+  const subs=[['libros','Libros'],['consignantes','Consignantes'],['liquidaciones','Liquidaciones'],['devolucion','📋 Acta Devolución']];
   const tabs=subs.map(([k,l])=>`<button class="ctab${consignaSub===k?' on':''}" data-csub="${k}">${l}</button>`).join('');
 
   // KPIs
@@ -2884,6 +3036,7 @@ function rConsigna(){
   let body='';
   if(consignaSub==='consignantes') body=rConsignantes();
   else if(consignaSub==='libros') body=rConsignaLibros();
+  else if(consignaSub==='devolucion') body=rActaDevolucion();
   else body=rLiquidaciones();
 
   return `<h2 style="margin:0 0 4px">Consignación de libros</h2>
@@ -3027,10 +3180,200 @@ function rLiquidaciones(){
     <h3 style="margin:20px 0 10px;font-size:14px">Historial de liquidaciones</h3>${hist}`;
 }
 
+function rActaDevolucion(){
+  // Get all book providers from the Libros category in products
+  const libros=P.filter(p=>p.category==='Libros'&&p.active!==false);
+  const provs={};
+  libros.forEach(l=>{
+    const pr=(l.author||'').trim()||'(Sin proveedor)';
+    if(!provs[pr])provs[pr]=[];
+    provs[pr].push(l);
+  });
+  const provList=Object.entries(provs).sort((a,b)=>b[1].length-a[1].length);
+
+  // Step 1: select proveedor
+  if(!actaConsignante){
+    return `<div class="card" style="padding:20px;max-width:600px">
+      <h3 style="margin:0 0 6px">📋 Acta de Devolución de Consignación</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:16px">Selecciona el proveedor de los libros que vas a devolver. Luego escanea los códigos de barras de cada libro.</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${provList.map(([pr,libs])=>`<button class="btn btn-g" style="justify-content:space-between;display:flex;padding:14px;text-align:left" data-acta-cn="${pr.replace(/"/g,'&quot;')}">
+          <span style="font-weight:600">${pr}</span>
+          <span style="font-size:11px;color:var(--text3)">${libs.length} título${libs.length!==1?'s':''} · ${libs.reduce((a,l)=>a+(l.stock||0),0)} ejemplares</span>
+        </button>`).join('')}
+      </div>
+    </div>
+    ${S.filter(s=>s.esActaDevolucion).length>0?`<div class="card" style="padding:16px;max-width:600px;margin-top:12px">
+      <h4 style="margin:0 0 10px;font-size:13px">Actas generadas</h4>
+      ${S.filter(s=>s.esActaDevolucion).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,15).map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:.5px solid var(--border);font-size:12px">
+        <div><div style="font-weight:600">${a.proveedor}</div><div style="font-size:10px;color:var(--text3)">${new Date(a.date).toLocaleString('es-EC',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})} · ${(a.libros||[]).reduce((x,l)=>x+(l.qty||1),0)} ejemplares · ${fmt(a.totalLibros||0)}</div></div>
+        <button class="btn btn-g btn-sm" data-reimprimir-acta="${a.id}" style="font-size:11px">🖨 Reimprimir</button>
+      </div>`).join('')}
+    </div>`:''}`;
+  }
+
+  // Step 2: scan & build acta
+  const provName=actaConsignante;
+  const librosProv=provs[provName]||[];
+  const totalDevolver=actaLibros.reduce((a,item)=>a+(item.precio*item.qty),0);
+  const totalEjemplares=actaLibros.reduce((a,item)=>a+item.qty,0);
+
+  return `<div style="max-width:700px">
+    <div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><h3 style="margin:0">📋 Acta de Devolución</h3><div style="font-size:12px;color:var(--text3)">Proveedor: <b>${provName}</b></div></div>
+        <button class="btn btn-g btn-sm" id="acta-cambiar">Cambiar</button>
+      </div>
+      <div style="display:flex;gap:7px;align-items:center;margin-bottom:8px">
+        <input id="acta-scan" placeholder="Escanea o escribe el código ISBN..." style="flex:1;padding:11px;border-radius:8px;border:1.5px solid var(--b2);font-size:14px;font-family:inherit" inputmode="numeric" autocomplete="off">
+        <button class="btn btn-acc" id="acta-scan-cam" style="padding:11px 14px">📷</button>
+      </div>
+      <div style="font-size:11px;color:var(--text3)">${librosProv.length} título(s) de este proveedor en tu catálogo. Escanea para agregar al acta.</div>
+    </div>
+
+    <div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+        <span style="font-weight:700;font-size:13px">Libros a devolver (${totalEjemplares} ejemplares)</span>
+        <span style="font-weight:700;font-size:13px">${fmt(totalDevolver)}</span>
+      </div>
+      ${actaLibros.length===0?`<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">Escanea libros para agregarlos al acta</div>`:
+        actaLibros.map((item,idx)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:.5px solid var(--border);font-size:13px">
+          <div style="min-width:0;flex:1">
+            <div style="font-weight:600">${item.name}</div>
+            <div style="font-size:11px;color:var(--text3)">${item.code||'sin código'} · ${fmt(item.precio)} c/u</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <button data-acta-menos="${idx}" style="width:26px;height:26px;border-radius:5px;border:1px solid var(--b2);background:var(--bg3);cursor:pointer;font-size:15px">−</button>
+            <span style="font-weight:700;min-width:20px;text-align:center">${item.qty}</span>
+            <button data-acta-mas="${idx}" style="width:26px;height:26px;border-radius:5px;border:1px solid var(--b2);background:var(--bg3);cursor:pointer;font-size:15px">+</button>
+            <button data-acta-quitar="${idx}" style="background:none;border:1px solid var(--red);color:var(--red);border-radius:5px;padding:4px 8px;cursor:pointer;margin-left:4px">✕</button>
+          </div>
+        </div>`).join('')}
+    </div>
+
+    ${actaLibros.length>0?`<div style="display:flex;gap:8px">
+      <button class="btn btn-g" id="acta-limpiar" style="flex:1">Limpiar</button>
+      <button class="btn btn-acc" id="acta-generar" style="flex:2">📄 Generar acta, imprimir y descontar stock</button>
+    </div>`:''}
+  </div>`;
+}
+
+function attachActaDevolucion(){
+  const mc=document.getElementById('mc');
+  // Select proveedor
+  mc.querySelectorAll('[data-acta-cn]').forEach(el=>el.addEventListener('click',()=>{
+    actaConsignante=el.dataset.actaCn;actaLibros=[];render();
+  }));
+  mc.querySelectorAll('[data-reimprimir-acta]').forEach(el=>el.addEventListener('click',()=>{
+    const a=S.find(s=>s.id===el.dataset.reimprimirActa);if(!a)return;
+    imprimirActaDevolucion({id:a.id,proveedor:a.proveedor,libros:a.libros,total:a.totalLibros,
+      totalEjemplares:(a.libros||[]).reduce((x,l)=>x+(l.qty||1),0),fecha:a.date,user:a.user});
+  }));
+  mc.querySelector('#acta-cambiar')?.addEventListener('click',()=>{actaConsignante=null;actaLibros=[];render();});
+  mc.querySelector('#acta-limpiar')?.addEventListener('click',()=>{actaLibros=[];render();});
+
+  // Add book by code (scanner or manual)
+  function addByCode(code){
+    code=String(code||'').trim().replace(/[^0-9X]/gi,'');
+    if(code.length<6)return false;
+    const libro=P.find(p=>p.category==='Libros'&&p.code&&p.code.replace(/[^0-9X]/gi,'')===code);
+    if(!libro){alert('No se encontró un libro con ese código ISBN en el catálogo');return false;}
+    const prov=(libro.author||'').trim()||'(Sin proveedor)';
+    if(prov!==actaConsignante){
+      if(!confirm('Este libro es del proveedor "'+prov+'", no de "'+actaConsignante+'". ¿Agregarlo de todas formas?'))return false;
+    }
+    // Check if already in acta
+    const ex=actaLibros.find(i=>i.productId===libro.id);
+    if(ex){ ex.qty++; }
+    else{ actaLibros.push({productId:libro.id,name:libro.name,code:libro.code,precio:libro.price,qty:1}); }
+    render();
+    setTimeout(()=>{const inp=document.getElementById('acta-scan');if(inp)inp.focus();},100);
+    return true;
+  }
+  const scanInput=mc.querySelector('#acta-scan');
+  if(scanInput){
+    scanInput.focus();
+    scanInput.addEventListener('keydown',e=>{
+      if(e.key==='Enter'){const v=scanInput.value;scanInput.value='';addByCode(v);}
+    });
+  }
+  mc.querySelector('#acta-scan-cam')?.addEventListener('click',()=>{
+    window._actaScanMode=true;openScanner();
+  });
+
+  // Qty +/- and remove
+  mc.querySelectorAll('[data-acta-mas]').forEach(el=>el.addEventListener('click',()=>{
+    const i=parseInt(el.dataset.actaMas);if(actaLibros[i])actaLibros[i].qty++;render();
+  }));
+  mc.querySelectorAll('[data-acta-menos]').forEach(el=>el.addEventListener('click',()=>{
+    const i=parseInt(el.dataset.actaMenos);if(actaLibros[i]){actaLibros[i].qty--;if(actaLibros[i].qty<=0)actaLibros.splice(i,1);}render();
+  }));
+  mc.querySelectorAll('[data-acta-quitar]').forEach(el=>el.addEventListener('click',()=>{
+    const i=parseInt(el.dataset.actaQuitar);actaLibros.splice(i,1);render();
+  }));
+
+  // Generate acta
+  mc.querySelector('#acta-generar')?.addEventListener('click',()=>{
+    if(actaLibros.length===0)return;
+    if(!confirm('Esto descontará el stock de '+actaLibros.reduce((a,i)=>a+i.qty,0)+' ejemplares y generará el acta. ¿Continuar?'))return;
+    const acta={id:'acta'+Date.now(),tipo:'devolucion',proveedor:actaConsignante,
+      libros:actaLibros.map(i=>({name:i.name,code:i.code,precio:i.precio,qty:i.qty})),
+      total:actaLibros.reduce((a,i)=>a+i.precio*i.qty,0),
+      totalEjemplares:actaLibros.reduce((a,i)=>a+i.qty,0),
+      fecha:new Date().toISOString(),user:turnoUser};
+    // Deduct stock from products
+    actaLibros.forEach(item=>{
+      const p=P.find(x=>x.id===item.productId);
+      if(p){ p.stock=Math.max(0,(p.stock||0)-item.qty); }
+    });
+    // Register acta as a special sales record for audit trail
+    S.push({id:acta.id,esActaDevolucion:true,proveedor:acta.proveedor,libros:acta.libros,
+      total:0,totalLibros:acta.total,date:acta.fecha,user:turnoUser,closed:false});
+    // Print
+    imprimirActaDevolucion(acta);
+    // Reset
+    actaLibros=[];actaConsignante=null;
+    render();
+    sP(); sS();
+    alert('✓ Acta generada. Stock descontado de '+acta.totalEjemplares+' ejemplares.');
+  });
+}
+
+function imprimirActaDevolucion(acta){
+  const now=new Date();
+  let b='';
+  b+='<div class="c b" style="font-size:13pt">LA MADRIGUERA</div>';
+  b+='<div class="c">ACTA DE DEVOLUCION DE CONSIGNACION</div>';
+  b+='<div class="line"></div>';
+  b+='<div>Fecha: '+now.toLocaleDateString('es-EC')+' '+now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})+'</div>';
+  b+='<div>Proveedor: '+sanitize(acta.proveedor)+'</div>';
+  b+='<div>Acta No: '+acta.id.replace('acta','')+'</div>';
+  b+='<div>Atendido por: '+sanitize(acta.user||'')+'</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="b">LIBROS DEVUELTOS:</div>';
+  acta.libros.forEach(function(l,i){
+    b+='<div style="margin-top:5px">'+(i+1)+'. '+sanitize(l.name)+'</div>';
+    b+='<div class="row" style="font-size:10px"><span>'+(l.code||'sin codigo')+' x'+l.qty+'</span><span>'+('$'+(l.precio*l.qty).toFixed(2))+'</span></div>';
+  });
+  b+='<div class="line"></div>';
+  b+='<div class="row b"><span>TOTAL '+acta.totalEjemplares+' ejemplares</span><span>$'+acta.total.toFixed(2)+'</span></div>';
+  b+='<div class="line"></div>';
+  b+='<div style="margin-top:24px">_______________________</div>';
+  b+='<div>Entrega: La Madriguera</div>';
+  b+='<div style="margin-top:18px">_______________________</div>';
+  b+='<div>Recibe: '+sanitize(acta.proveedor)+'</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="c" style="font-size:9px">Documento de control interno</div>';
+  printViaIframe(b);
+}
+
+
 function attachConsigna(){
   const mc=document.getElementById('mc');
   // sub-tabs
-  mc.querySelectorAll('[data-csub]').forEach(b=>b.addEventListener('click',()=>{consignaSub=b.dataset.csub;editConsignante=null;addLibrosTo=null;liquidarTo=null;render();}));
+  mc.querySelectorAll('[data-csub]').forEach(b=>b.addEventListener('click',()=>{consignaSub=b.dataset.csub;editConsignante=null;addLibrosTo=null;liquidarTo=null;actaConsignante=null;actaLibros=[];render();}));
+  // Acta devolución handlers
+  if(consignaSub==='devolucion'){attachActaDevolucion();}
 
   // ── Consignantes ──
   mc.querySelector('#cg-new')?.addEventListener('click',()=>{editConsignante='new';render();});
@@ -3319,9 +3662,20 @@ function stopScanner(){
 
 function handleScannedCode(code){
   code = code.trim().replace(/[^0-9X]/gi,'');
-  if(code.length < 8) return;
+  if(code.length < 6) return;
   stopScanner();
-  // Search by code
+  // Acta de devolución mode: add scanned book to acta
+  if(window._actaScanMode && actaConsignante){
+    window._actaScanMode=false;
+    const libro=P.find(p=>p.category==='Libros'&&p.code&&p.code.replace(/[^0-9X]/gi,'')===code);
+    if(!libro){alert('No se encontró un libro con ese código ISBN en el catálogo');return;}
+    const ex=actaLibros.find(i=>i.productId===libro.id);
+    if(ex){ ex.qty++; }
+    else{ actaLibros.push({productId:libro.id,name:libro.name,code:libro.code,precio:libro.price,qty:1}); }
+    render();
+    return;
+  }
+  // Search by code (normal POS mode)
   const found = P.find(p=>p.code&&p.code.replace(/[^0-9X]/gi,'')===code);
   if(found){
     document.getElementById('scan-result') && (document.getElementById('scan-result').textContent='');
