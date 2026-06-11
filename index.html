@@ -191,6 +191,17 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 </style>
 </head>
 <body>
+<div id="login-screen" style="position:fixed;inset:0;background:#f8f6f1;display:none;align-items:center;justify-content:center;z-index:10000">
+  <div style="background:#fff;border:1px solid #e3ddd0;border-radius:14px;padding:28px 26px;width:90%;max-width:340px;box-shadow:0 8px 30px rgba(0,0,0,.08);text-align:center">
+    <div style="font-family:Georgia,serif;font-size:22px;font-weight:700;color:#5c4a2a;margin-bottom:2px">La Madriguera</div>
+    <div style="font-size:11px;color:#999;margin-bottom:18px">Inicia sesión para acceder al sistema</div>
+    <input id="login-email" type="email" placeholder="Correo" autocomplete="username" style="width:100%;box-sizing:border-box;padding:10px 12px;margin-bottom:9px;border:1.5px solid #d8d2c4;border-radius:8px;font-size:13px;font-family:inherit">
+    <input id="login-pass" type="password" placeholder="Contraseña" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:10px 12px;margin-bottom:9px;border:1.5px solid #d8d2c4;border-radius:8px;font-size:13px;font-family:inherit">
+    <div id="login-err" style="display:none;background:#fdecec;border:1px solid #f5c2c2;color:#8b1a1a;font-size:11px;border-radius:7px;padding:7px 10px;margin-bottom:9px"></div>
+    <button id="blogin" style="width:100%;padding:11px;background:#5c4a2a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Entrar</button>
+    <div style="font-size:10px;color:#bbb;margin-top:12px">Solo necesitas iniciar sesión una vez por dispositivo</div>
+  </div>
+</div>
 <div id="loading"><div class="spin"></div>
 
     <!-- Por negocio (Librería vs Cafetería) + IVA -->
@@ -419,7 +430,8 @@ const PIN_EXPIRY_HOURS = 12;
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
 const firebaseConfig = {
@@ -503,7 +515,7 @@ function _backupLocal(key, data){
 
 // Retry any backed-up writes when connection is restored
 async function _retryBackups(){
-  const keys=['products','tables','sales','clientes'];
+  const keys=['products','tables','clientes'];
   let recovered=0;
   for(const key of keys){
     const raw=localStorage.getItem('madu_bk_'+key);
@@ -515,6 +527,26 @@ async function _retryBackups(){
       recovered++;
     }catch(e){ console.error('Retry failed for',key); break; }
   }
+  // Ventas pendientes de guardar (un documento por venta)
+  try{
+    const pend=JSON.parse(localStorage.getItem('madu_bk_ventas')||'{}');
+    for(const id of Object.keys(pend)){
+      await setDoc(doc(db,VENTAS_COL,id),pend[id]);
+      delete pend[id]; recovered++;
+      localStorage.setItem('madu_bk_ventas',JSON.stringify(pend));
+    }
+    if(Object.keys(pend).length===0)localStorage.removeItem('madu_bk_ventas');
+  }catch(e){ console.error('Retry ventas pendientes fallo'); }
+  // Eliminaciones pendientes
+  try{
+    const dels=JSON.parse(localStorage.getItem('madu_bk_vdel')||'[]');
+    const rest=[];
+    for(const id of dels){
+      try{ await deleteDoc(doc(db,VENTAS_COL,id)); recovered++; }catch(e){ rest.push(id); }
+    }
+    if(rest.length>0)localStorage.setItem('madu_bk_vdel',JSON.stringify(rest));
+    else localStorage.removeItem('madu_bk_vdel');
+  }catch(e){}
   if(recovered>0){
     console.log('Recuperados '+recovered+' cambios pendientes');
     updateHdr();
@@ -523,41 +555,138 @@ async function _retryBackups(){
 
 // Check for pending backups (shows indicator)
 function _hasPendingBackups(){
-  return ['products','tables','sales','clientes'].some(k=>localStorage.getItem('madu_bk_'+k));
+  return ['products','tables','clientes'].some(k=>localStorage.getItem('madu_bk_'+k))||!!localStorage.getItem('madu_bk_ventas')||!!localStorage.getItem('madu_bk_vdel');
 }
 
-// Append a single sale safely using a transaction (prevents multi-device overwrite)
-async function _appendSale(sale){
-  _writing=true;
-  if(_writeTimer) clearTimeout(_writeTimer);
-  _writeTimer=setTimeout(()=>{_writing=false;},2500);
-  try{
-    const ref=doc(db,'madu','sales');
-    await runTransaction(db,async(tx)=>{
-      const snap=await tx.get(ref);
-      const current=snap.exists()?(snap.data().v||[]):[];
-      // Avoid duplicates by id
-      if(!current.some(s=>s.id===sale.id)){
-        current.push(sale);
-      }
-      tx.set(ref,{v:current});
-    });
-  }catch(e){
-    console.error('Transaction error, fallback:',e);
-    _backupLocal('sales',S);
-    // Fallback to direct write
-    try{ await fbSet('sales',S); }catch(e2){}
-  }finally{ _writing=false; }
-}
+// FASE 2: cada venta es su propio documento en la coleccion "ventas".
+// Ya no existe el array global, asi que no hay riesgo de sobrescritura entre dispositivos.
+async function _appendSale(sale){ return saveVenta(sale); }
 const sP=()=>_write('products',P);
 const sT=()=>_write('tables',T);
-const sS=()=>_write('sales',S);
 const sCL=()=>_write('clientes',CL);
 const sCG=()=>_write('consigna',CG);
 const fmt=n=>'$'+parseFloat(n).toFixed(2);
-const today=()=>new Date().toISOString().slice(0,10);
+// Fecha/hora LOCAL (Ecuador UTC-5). Se guarda sin "Z" para que el dia del POS
+// cambie a medianoche local y no a las 19:00 (antes se usaba UTC puro).
+const localISO=d=>{const x=d?new Date(d):new Date();x.setMinutes(x.getMinutes()-x.getTimezoneOffset());return x.toISOString().slice(0,-1);};
+const today=()=>localISO().slice(0,10);
+// Escapa texto de usuario antes de interpolarlo en HTML (previene inyeccion)
+const esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const isVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada&&!s.esActaDevolucion;
 const openS=()=>S.filter(s=>isVenta(s)&&s.date.startsWith(today())&&!s.closed);
+
+// ══ FASE 2: ventas como coleccion (un documento por venta) ══════════════
+const VENTAS_COL='ventas';
+// Ventana "en vivo": desde el 1ro del mes anterior. Lo anterior se carga bajo demanda.
+const VENTAS_DESDE=(()=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);return localISO(d).slice(0,10);})();
+let S_live=[];                 // ventana en vivo (snapshot de Firestore)
+const S_old=new Map();         // meses antiguos cargados bajo demanda (id -> registro)
+const S_pending=new Map();     // escrituras locales aun no confirmadas (p.ej. sin internet)
+
+function rebuildS(){
+  const m=new Map();
+  S_old.forEach(v=>{if(v&&v.id)m.set(String(v.id),v);});
+  S_live.forEach(v=>{if(v&&v.id)m.set(String(v.id),v);});
+  S_pending.forEach(v=>{if(v&&v.id)m.set(String(v.id),v);});
+  S=[...m.values()];
+}
+
+function _backupVenta(r){
+  try{
+    const pend=JSON.parse(localStorage.getItem('madu_bk_ventas')||'{}');
+    pend[String(r.id)]=r;
+    localStorage.setItem('madu_bk_ventas',JSON.stringify(pend));
+  }catch(e){}
+}
+
+async function saveVenta(r){
+  if(!r||!r.id)return;
+  S_pending.set(String(r.id),r);
+  rebuildS();
+  try{
+    await setDoc(doc(db,VENTAS_COL,String(r.id)),r);
+    S_pending.delete(String(r.id));
+  }catch(e){
+    console.error('saveVenta error:',e);
+    _backupVenta(r);
+  }
+}
+
+async function saveVentas(arr){
+  if(!arr||arr.length===0)return;
+  arr.forEach(r=>{if(r&&r.id)S_pending.set(String(r.id),r);});
+  rebuildS();
+  try{
+    for(let i=0;i<arr.length;i+=400){
+      const batch=writeBatch(db);
+      arr.slice(i,i+400).forEach(r=>{if(r&&r.id)batch.set(doc(db,VENTAS_COL,String(r.id)),r);});
+      await batch.commit();
+    }
+    arr.forEach(r=>{if(r&&r.id)S_pending.delete(String(r.id));});
+  }catch(e){
+    console.error('saveVentas error:',e);
+    arr.forEach(r=>{if(r&&r.id)_backupVenta(r);});
+  }
+}
+
+async function deleteVenta(id){
+  id=String(id);
+  S_pending.delete(id); S_old.delete(id);
+  S_live=S_live.filter(s=>String(s.id)!==id);
+  rebuildS();
+  try{ await deleteDoc(doc(db,VENTAS_COL,id)); }
+  catch(e){
+    console.error('deleteVenta error:',e);
+    try{
+      const dels=JSON.parse(localStorage.getItem('madu_bk_vdel')||'[]');
+      if(!dels.includes(id))dels.push(id);
+      localStorage.setItem('madu_bk_vdel',JSON.stringify(dels));
+    }catch(e2){}
+  }
+}
+
+// Carga bajo demanda de un mes antiguo (YYYY-MM) fuera de la ventana en vivo
+const _mesesCargados=new Set();
+async function cargarMes(mes){
+  if(!mes||_mesesCargados.has(mes))return false;
+  if(mes>=VENTAS_DESDE.slice(0,7))return false; // ya esta en la ventana en vivo
+  _mesesCargados.add(mes);
+  try{
+    const qs=await getDocs(query(collection(db,VENTAS_COL),where('date','>=',mes+'-01'),where('date','<=',mes+'-31\uf8ff')));
+    qs.forEach(d=>{const v=d.data();if(v&&v.id)S_old.set(String(v.id),v);});
+    rebuildS();
+    return true;
+  }catch(e){ _mesesCargados.delete(mes); console.error('cargarMes:',e); return false; }
+}
+async function cargarMeses(desde,hasta){
+  let d=new Date(desde+'-15');
+  const fin=new Date(hasta+'-15');
+  let guard=0;
+  while(d<=fin&&guard<24){ await cargarMes(localISO(d).slice(0,7)); d.setMonth(d.getMonth()+1); guard++; }
+}
+
+// Migracion unica: copia el array antiguo madu/sales a la coleccion ventas/.
+// Idempotente (el ID de cada venta es el ID del documento) y deja el documento
+// antiguo intacto como respaldo historico.
+async function migrarVentas(){
+  try{
+    const flag=await getDoc(doc(db,'madu','migracion_ventas'));
+    if(flag.exists()&&flag.data().done)return;
+    const old=await getDoc(doc(db,'madu','sales'));
+    const arr=old.exists()?(old.data().v||[]):[];
+    for(let i=0;i<arr.length;i+=400){
+      const batch=writeBatch(db);
+      arr.slice(i,i+400).forEach(s=>{
+        if(!s||!s.id)return;
+        if(!s.date&&s.fecha)s.date=s.fecha; // facturas antiguas: sin "date" serian invisibles
+        batch.set(doc(db,VENTAS_COL,String(s.id)),s);
+      });
+      await batch.commit();
+    }
+    await setDoc(doc(db,'madu','migracion_ventas'),{done:true,total:arr.length,fecha:localISO()});
+    console.log('Migracion de ventas completada:',arr.length,'registros');
+  }catch(e){ console.error('Error en migracion de ventas:',e); }
+}
 
 // ── Realtime ─────────────────────────────────────────────────
 let _appShown=false;
@@ -599,12 +728,11 @@ function subRT(){
     }, 400);
   }
 
-  ['products','tables','sales','clientes','consigna'].forEach(k=>{
+  ['products','tables','clientes','consigna'].forEach(k=>{
     onSnapshot(doc(db,'madu',k),snap=>{
       if(snap.exists()){
         if(k==='products'){P=snap.data().v||[];setTimeout(patchProducts,3000);}
         if(k==='tables')T=snap.data().v||[];
-        if(k==='sales')S=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
         if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
       }
@@ -612,10 +740,20 @@ function subRT(){
       if(_loaded['tables']&&_loaded['sales']){
         showApp();
       }
-      // After initial load, only re-render passively (tables/sales changes from other devices)
+      // After initial load, only re-render passively (changes from other devices)
       if(_appShown&&!_writing) debouncedRender();
     },()=>{online=false;showErr();});
   });
+  // FASE 2 - Ventas: coleccion con un documento por venta, ventana desde el 1ro del mes anterior
+  onSnapshot(query(collection(db,VENTAS_COL),where('date','>=',VENTAS_DESDE)),snap=>{
+    S_live=snap.docs.map(d=>d.data());
+    rebuildS();
+    _loaded['sales']=true;
+    if(_loaded['tables']&&_loaded['sales']){
+      showApp();
+    }
+    if(_appShown&&!_writing) debouncedRender();
+  },()=>{online=false;showErr();});
   // Fallback: show app after 4 seconds no matter what
   setTimeout(function(){ showApp(); }, 4000);
 }
@@ -628,7 +766,8 @@ function showErr(){
       1. <a href="https://console.firebase.google.com" target="_blank" style="color:#5c4a2a">console.firebase.google.com</a> → proyecto → app web<br>
       2. Copiar firebaseConfig al HTML (reemplazar TU_...)<br>
       3. Firestore Database → Crear → modo producción<br>
-      4. Firestore → Reglas → allow read, write: if true → Publicar
+      4. Authentication → Sign-in method → habilitar Email/Contraseña y crear usuario<br>
+      5. Firestore → Reglas → exigir autenticación (ver reglas_firestore.txt)
     </div>
   </div>`;
 }
@@ -760,7 +899,7 @@ function rPOS(){
         :[p.subcategory,p.hasVariants?'variante':'',p.stockControl==='unidad'&&p.stock<=5?`⚠ ${p.stock} uds`:''].filter(Boolean).join(' · ');
       return `<div class="rrow" data-pid="${p.id}">
         <div style="flex:1;min-width:0">
-          <div class="rn">${p.name}${p.hasVariants?'<span style="font-size:9px;color:var(--amb);margin-left:4px">▾</span>':''}</div>
+          <div class="rn">${esc(p.name)}${p.hasVariants?'<span style="font-size:9px;color:var(--amb);margin-left:4px">▾</span>':''}</div>
           <div class="rm"><span class="rcbadge" style="background:${bg};color:${tx}">${p.category}</span>${meta}</div>
         </div>
         <span class="rp">${fmt(p.price)}</span>
@@ -795,7 +934,7 @@ function rPOS(){
       const itemTapHint=personaMode&&!splitMode&&!i.persona?'border-left:3px solid #fcd34d;padding-left:8px;':'';
       return `<div class="oi" style="${splitMode&&!hasAny?'opacity:.45':''}${hasAny?'background:var(--acl);border-radius:var(--rs);':''}${itemTapHint}" data-assign-lid="${i.lid}">
         <div class="oin">
-          <div class="oinn">${i.name}${pTag}${personaMode&&!splitMode?`<span style="font-size:9px;color:var(--text3);margin-left:4px">${i.persona?'':'← toca para asignar'}</span>`:''}</div>
+          <div class="oinn">${esc(i.name)}${pTag}${personaMode&&!splitMode?`<span style="font-size:9px;color:var(--text3);margin-left:4px">${i.persona?'':'← toca para asignar'}</span>`:''}</div>
           ${i.variant?`<div class="oiv">${i.variant}</div>`:''}
         </div>
         ${splitMode?`<div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
@@ -840,7 +979,7 @@ function rPOS(){
               <span style="font-weight:700;font-size:14px;color:var(--acc)">Persona ${p.num}</span>
               ${p.hasItems?`<span style="font-weight:700;font-size:15px">${fmt(p.total)}</span>`:`<span style="font-size:12px;color:var(--text3)">sin ítems</span>`}
             </div>
-            ${p.hasItems?`<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:10px">${p.items.map(i=>`<div style="display:flex;justify-content:space-between"><span>${i.qty}× ${i.name}${i.variant?' <span style="color:var(--text3)">('+i.variant+')</span>':''}</span><span style="color:var(--text3)">${fmt(i.price*i.qty)}</span></div>`).join('')}</div>
+            ${p.hasItems?`<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:10px">${p.items.map(i=>`<div style="display:flex;justify-content:space-between"><span>${i.qty}× ${esc(i.name)}${i.variant?' <span style="color:var(--text3)">('+i.variant+')</span>':''}</span><span style="color:var(--text3)">${fmt(i.price*i.qty)}</span></div>`).join('')}</div>
             <button class="btn btn-ok" style="width:100%;padding:10px;font-size:13px" data-cobrar-persona="${p.num}">Cobrar Persona ${p.num} · ${fmt(p.total)}</button>`:''}
           </div>`).join('')}
           ${sinAsignar.length>0?`<div style="padding:10px 12px;margin-bottom:8px;border-radius:10px;background:var(--abg);border:1.5px solid var(--abrd)">
@@ -1125,7 +1264,7 @@ function attachPOS(){
     if(splitOrder.length===0) return;
     const splitTot=splitOrder.reduce((a,i)=>a+i.price*i.qty,0);
     // Register sale for split items only
-    const splitSale={id:`s${Date.now()}`,tableId:t.id,tableName:t.name,items:splitOrder,total:splitTot,paymentMethod:selPay,date:new Date().toISOString(),closed:false,user:turnoUser,esParcial:true};
+    const splitSale={id:`s${Date.now()}`,tableId:t.id,tableName:t.name,items:splitOrder,total:splitTot,paymentMethod:selPay,date:localISO(),closed:false,user:turnoUser,esParcial:true};
     procesarVentaConsigna(splitSale);
     S.push(splitSale);
     // Reduce quantities from table order
@@ -1150,7 +1289,9 @@ function attachPOS(){
     render();
     // Print and save in background
     imprimirTicketSplit(splitOrder, splitTot, t.name);
-    sS(); sP(); sT();
+    // Guardar la venta del split via transaccion (igual que el cobro normal):
+    // evita sobrescribir y borrar ventas registradas desde otro dispositivo
+    _appendSale(splitSale); sP(); sT();
   });
   mc.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];render();});
   mc.querySelector('#badd-pago')?.addEventListener('click',()=>{
@@ -1193,7 +1334,7 @@ async function addItem(p,variant){
   if(ex){ex.qty++;}
   else{t.order.push({lid,productId:p.id,name:p.name,price:p.price,qty:1,variant:variant||null,stockControl:p.stockControl||'sin_control',persona:persona});}
   t.status='ocupada';
-  if(!t.openedAt)t.openedAt=new Date().toISOString();
+  if(!t.openedAt)t.openedAt=localISO();
   render(); // instant UI feedback
   sT();     // async write, no await needed here
 }
@@ -1309,7 +1450,7 @@ function enviarComanda(){
   });
   const toSend=Object.values(grouped);
 
-  const comanda={id:`c${Date.now()}`,items:t.order.map(i=>({...i})),time:new Date().toISOString(),user:turnoUser};
+  const comanda={id:`c${Date.now()}`,items:t.order.map(i=>({...i})),time:localISO(),user:turnoUser};
   if(!t.comandas)t.comandas=[];
   t.comandas.push(comanda);
   t.status='enviada';
@@ -1322,9 +1463,9 @@ function enviarComanda(){
     <div class="center" style="margin-bottom:8px">--- COMANDA DE PRODUCCION ---</div>
     <div>Mesa: <strong>${t.name}</strong></div>
     <div>Hora: ${now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}</div>
-    <div>Atiende: ${turnoUser}</div>
+    <div>Atiende: ${esc(turnoUser)}</div>
     <div class="line"></div>
-    ${toSend.map(i=>`<div><strong>${i.qty}x ${i.name}</strong>${i.variant?`<br><span style="margin-left:12px;font-size:11px">-> ${i.variant}</span>`:''}</div>`).join('')}
+    ${toSend.map(i=>`<div><strong>${i.qty}x ${esc(i.name)}</strong>${i.variant?`<br><span style="margin-left:12px;font-size:11px">-> ${i.variant}</span>`:''}</div>`).join('')}
     <div class="line"></div>
   `;
   // Open print window
@@ -1348,8 +1489,10 @@ async function anularVenta(ventaId){
   // Mark sale as annulled instead of deleting (keeps audit trail)
   venta.anulada=true;
   venta.motivoAnulacion=motivo.trim();
-  venta.fechaAnulacion=new Date().toISOString();
+  venta.fechaAnulacion=localISO();
   venta.anuladaPor=turnoUser;
+  // Revertir libros consignados a "disponible" si la venta los incluia
+  revertirConsignaVenta(venta);
   // Restore stock for unidad products
   venta.items?.forEach(i=>{
     if(i.stockControl==='unidad'){
@@ -1358,7 +1501,7 @@ async function anularVenta(ventaId){
     }
   });
   render();
-  sS(); sP();
+  saveVenta(venta); sP();
   alert('✓ Venta anulada correctamente');
 }
 window.anularVenta=anularVenta;
@@ -1381,7 +1524,7 @@ async function confirmarCobro(){
   cobrando=true;
   try{
     const metodo=modoParcial?pagosParciales.map(p=>p.metodo+' '+fmt(p.monto)).join(' / '):selPay;
-    const venta={id:`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),subtotal,descuento:descMonto>0?descMonto:0,descuentoTipo:descMonto>0?descuentoTipo:null,total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:new Date().toISOString(),closed:false,user:turnoUser};
+    const venta={id:`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),subtotal,descuento:descMonto>0?descMonto:0,descuentoTipo:descMonto>0?descuentoTipo:null,total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:localISO(),closed:false,user:turnoUser};
     // Snapshot before clearing
     const ticketItems=t.order.map(i=>({...i}));
     const ticketTotal=total;
@@ -1475,7 +1618,7 @@ function rResults(){
       ?[p.author,p.code].filter(Boolean).join(' · ')
       :[p.subcategory,p.hasVariants?'variante':'',p.stockControl==='unidad'&&p.stock<=5?`⚠ ${p.stock}u`:''].filter(Boolean).join(' · ');
     return `<div class="rrow" data-pid="${p.id}">
-      <div style="flex:1;min-width:0"><div class="rn">${p.name}${p.hasVariants?'<span style="font-size:9px;color:var(--amb);margin-left:4px">▾</span>':''}</div>
+      <div style="flex:1;min-width:0"><div class="rn">${esc(p.name)}${p.hasVariants?'<span style="font-size:9px;color:var(--amb);margin-left:4px">▾</span>':''}</div>
         <div class="rm"><span class="rcbadge" style="background:${bg};color:${tx}">${p.category}</span>${meta}</div></div>
       <span class="rp">${fmt(p.price)}</span>
       <button class="radd" data-pid="${p.id}">+</button>
@@ -1504,7 +1647,7 @@ function rVPanel(){
   const p=vtarget?P.find(x=>x.id===vtarget):null;
   if(!p){vp.className='';vp.innerHTML='';return;}
   vp.className='show';
-  vp.innerHTML=`<div class="vttl">${p.name}</div>
+  vp.innerHTML=`<div class="vttl">${esc(p.name)}</div>
     <div class="vgrp"><div class="vlbl">Tamaño</div><div class="vopts">${SIZES.map(s=>`<button class="vopt${vsize===s?' on':''}" data-vs="${s}">${s}</button>`).join('')}</div></div>
     <div class="vgrp"><div class="vlbl">Leche</div><div class="vopts">${MILKS.map(m=>`<button class="vopt${vmilk===m?' on':''}" data-vm="${m}">${m}</button>`).join('')}</div></div>
     <div class="vact"><button class="btn btn-g btn-sm" id="bvc">Cancelar</button><button class="btn btn-ok" style="flex:1;padding:7px" id="bva">+ Agregar</button></div>`;
@@ -1664,7 +1807,7 @@ function rProductos(){
     ${cats.map(cat=>`<div style="margin-bottom:16px">
       <div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${cat} (${P.filter(p=>p.category===cat).length})</div>
       ${P.filter(p=>p.category===cat).map(p=>`<div class="mrow" style="opacity:${p.active?1:.5}">
-        <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${p.name}</span>
+        <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>
           ${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:7px">${p.code}</span>`:''}
           ${p.hasVariants?'<span class="badge ba" style="margin-left:5px;font-size:9px">var</span>':''}
           ${p.stockControl==='unidad'?'<span class="badge bg" style="margin-left:5px;font-size:9px">stk</span>':''}
@@ -1833,7 +1976,7 @@ function attachProd(){
 // ── DASHBOARD ─────────────────────────────────────────────────
 function rDash(){
   const ts=openS(),tT=ts.reduce((a,x)=>a+x.total,0);
-  const mes=new Date().toISOString().slice(0,7);
+  const mes=localISO().slice(0,7);
   const mesS=S.filter(s=>isVenta(s)&&s.date.startsWith(mes)),mesT=mesS.reduce((a,x)=>a+x.total,0);
   const dias=new Set(mesS.map(s=>s.date.slice(0,10))).size||1;
   const prom=mesT/dias;
@@ -1841,7 +1984,7 @@ function rDash(){
   const vsProm=prom>0?((tT-prom)/prom*100):0;
   const last7=Array.from({length:7},(_,i)=>{
     const d=new Date();d.setDate(d.getDate()-(6-i));
-    const ds=d.toISOString().slice(0,10);
+    const ds=localISO(d).slice(0,10);
     const dS=S.filter(s=>isVenta(s)&&s.date.startsWith(ds));
     return{l:d.toLocaleDateString('es-EC',{weekday:'short'}),t:dS.reduce((a,x)=>a+x.total,0),td:ds===today()};
   });
@@ -1894,6 +2037,7 @@ function rDash(){
 
 // ── CAJA ─────────────────────────────────────────────────
 let cajaTab='resumen';
+let histMesPtr=null; // puntero del mes mas antiguo cargado para el historial
 let gastoForm=false;
 let editGasto=null;
 
@@ -1903,12 +2047,14 @@ function rCaja(){
   const efectivoVentas=byPay[0].t;
   const gastos=S.filter(s=>s.esGasto&&s.date.startsWith(today()));
   const totalGastos=gastos.reduce((a,g)=>a+g.total,0);
-  const todayCierre=S.find(s=>s.esCierre&&s.date.startsWith(today()));
-  const inicioCaja=todayCierre?.inicio||0;
-  const sueltos=todayCierre?.sueltos||0;
+  const todayCierre=S.find(s=>s.esCierre&&s.date&&s.date.startsWith(today()));
+  // Leer la apertura guardada del dia (antes se guardaba pero nunca se mostraba)
+  const todayApertura=S.find(s=>s.esApertura&&s.date&&s.date.startsWith(today()));
+  const inicioCaja=(todayCierre?.inicio??todayApertura?.inicio)||0;
+  const sueltos=(todayCierre?.sueltos??todayApertura?.sueltos)||0;
   const conteoVal=todayCierre?.conteo||0;
   const gastosEfectivo=gastos.filter(g=>g.paymentMethod==='Efectivo').reduce((a,g)=>a+g.total,0);
-  const deberia=inicioCaja+efectivoVentas-gastosEfectivo;
+  const deberia=inicioCaja+sueltos+efectivoVentas-gastosEfectivo;
   const diferencia=conteoVal-deberia;
 
   const cierresAnteriores=S.filter(s=>s.esCierre&&s.date).sort((a,b)=>b.date.localeCompare(a.date));
@@ -1937,7 +2083,7 @@ function rCaja(){
       <div style="font-size:12px;font-weight:700;margin-bottom:8px">Pedidos de hoy</div>
       ${ts.length===0?`<div style="text-align:center;padding:24px;color:var(--text3)">Sin pedidos hoy</div>`:
         [...ts].reverse().slice(0,15).map(s=>`<div class="mrow" style="margin-bottom:4px">
-          <div style="min-width:0;flex:1"><span style="font-weight:700;font-size:11px">${s.tableName}</span><span style="color:var(--text3);font-size:10px;margin-left:6px">${(s.items||[]).map(i=>`${i.qty}x${i.name}`).join(', ')}</span></div>
+          <div style="min-width:0;flex:1"><span style="font-weight:700;font-size:11px">${esc(s.tableName)}</span><span style="color:var(--text3);font-size:10px;margin-left:6px">${(s.items||[]).map(i=>`${i.qty}x${esc(i.name)}`).join(', ')}</span></div>
           <div style="flex-shrink:0;display:flex;gap:5px;align-items:center"><span style="font-size:10px;color:var(--text3)">${s.paymentMethod}</span><span style="font-weight:700;font-size:11px">${fmt(s.total)}</span></div>
         </div>`).join('')}`;
   }
@@ -1961,8 +2107,8 @@ function rCaja(){
       </div>${gform}
       ${gastos.length===0&&!gastoForm?`<div style="text-align:center;padding:30px;color:var(--text3)">Sin gastos hoy</div>`:''}
       ${gastos.map(g=>`<div class="mrow" style="margin-bottom:5px">
-        <div style="min-width:0;flex:1"><div style="font-weight:600;font-size:12px">${g.desc}</div>
-          <div style="font-size:10px;color:var(--text3)">${g.cat} · ${g.paymentMethod}${g.obs?' · '+g.obs:''} · ${g.user}</div></div>
+        <div style="min-width:0;flex:1"><div style="font-weight:600;font-size:12px">${esc(g.desc)}</div>
+          <div style="font-size:10px;color:var(--text3)">${g.cat} · ${g.paymentMethod}${g.obs?' · '+g.obs:''} · ${esc(g.user)}</div></div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
           <span style="font-weight:700;color:var(--red);font-size:12px">${fmt(g.total)}</span>
           <button class="btn btn-g btn-sm" data-gedit="${g.id}">✎</button>
@@ -1972,8 +2118,8 @@ function rCaja(){
 
   else if(cajaTab==='contabilidad'){
     // Month selector
-    const mesActual=window._contaMes||new Date().toISOString().slice(0,7);
-    const mesAnt=(()=>{const d=new Date(mesActual+'-15');d.setMonth(d.getMonth()-1);return d.toISOString().slice(0,7);})();
+    const mesActual=window._contaMes||localISO().slice(0,7);
+    const mesAnt=(()=>{const d=new Date(mesActual+'-15');d.setMonth(d.getMonth()-1);return localISO(d).slice(0,7);})();
     // Ventas del mes (excluyendo anuladas y registros especiales)
     const ventasMes=S.filter(s=>isVenta(s)&&s.date.startsWith(mesActual));
     const ventasMesAnt=S.filter(s=>isVenta(s)&&s.date.startsWith(mesAnt));
@@ -2085,6 +2231,7 @@ function rCaja(){
         <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:13px">
           <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.3px;margin-bottom:9px">Cálculo automático</div>
           <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>Inicio de caja</span><span>${fmt(inicioCaja)}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>+ Sueltos</span><span>${fmt(sueltos)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>+ Ventas en efectivo</span><span>${fmt(efectivoVentas)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>− Gastos en efectivo</span><span style="color:var(--red)">−${fmt(gastosEfectivo)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding-top:8px"><span>Debería haber</span><span>${fmt(deberia)}</span></div>
@@ -2114,11 +2261,20 @@ function rCaja(){
       ${cierresAnteriores.length===0?'<div style="text-align:center;padding:40px;color:var(--text3)">Sin cierres registrados</div>':
         cierresAnteriores.map(cr=>{
           const dia=cr.date.slice(0,10);
-          const ventasDia=S.filter(s=>!s.esCierre&&!s.esGasto&&!s.esDevolucion&&!s.esFactura&&!s.esCancelacion&&s.date&&s.date.startsWith(dia));
+          const ventasDia=S.filter(s=>isVenta(s)&&s.date.startsWith(dia));
           const gastosDia=S.filter(s=>s.esGasto&&s.date&&s.date.startsWith(dia));
           const totalVentas=ventasDia.reduce((a,x)=>a+x.total,0);
           const totalGastos=gastosDia.reduce((a,x)=>a+x.total,0);
-          const dif=(cr.conteo||0)-(cr.inicio+totalVentas-gastosDia.filter(g=>g.paymentMethod==='Efectivo').reduce((a,g)=>a+g.total,0));
+          // Diferencia: usar la guardada en el propio cierre; para cierres antiguos
+          // sin ese campo, recalcular SOLO con efectivo (antes mezclaba todos los metodos)
+          let dif;
+          if(typeof cr.diferencia==='number'){ dif=cr.diferencia; }
+          else {
+            let efectivoDia=0;
+            ventasDia.forEach(s=>{ if(s.pagosParciales&&s.pagosParciales.length>0){ s.pagosParciales.forEach(p=>{ if(p.metodo==='Efectivo')efectivoDia+=p.monto; }); } else if(s.paymentMethod==='Efectivo'){ efectivoDia+=s.total; } });
+            const gastosEfDia=gastosDia.filter(g=>g.paymentMethod==='Efectivo').reduce((a,g)=>a+g.total,0);
+            dif=(cr.conteo||0)-((cr.inicio||0)+(cr.sueltos||0)+efectivoDia-gastosEfDia);
+          }
           const difColor=Math.abs(dif)<0.5?'var(--grn)':dif>0?'var(--blu)':'var(--red)';
           return `<div class="card" style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -2131,9 +2287,10 @@ function rCaja(){
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Conteo</div><div style="font-weight:700">${fmt(cr.conteo||0)}</div></div>
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Diferencia</div><div style="font-weight:700;color:${difColor}">${dif>=0?'+':''}${fmt(dif)}</div></div>
             </div>
-            ${cr.obs?`<div style="font-size:11px;color:var(--text3);margin-top:8px;padding-top:8px;border-top:.5px solid var(--border)">📝 ${cr.obs}</div>`:''}
+            ${cr.obs?`<div style="font-size:11px;color:var(--text3);margin-top:8px;padding-top:8px;border-top:.5px solid var(--border)">📝 ${esc(cr.obs)}</div>`:''}
           </div>`;
         }).join('')}
+      <div style="text-align:center;margin-top:8px"><button class="btn btn-g btn-sm" id="bhistmes">📥 Cargar mes anterior</button></div>
     </div>`;
   }
 
@@ -2141,7 +2298,7 @@ function rCaja(){
     <div class="rb" style="margin-bottom:12px">
       <span class="stitle" style="margin:0">Caja</span>
       <div style="display:flex;gap:7px;align-items:center">
-        <span style="font-size:11px;color:var(--text3)">${turnoUser}</span>
+        <span style="font-size:11px;color:var(--text3)">${esc(turnoUser)}</span>
         <button class="btn btn-g btn-sm" id="bctcambio">Cambiar turno</button>
       </div>
     </div>
@@ -2152,7 +2309,19 @@ function rCaja(){
 function attachCaja(){
   const mc=document.getElementById('mc');
   mc.querySelector('#bctcambio')?.addEventListener('click',()=>{turnoUser='';localStorage.removeItem('madu_turno');view='pos';render();});
-  mc.querySelector('#conta-mes')?.addEventListener('change',e=>{window._contaMes=e.target.value;render();});
+  mc.querySelector('#bhistmes')?.addEventListener('click',async()=>{
+    if(!histMesPtr)histMesPtr=VENTAS_DESDE.slice(0,7);
+    const d=new Date(histMesPtr+'-15');d.setMonth(d.getMonth()-1);
+    histMesPtr=localISO(d).slice(0,7);
+    await cargarMes(histMesPtr);
+    render();
+  });
+  mc.querySelector('#conta-mes')?.addEventListener('change',async e=>{
+    window._contaMes=e.target.value;
+    const dAnt=new Date(e.target.value+'-15');dAnt.setMonth(dAnt.getMonth()-1);
+    await cargarMes(e.target.value); await cargarMes(localISO(dAnt).slice(0,7));
+    render();
+  });
   mc.querySelectorAll('[data-cajatab]').forEach(el=>el.addEventListener('click',()=>{cajaTab=el.dataset.cajatab;gastoForm=false;editGasto=null;render();}));
   mc.querySelector('#bgnew')?.addEventListener('click',()=>{gastoForm=true;editGasto=null;render();});
   mc.querySelector('#bgcancel')?.addEventListener('click',()=>{gastoForm=false;editGasto=null;render();});
@@ -2163,13 +2332,16 @@ function attachCaja(){
     const payM=document.getElementById('gpay').value;
     const obs=document.getElementById('gobs').value.trim();
     if(!desc||isNaN(monto)||monto<=0)return alert('Descripción y monto son requeridos');
+    let gRec=null;
     if(editGasto){
-      const g=S.find(s=>s.id===editGasto.id);
-      if(g)Object.assign(g,{desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs});
+      gRec=S.find(s=>s.id===editGasto.id);
+      if(gRec)Object.assign(gRec,{desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs});
     } else {
-      S.push({id:`g${Date.now()}`,esGasto:true,desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs,date:new Date().toISOString(),user:turnoUser,closed:false});
+      gRec={id:`g${Date.now()}`,esGasto:true,desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs,date:localISO(),user:turnoUser,closed:false};
+      S.push(gRec);
     }
-    sS();gastoForm=false;editGasto=null;render();
+    if(gRec)saveVenta(gRec);
+    gastoForm=false;editGasto=null;render();
   });
   mc.querySelectorAll('[data-gedit]').forEach(el=>el.addEventListener('click',()=>{
     const g=S.find(s=>s.id===el.dataset.gedit);if(!g)return;
@@ -2177,7 +2349,7 @@ function attachCaja(){
   }));
   mc.querySelectorAll('[data-gdel]').forEach(el=>el.addEventListener('click',async()=>{
     if(!confirm('¿Eliminar este gasto?'))return;
-    S=S.filter(s=>s.id!==el.dataset.gdel);render();sS();
+    deleteVenta(el.dataset.gdel);render();
   }));
   mc.querySelector('#bcalcular')?.addEventListener('click',()=>{render();});
   mc.querySelector('#bguardar-inicio')?.addEventListener('click',async()=>{
@@ -2185,12 +2357,14 @@ function attachCaja(){
     const sueltos=parseFloat(document.getElementById('csueltos')?.value)||0;
     // Save as a special 'apertura' record so it persists across renders
     const existing=S.findIndex(s=>s.esApertura&&s.date&&s.date.startsWith(today()));
+    let apRec;
     if(existing>=0){
-      S[existing].inicio=inicio;S[existing].sueltos=sueltos;
+      S[existing].inicio=inicio;S[existing].sueltos=sueltos;apRec=S[existing];
     } else {
-      S.push({id:'ap'+Date.now(),esApertura:true,inicio,sueltos,date:new Date().toISOString(),user:turnoUser,total:0,closed:false});
+      apRec={id:'ap'+Date.now(),esApertura:true,inicio,sueltos,date:localISO(),user:turnoUser,total:0,closed:false};
+      S.push(apRec);
     }
-    sS();
+    saveVenta(apRec);
     alert('✓ Inicio de caja guardado: $'+inicio.toFixed(2)+(sueltos?' + sueltos $'+sueltos.toFixed(2):''));
   });
   mc.querySelector('#bcerrar')?.addEventListener('click',async()=>{
@@ -2226,12 +2400,15 @@ function attachCaja(){
     // Require PIN to close
     const pin=prompt('Ingresa el PIN para cerrar la caja:');
     if(pin!==CORRECT_PIN){if(pin!==null)alert('PIN incorrecto');return;}
-    S.push({id:`cierre${Date.now()}`,esCierre:true,inicio,sueltos:sueltos2,conteo:conteo2,
+    const cierreRec={id:`cierre${Date.now()}`,esCierre:true,inicio,sueltos:sueltos2,conteo:conteo2,
       efectivoEsperado,gastosEfectivo:gastosHoy,esperadoEnCaja,diferencia,
-      responsable:resp,obs,date:new Date().toISOString(),total:0,closed:false});
+      responsable:resp,obs,date:localISO(),total:0,closed:false};
+    S.push(cierreRec);
     // Only close actual ventas, not other records
-    S.forEach(s=>{if(isVenta(s)&&s.date.startsWith(today()))s.closed=true;});
-    render();sS();
+    const cerradas=[];
+    S.forEach(s=>{if(isVenta(s)&&s.date.startsWith(today())){s.closed=true;cerradas.push(s);}});
+    render();
+    saveVenta(cierreRec); saveVentas(cerradas);
     alert('✓ Caja cerrada. Diferencia: '+(diferencia>=0?'+':'')+'$'+diferencia.toFixed(2));
   });
 }
@@ -2249,14 +2426,14 @@ function rInv(){
         <div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${cat} (${ctrl.length})</div>
         ${ctrl.map(p=>{
           const clr=p.stock<=0?'br':p.stock<=5?'ba':'bg';
-          if(editStk===p.id) return `<div class="mrow"><span style="font-weight:600;font-size:12px">${p.name}</span>
+          if(editStk===p.id) return `<div class="mrow"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>
             <div style="display:flex;gap:6px;align-items:center">
               <input id="si2" type="number" min="0" value="${stkV}" style="width:70px;padding:5px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:12px;text-align:center">
               <button class="btn btn-ok btn-sm" data-sv="${p.id}">OK</button>
               <button class="btn btn-g btn-sm" id="bcs2">✕</button>
             </div></div>`;
           return `<div class="mrow" style="opacity:${p.active?1:.5}">
-            <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${p.name}</span>${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:6px">${p.code}</span>`:''}</div>
+            <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:6px">${p.code}</span>`:''}</div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
               <span class="badge ${clr}">${p.stock} uds</span>
               <button class="btn btn-g btn-sm" data-es="${p.id}" data-sv="${p.stock}">Editar</button>
@@ -2368,8 +2545,8 @@ function rDevoluciones(){
       devoluciones.map(d=>`<div class="mrow" style="margin-bottom:6px">
         <div style="min-width:0;flex:1">
           <div style="font-weight:600;font-size:12px">${d.prodName}</div>
-          <div style="font-size:10px;color:var(--text3)">${d.proveedor} · ${d.motivo} · ${new Date(d.date).toLocaleDateString('es-EC')} · ${d.user}</div>
-          ${d.obs?`<div style="font-size:10px;color:var(--text3)">${d.obs}</div>`:''}
+          <div style="font-size:10px;color:var(--text3)">${d.proveedor} · ${esc(d.motivo)} · ${new Date(d.date).toLocaleDateString('es-EC')} · ${esc(d.user)}</div>
+          ${d.obs?`<div style="font-size:10px;color:var(--text3)">${esc(d.obs)}</div>`:''}
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-weight:700;color:var(--red)">-${d.qty} uds</div>
@@ -2411,9 +2588,10 @@ function attachDevoluciones(){
     prod.stock=Math.max(0,(prod.stock||0)+qty);
     sP();
     // Register devolution
-    S.push({id:`dev${Date.now()}`,esDevolucion:true,prodName:prod.name,prodCode:prod.code||'',prodId:prod.id,proveedor:prov,qty,motivo,obs,date:new Date().toISOString(),user:turnoUser,total:0,closed:false});
-    sS();
-    devForm=false;render();alert(`✓ Devolución registrada. Stock de "${prod.name}" actualizado a ${prod.stock} uds.`);
+    const devRec={id:`dev${Date.now()}`,esDevolucion:true,prodName:prod.name,prodCode:prod.code||'',prodId:prod.id,proveedor:prov,qty,motivo,obs,date:localISO(),user:turnoUser,total:0,closed:false};
+    S.push(devRec);
+    saveVenta(devRec);
+    devForm=false;render();alert(`✓ Devolución registrada. Stock de "${esc(prod.name)}" actualizado a ${prod.stock} uds.`);
   });
 }
 
@@ -2427,12 +2605,12 @@ let repFechaDia='';
 function getRangeFilter(){
   const now=new Date();
   if(repPeriodo==='hoy'){
-    const d=now.toISOString().slice(0,10);
+    const d=localISO(now).slice(0,10);
     return s=>s.date.startsWith(d);
   }
   if(repPeriodo==='ayer'){
     const d=new Date(now);d.setDate(d.getDate()-1);
-    const ds=d.toISOString().slice(0,10);
+    const ds=localISO(d).slice(0,10);
     return s=>s.date.startsWith(ds);
   }
   if(repPeriodo==='dia'&&repFechaDia){
@@ -2440,15 +2618,15 @@ function getRangeFilter(){
   }
   if(repPeriodo==='semana'){
     const d=new Date(now);d.setDate(d.getDate()-6);
-    return s=>s.date>=d.toISOString().slice(0,10);
+    return s=>s.date>=localISO(d).slice(0,10);
   }
   if(repPeriodo==='mes'){
-    const m=now.toISOString().slice(0,7);
+    const m=localISO(now).slice(0,7);
     return s=>s.date.startsWith(m);
   }
   if(repPeriodo==='mes_ant'){
     const d=new Date(now.getFullYear(),now.getMonth()-1,1);
-    const m=d.toISOString().slice(0,7);
+    const m=localISO(d).slice(0,7);
     return s=>s.date.startsWith(m);
   }
   if(repPeriodo==='custom'&&repFechaDesde&&repFechaHasta){
@@ -2512,7 +2690,7 @@ function rReportes(){
   const days=[];
   for(let i=13;i>=0;i--){
     const d=new Date();d.setDate(d.getDate()-i);
-    const ds=d.toISOString().slice(0,10);
+    const ds=localISO(d).slice(0,10);
     const dv=ventas.filter(s=>s.date.startsWith(ds));
     days.push({l:d.toLocaleDateString('es-EC',{day:'numeric',month:'short'}),t:dv.reduce((a,x)=>a+x.total,0),n:dv.length});
   }
@@ -2543,7 +2721,7 @@ function rReportes(){
       <button class="btn btn-acc btn-sm" style="margin-top:14px" id="baplicar">Aplicar</button>
     </div>`:''}
     ${repPeriodo==='dia'?`<div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-      <div class="fg" style="flex:1"><label>Selecciona el día</label><input type="date" id="rfdia" value="${repFechaDia||new Date().toISOString().slice(0,10)}"></div>
+      <div class="fg" style="flex:1"><label>Selecciona el día</label><input type="date" id="rfdia" value="${repFechaDia||localISO().slice(0,10)}"></div>
       <button class="btn btn-acc btn-sm" style="margin-top:14px" id="bdia">Ver ventas</button>
     </div>`:''}
 
@@ -2611,7 +2789,7 @@ function rReportes(){
       ${items.length===0?`<div style="color:var(--text3);font-size:12px;text-align:center;padding:16px">Sin ventas en este período</div>`:''}
       ${items.slice(0,50).map((item,idx)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
         <div style="min-width:0;flex:1">
-          <span style="font-weight:${idx<3?'700':'400'}">${idx<3?'★ ':''} ${item.name}</span>
+          <span style="font-weight:${idx<3?'700':'400'}">${idx<3?'★ ':''} ${esc(item.name)}</span>
           ${item.cat?`<span style="font-size:10px;color:var(--text3);margin-left:6px">${item.cat}</span>`:''}
         </div>
         <div style="display:flex;gap:12px;flex-shrink:0">
@@ -2665,7 +2843,7 @@ function rReportes(){
     ${S.filter(s=>s.anulada&&s.date&&filter(s)).length>0?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--red)">
       <div style="font-weight:700;font-size:12px;margin-bottom:10px;color:var(--red)">Ventas anuladas (${S.filter(s=>s.anulada&&s.date&&filter(s)).length})</div>
       ${S.filter(s=>s.anulada&&s.date&&filter(s)).map(v=>`<div style="padding:6px 0;border-bottom:.5px solid var(--border);font-size:11px">
-        <div style="display:flex;justify-content:space-between"><span style="font-weight:600;text-decoration:line-through">${v.tableName} - ${fmt(v.total)}</span><span style="color:var(--text3)">${new Date(v.date).toLocaleDateString('es-EC')}</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="font-weight:600;text-decoration:line-through">${esc(v.tableName)} - ${fmt(v.total)}</span><span style="color:var(--text3)">${new Date(v.date).toLocaleDateString('es-EC')}</span></div>
         <div style="color:var(--red);font-size:10px">Motivo: ${v.motivoAnulacion||'-'} · por ${v.anuladaPor||'-'}</div>
       </div>`).join('')}
     </div>`:''}
@@ -2680,7 +2858,7 @@ function rReportes(){
     ${cancels.length>0?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--red);padding-left:14px">
       <div style="font-weight:700;font-size:12px;margin-bottom:10px;color:var(--red)">⚠ Cancelaciones (${cancels.length})</div>
       ${cancels.map(x=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
-        <div style="min-width:0;flex:1"><span style="font-weight:600">${x.prodName}</span><span style="color:var(--text3);margin-left:8px">${x.motivo}</span></div>
+        <div style="min-width:0;flex:1"><span style="font-weight:600">${x.prodName}</span><span style="color:var(--text3);margin-left:8px">${esc(x.motivo)}</span></div>
         <div style="text-align:right;flex-shrink:0;margin-left:8px">
           <div style="color:var(--red);font-weight:700">-${x.qty} uds</div>
           <div style="font-size:10px;color:var(--text3)">${x.mesa} · ${new Date(x.date).toLocaleDateString('es-EC')} · ${x.user||''}</div>
@@ -2692,7 +2870,7 @@ function rReportes(){
 
 function descargarRespaldo(){
   const backup={
-    fecha:new Date().toISOString(),
+    fecha:localISO(),
     productos:P,
     mesas:T,
     ventas:S,
@@ -2702,7 +2880,7 @@ function descargarRespaldo(){
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url;
-  a.download='respaldo_madriguera_'+new Date().toISOString().slice(0,10)+'.json';
+  a.download='respaldo_madriguera_'+localISO().slice(0,10)+'.json';
   a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -2712,7 +2890,7 @@ window.descargarRespaldo=descargarRespaldo;
 function checkAutoBackup(){
   try{
     const last=localStorage.getItem('madu_last_backup');
-    const today=new Date().toISOString().slice(0,10);
+    const today=localISO().slice(0,10);
     if(last!==today && S.length>0){
       // Just store a flag; actual download is manual via button
       localStorage.setItem('madu_backup_pending','1');
@@ -2724,18 +2902,20 @@ function attachReportes(){
   const mc=document.getElementById('mc');
   mc.querySelector('#bbackup')?.addEventListener('click',()=>{
     descargarRespaldo();
-    try{localStorage.setItem('madu_last_backup',new Date().toISOString().slice(0,10));localStorage.removeItem('madu_backup_pending');}catch(e){}
+    try{localStorage.setItem('madu_last_backup',localISO().slice(0,10));localStorage.removeItem('madu_backup_pending');}catch(e){}
   });
   mc.querySelectorAll('[data-periodo]').forEach(el=>el.addEventListener('click',()=>{repPeriodo=el.dataset.periodo;render();}));
   mc.querySelectorAll('[data-repcat]').forEach(el=>el.addEventListener('click',()=>{repCatFilter=el.dataset.repcat;render();}));
   mc.querySelectorAll('[data-catfilter]').forEach(el=>el.addEventListener('click',()=>{repCatFilter=el.dataset.catfilter;render();}));
-  mc.querySelector('#baplicar')?.addEventListener('click',()=>{
+  mc.querySelector('#baplicar')?.addEventListener('click',async()=>{
     repFechaDesde=document.getElementById('rfdesde')?.value||'';
     repFechaHasta=document.getElementById('rfhasta')?.value||'';
+    if(repFechaDesde&&repFechaHasta)await cargarMeses(repFechaDesde.slice(0,7),repFechaHasta.slice(0,7));
     render();
   });
-  mc.querySelector('#bdia')?.addEventListener('click',()=>{
+  mc.querySelector('#bdia')?.addEventListener('click',async()=>{
     repFechaDia=document.getElementById('rfdia')?.value||'';
+    if(repFechaDia)await cargarMes(repFechaDia.slice(0,7));
     render();
   });
   mc.querySelectorAll('.banular').forEach(el=>el.addEventListener('click',async()=>{
@@ -2752,12 +2932,16 @@ function attachReportes(){
         if(p&&p.stock<999)p.stock=p.stock+i.qty;
       }
     });
+    // Revertir libros consignados a "disponible" si la venta los incluia
+    revertirConsignaVenta(venta);
     // Register anulacion record
-    S.push({id:'anul'+Date.now(),esAnulacion:true,ventaOriginalId:sid,tableName:venta.tableName,total:venta.total,motivo:motivo.trim(),date:new Date().toISOString(),user:turnoUser});
-    // Remove the sale
-    S=S.filter(s=>s.id!==sid);
+    const anulRec={id:'anul'+Date.now(),esAnulacion:true,ventaOriginalId:sid,tableName:venta.tableName,total:venta.total,motivo:motivo.trim(),date:localISO(),user:turnoUser};
+    S.push(anulRec);
+    saveVenta(anulRec);
+    // Remove the sale (tambien elimina su documento en la coleccion ventas)
+    deleteVenta(sid);
     render();
-    sS();sP();
+    sP();
     alert('✓ Venta anulada y stock restaurado.');
   }));
   mc.querySelector('#bexport')?.addEventListener('click',()=>{
@@ -2799,7 +2983,7 @@ function attachReportes(){
     const a=document.createElement('a');
     a.href=url;
     const periodo=repPeriodo==='custom'?`${repFechaDesde}_${repFechaHasta}`:repPeriodo;
-    a.download=`madriguera_reporte_${periodo}_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download=`madriguera_reporte_${periodo}_${localISO().slice(0,10)}.csv`;
     a.click();URL.revokeObjectURL(url);
   });
 }
@@ -2818,7 +3002,7 @@ function rFacturas(){
     ${pendientes.map(f=>`<div class="card" style="margin-bottom:10px;border-left:3px solid var(--bbrd)">
       <div class="rb" style="margin-bottom:8px">
         <div>
-          <div style="font-weight:700;font-size:13px">${f.nombre}</div>
+          <div style="font-weight:700;font-size:13px">${esc(f.nombre)}</div>
           <div style="font-size:11px;color:var(--text3)">${f.tipo}${f.identificacion?' · '+f.identificacion:''}${f.email?' · '+f.email:''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -2837,7 +3021,7 @@ function rFacturas(){
       <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:10px">Facturas emitidas (${hechas.length})</div>
       ${hechas.slice(0,10).map(f=>`<div class="mrow" style="margin-bottom:5px;opacity:.7">
         <div style="min-width:0;flex:1">
-          <span style="font-weight:600;font-size:12px">${f.nombre}</span>
+          <span style="font-weight:600;font-size:12px">${esc(f.nombre)}</span>
           <span style="font-size:11px;color:var(--text3);margin-left:7px">${f.tipo}${f.identificacion?' · '+f.identificacion:''}</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -2863,11 +3047,11 @@ function attachFacturas(){
   }));
   mc.querySelectorAll('[data-fac-done]').forEach(el=>el.addEventListener('click',async()=>{
     const f=S.find(s=>s.id===el.dataset.facDone);if(!f)return;
-    f.estado='hecha';render();sS();
+    f.estado='hecha';render();saveVenta(f);
   }));
   mc.querySelectorAll('[data-fac-undo]').forEach(el=>el.addEventListener('click',async()=>{
     const f=S.find(s=>s.id===el.dataset.facUndo);if(!f)return;
-    f.estado='pendiente';render();sS();
+    f.estado='pendiente';render();saveVenta(f);
   }));
 }
 
@@ -2897,7 +3081,7 @@ function rClientes(){
     ${CL.length===0?`<div style="text-align:center;padding:40px;color:var(--text3)">Los clientes se agregan automáticamente al emitir una factura</div>`:''}
     ${sorted.map(cl=>`<div class="mrow" style="margin-bottom:6px">
       <div style="min-width:0;flex:1">
-        <div style="font-weight:700;font-size:13px">${cl.nombre}</div>
+        <div style="font-weight:700;font-size:13px">${esc(cl.nombre)}</div>
         <div style="font-size:11px;color:var(--text3)">${cl.tipo} · ${cl.identificacion}${cl.email?' · '+cl.email:''}${cl.telefono?' · '+cl.telefono:''}</div>
         ${cl.ultimaVisita?`<div style="font-size:10px;color:var(--text3)">Última visita: ${new Date(cl.ultimaVisita).toLocaleDateString('es-EC')}</div>`:''}
       </div>
@@ -2920,7 +3104,7 @@ function attachClientes(){
     const email=document.getElementById('cl-email').value.trim();
     const tel=document.getElementById('cl-tel').value.trim();
     if(!id||!nombre){alert('Identificación y nombre son requeridos');return;}
-    if(editCliente==='new'){CL.push({id:'cl'+Date.now(),tipo,identificacion:id,nombre,email,telefono:tel,ultimaVisita:new Date().toISOString()});}
+    if(editCliente==='new'){CL.push({id:'cl'+Date.now(),tipo,identificacion:id,nombre,email,telefono:tel,ultimaVisita:localISO()});}
     else{const cl=CL.find(x=>x.id===editCliente);if(cl)Object.assign(cl,{tipo,identificacion:id,nombre,email,telefono:tel});}
     await sCL();editCliente=null;
   });
@@ -2986,7 +3170,7 @@ function procesarVentaConsigna(venta){
       const libro = CG.libros.find(l=>l.id===p.libroConsignadoId);
       if(libro && libro.estado==='disponible'){
         libro.estado='vendido';
-        libro.fechaVenta=new Date().toISOString();
+        libro.fechaVenta=localISO();
         libro.ventaId=venta.id;
         libro.precioVendido=it.price;
         venta.itemsConsigna.push({
@@ -3003,6 +3187,26 @@ function procesarVentaConsigna(venta){
     injectConsignaProducts(); // refrescar virtuales (quitar el vendido)
     sCG();
   }
+}
+
+// Al ANULAR una venta: devolver los libros consignados a estado "disponible",
+// salvo que ya hayan sido liquidados (pagados) al consignante.
+function revertirConsignaVenta(venta){
+  if(!venta||!venta.itemsConsigna||venta.itemsConsigna.length===0)return;
+  const liquidados=new Set();
+  (CG.liquidaciones||[]).forEach(l=>(l.libroIds||[]).forEach(id=>liquidados.add(id)));
+  let toco=false, yaLiquidados=[];
+  venta.itemsConsigna.forEach(ic=>{
+    if(liquidados.has(ic.libroId)){ yaLiquidados.push(ic.titulo); return; }
+    const libro=(CG.libros||[]).find(l=>l.id===ic.libroId);
+    if(libro&&libro.estado==='vendido'&&libro.ventaId===venta.id){
+      libro.estado='disponible';
+      delete libro.fechaVenta; delete libro.ventaId; delete libro.precioVendido;
+      toco=true;
+    }
+  });
+  if(toco){ injectConsignaProducts(); sCG(); }
+  if(yaLiquidados.length>0){ alert('Atencion: estos libros consignados ya fueron liquidados al consignante y NO se revirtieron automaticamente:\n- '+yaLiquidados.join('\n- ')+'\nRevisa la liquidacion manualmente.'); }
 }
 
 // Saldo pendiente de pago a un consignante: libros vendidos no liquidados
@@ -3071,7 +3275,7 @@ function rConsignantes(){
     const nLibros=CG.libros.filter(l=>l.consignanteId===c.id && l.estado==='disponible').length;
     return `<div class="mrow">
       <div style="flex:1;min-width:0">
-        <span style="font-weight:600;font-size:13px">${c.nombre}</span>
+        <span style="font-weight:600;font-size:13px">${esc(c.nombre)}</span>
         <span style="font-size:11px;color:var(--text3);margin-left:8px">${c.telefono||''} ${c.cedula?'· '+c.cedula:''}</span>
         <div style="font-size:11px;color:var(--text3);margin-top:2px">${nLibros} en consignación${s.pago60>0?` · <b style="color:#0a7a4a">por pagar ${fmt(s.pago60)}</b>`:''}</div>
       </div>
@@ -3126,7 +3330,7 @@ function rConsignaLibros(){
 
   const rows=libros.map(l=>`<div class="mrow">
     <div style="flex:1;min-width:0">
-      <span style="font-weight:600;font-size:13px">${l.titulo}</span>
+      <span style="font-weight:600;font-size:13px">${esc(l.titulo)}</span>
       <span style="font-size:11px;color:var(--text3);margin-left:6px">${l.autor||''}</span>
       <div style="font-size:11px;color:var(--text3);margin-top:2px">${nombreConsignante(l.consignanteId)} · ${fmt(l.precio)} · ingresó ${fechaCorta(l.fechaIngreso)}${l.estado==='disponible'?' · vence '+fechaCorta(l.fechaVence):''}</div>
     </div>
@@ -3148,7 +3352,7 @@ function rLiquidaciones(){
   if(liquidarTo){
     const c=CG.consignantes.find(x=>x.id===liquidarTo);
     const s=saldoConsignante(liquidarTo);
-    const filas=s.libros.map(l=>`<div class="mrow"><div style="flex:1"><span style="font-weight:600;font-size:13px">${l.titulo}</span><div style="font-size:11px;color:var(--text3)">vendido ${fechaCorta(l.fechaVenta)} · ${fmt(l.precioVendido||l.precio)}</div></div><div style="font-weight:700;color:#0a7a4a">${fmt((l.precioVendido||l.precio)*PCT_CONSIGNANTE)}</div></div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:12px">No hay ventas pendientes de liquidar.</div>';
+    const filas=s.libros.map(l=>`<div class="mrow"><div style="flex:1"><span style="font-weight:600;font-size:13px">${esc(l.titulo)}</span><div style="font-size:11px;color:var(--text3)">vendido ${fechaCorta(l.fechaVenta)} · ${fmt(l.precioVendido||l.precio)}</div></div><div style="font-weight:700;color:#0a7a4a">${fmt((l.precioVendido||l.precio)*PCT_CONSIGNANTE)}</div></div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:12px">No hay ventas pendientes de liquidar.</div>';
     return `<div class="card" style="padding:16px;max-width:560px">
       <h3 style="margin:0 0 4px">Liquidar a ${c?c.nombre:''}</h3>
       <div style="font-size:12px;color:var(--text3);margin-bottom:12px">${c&&c.formaPago?'Pago a: '+c.formaPago:'Sin forma de pago registrada'}</div>
@@ -3167,7 +3371,7 @@ function rLiquidaciones(){
   // lista de consignantes con saldo
   const conSaldo=CG.consignantes.map(c=>({c,s:saldoConsignante(c.id)})).filter(x=>x.s.pago60>0);
   const rows=conSaldo.map(({c,s})=>`<div class="mrow">
-      <div style="flex:1"><span style="font-weight:600;font-size:13px">${c.nombre}</span><div style="font-size:11px;color:var(--text3)">${s.libros.length} libro(s) vendido(s) · total ${fmt(s.totalVenta)}</div></div>
+      <div style="flex:1"><span style="font-weight:600;font-size:13px">${esc(c.nombre)}</span><div style="font-size:11px;color:var(--text3)">${s.libros.length} libro(s) vendido(s) · total ${fmt(s.totalVenta)}</div></div>
       <div style="display:flex;gap:8px;align-items:center"><div style="font-weight:700;color:#0a7a4a">${fmt(s.pago60)}</div><button class="btn btn-acc btn-sm" data-liq="${c.id}">Liquidar</button></div>
     </div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:16px">No hay saldos pendientes de pago.</div>';
 
@@ -3239,7 +3443,7 @@ function rActaDevolucion(){
       ${actaLibros.length===0?`<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">Escanea libros para agregarlos al acta</div>`:
         actaLibros.map((item,idx)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:.5px solid var(--border);font-size:13px">
           <div style="min-width:0;flex:1">
-            <div style="font-weight:600">${item.name}</div>
+            <div style="font-weight:600">${esc(item.name)}</div>
             <div style="font-size:11px;color:var(--text3)">${item.code||'sin código'} · ${fmt(item.precio)} c/u</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
@@ -3320,21 +3524,22 @@ function attachActaDevolucion(){
       libros:actaLibros.map(i=>({name:i.name,code:i.code,precio:i.precio,qty:i.qty})),
       total:actaLibros.reduce((a,i)=>a+i.precio*i.qty,0),
       totalEjemplares:actaLibros.reduce((a,i)=>a+i.qty,0),
-      fecha:new Date().toISOString(),user:turnoUser};
+      fecha:localISO(),user:turnoUser};
     // Deduct stock from products
     actaLibros.forEach(item=>{
       const p=P.find(x=>x.id===item.productId);
       if(p){ p.stock=Math.max(0,(p.stock||0)-item.qty); }
     });
     // Register acta as a special sales record for audit trail
-    S.push({id:acta.id,esActaDevolucion:true,proveedor:acta.proveedor,libros:acta.libros,
-      total:0,totalLibros:acta.total,date:acta.fecha,user:turnoUser,closed:false});
+    const actaRec={id:acta.id,esActaDevolucion:true,proveedor:acta.proveedor,libros:acta.libros,
+      total:0,totalLibros:acta.total,date:acta.fecha,user:turnoUser,closed:false};
+    S.push(actaRec);
     // Print
     imprimirActaDevolucion(acta);
     // Reset
     actaLibros=[];actaConsignante=null;
     render();
-    sP(); sS();
+    sP(); saveVenta(actaRec);
     alert('✓ Acta generada. Stock descontado de '+acta.totalEjemplares+' ejemplares.');
   });
 }
@@ -3387,7 +3592,7 @@ function attachConsigna(){
       email:document.getElementById('cg-email').value.trim(),
       formaPago:document.getElementById('cg-pago').value.trim(),
       notas:document.getElementById('cg-notas').value.trim()};
-    if(editConsignante==='new'){CG.consignantes.push({id:'cn'+Date.now(),fecha:new Date().toISOString(),...data});}
+    if(editConsignante==='new'){CG.consignantes.push({id:'cn'+Date.now(),fecha:localISO(),...data});}
     else{const c=CG.consignantes.find(x=>x.id===editConsignante);if(c)Object.assign(c,data);}
     await sCG();editConsignante=null;render();
   });
@@ -3413,7 +3618,7 @@ function attachConsigna(){
     CG.libros.push({id:'lb'+Date.now()+Math.random().toString(36).slice(2,5),
       titulo, autor:document.getElementById('lb-autor').value.trim(),
       precio:+precio.toFixed(2), code, consignanteId:addLibrosTo,
-      fechaIngreso:now.toISOString(), fechaVence:vence.toISOString(), estado:'disponible'});
+      fechaIngreso:localISO(now), fechaVence:localISO(vence), estado:'disponible'});
     await sCG(); injectConsignaProducts();
     // mantener el formulario abierto y mostrar recientes
     render();
@@ -3422,13 +3627,13 @@ function attachConsigna(){
     if(cont){
       const recientes=CG.libros.filter(l=>l.consignanteId===addLibrosTo).sort((a,b)=>new Date(b.fechaIngreso)-new Date(a.fechaIngreso)).slice(0,8);
       cont.innerHTML='<div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px">ÚLTIMOS INGRESADOS</div>'+
-        recientes.map(l=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">${l.titulo} · ${fmt(l.precio)}</div>`).join('');
+        recientes.map(l=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">${esc(l.titulo)} · ${fmt(l.precio)}</div>`).join('');
     }
   });
   mc.querySelectorAll('[data-lbdev]').forEach(el=>el.addEventListener('click',async()=>{
     if(!confirm('¿Marcar este libro como devuelto al consignante?'))return;
     const l=CG.libros.find(x=>x.id===el.dataset.lbdev);
-    if(l){l.estado='devuelto';l.fechaDevolucion=new Date().toISOString();}
+    if(l){l.estado='devuelto';l.fechaDevolucion=localISO();}
     await sCG();injectConsignaProducts();render();
   }));
 
@@ -3441,7 +3646,7 @@ function attachConsigna(){
     const metodo=document.getElementById('liq-metodo').value;
     if(!confirm(`Registrar pago de ${fmt(s.pago60)} a ${nombreConsignante(liquidarTo)} por ${metodo}?`))return;
     CG.liquidaciones.push({id:'lq'+Date.now(), consignanteId:liquidarTo,
-      fecha:new Date().toISOString(), periodo:today().slice(0,7),
+      fecha:localISO(), periodo:today().slice(0,7),
       libroIds:s.libros.map(l=>l.id), totalVenta:s.totalVenta, pago60:s.pago60,
       metodo, user:turnoUser});
     await sCG();liquidarTo=null;render();
@@ -3489,9 +3694,10 @@ let selectedCancelMotivo = '';
         : selectedCancelMotivo;
       var lid=cancelModal.lid, item=cancelModal.item, table=cancelModal.table;
       // Register cancellation
-      S.push({id:'canc'+Date.now(), esCancelacion:true, prodName:item.name,
+      var cancRec={id:'canc'+Date.now(), esCancelacion:true, prodName:item.name,
         qty:item.qty, motivo:motivo, mesa:table.name,
-        date:new Date().toISOString(), user:turnoUser, total:0, closed:false});
+        date:localISO(), user:turnoUser, total:0, closed:false};
+      S.push(cancRec);
       // Remove item from order
       table.order = table.order.filter(function(i){ return i.lid!==lid; });
       // Also remove from comandas record so it doesn't show as sent
@@ -3505,7 +3711,7 @@ let selectedCancelMotivo = '';
       modal.style.display='none'; cancelModal=null; selectedCancelMotivo='';
       render();
       // Save to Firebase in background (no await - non-blocking)
-      sS(); sT();
+      saveVenta(cancRec); sT();
     });
   }
   if(document.readyState==='loading'){
@@ -3617,17 +3823,18 @@ function llenarFormCliente(cl){
       // Save/update cliente frecuente
       if(tipo!=='Consumidor Final'&&num&&nombre){
         var existIdx = CL.findIndex(function(cl){ return cl.identificacion===num; });
-        var clData = {id:'cl'+(existIdx>=0?CL[existIdx].id:''+Date.now()),tipo:tipo,identificacion:num,nombre:nombre,email:email,telefono:tel,ultimaVisita:new Date().toISOString()};
+        var clData = {id:'cl'+(existIdx>=0?CL[existIdx].id:''+Date.now()),tipo:tipo,identificacion:num,nombre:nombre,email:email,telefono:tel,ultimaVisita:localISO()};
         if(existIdx>=0){ CL[existIdx]=clData; } else { CL.push(clData); }
         await sCL();
       }
 
       // Save factura pendiente
-      S.push({id:'fac'+Date.now(),esFactura:true,tipo:tipo,identificacion:num,nombre:nombre||'Consumidor Final',
+      var facRec={id:'fac'+Date.now(),esFactura:true,tipo:tipo,identificacion:num,nombre:nombre||'Consumidor Final',
         email:email,telefono:tel,mesa:facturaVentaRef?facturaVentaRef.mesa:'',
         total:facturaVentaRef?facturaVentaRef.total:0,items:facturaVentaRef?facturaVentaRef.items:[],
-        fecha:new Date().toISOString(),user:turnoUser,estado:'pendiente',closed:false});
-      sS();
+        fecha:localISO(),date:localISO(),user:turnoUser,estado:'pendiente',closed:false};
+      S.push(facRec);
+      saveVenta(facRec);
       modal.style.display='none'; facturaVentaRef=null;
       render();
       alert('✓ Guardada en Facturas pendientes'+(tipo!=='Consumidor Final'?' y cliente registrado':'')+'.');
@@ -3794,8 +4001,7 @@ async function init(){
   }
   const et=await fbGet('tables',null);
   if(!et)await fbSet('tables',INIT_TABLES);
-  const es=await fbGet('sales',null);
-  if(!es)await fbSet('sales',[]);
+  await migrarVentas();
   const ec=await fbGet('clientes',null);
   if(!ec)fbSet('clientes',[]);
   subRT();
@@ -3827,7 +4033,37 @@ function patchProducts(){
   });
   if(varFixed)sP();
 }
-init();
+
+// ── FASE 2 - Autenticacion: se exige inicio de sesion antes de cargar datos ──
+const auth=getAuth(fbapp);
+let _initDone=false;
+onAuthStateChanged(auth,user=>{
+  const lg=document.getElementById('login-screen');
+  if(user){
+    if(lg)lg.style.display='none';
+    if(!_initDone){_initDone=true;init();}
+  } else {
+    if(lg)lg.style.display='flex';
+    setTimeout(()=>document.getElementById('login-email')?.focus(),100);
+  }
+});
+async function doLogin(){
+  const email=(document.getElementById('login-email')?.value||'').trim();
+  const pass=document.getElementById('login-pass')?.value||'';
+  const err=document.getElementById('login-err');
+  const btn=document.getElementById('blogin');
+  if(!email||!pass){if(err){err.textContent='Ingresa correo y contraseña';err.style.display='block';}return;}
+  if(btn)btn.disabled=true;
+  try{
+    if(err)err.style.display='none';
+    await signInWithEmailAndPassword(auth,email,pass);
+  }catch(e){
+    const map={'auth/invalid-credential':'Correo o contraseña incorrectos','auth/user-not-found':'El usuario no existe','auth/wrong-password':'Contraseña incorrecta','auth/too-many-requests':'Demasiados intentos; espera unos minutos','auth/network-request-failed':'Sin conexion a internet','auth/invalid-email':'Correo invalido'};
+    if(err){err.textContent=map[e.code]||('Error: '+(e.code||e.message));err.style.display='block';}
+  }finally{if(btn)btn.disabled=false;}
+}
+document.getElementById('blogin')?.addEventListener('click',doLogin);
+['login-email','login-pass'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
 </script>
 </body>
 </html>
