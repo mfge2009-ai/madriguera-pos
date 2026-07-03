@@ -17,8 +17,10 @@ CONFIGURACIÓN FIREBASE:
 1. console.firebase.google.com → proyecto → app web (</>)
 2. Copia tu firebaseConfig abajo (reemplaza TU_...)
 3. Firestore Database → Crear → Modo producción
-4. Firestore → Reglas → allow read, write: if true → Publicar
-5. Sube este archivo a Netlify (app.netlify.com/drop)
+4. Authentication → Sign-in method → habilitar Email/Contraseña y crear usuarios
+5. Firestore → Reglas → exigir autenticación (copiar reglas_firestore.txt) → Publicar
+   NUNCA publiques "allow read, write: if true": deja la base abierta a internet.
+6. Sube este archivo a Netlify (app.netlify.com/drop)
 -->
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -481,6 +483,10 @@ const fbapp=initializeApp(firebaseConfig);
 const db=getFirestore(fbapp);
 const fbGet=async(k,fb)=>{try{const s=await getDoc(doc(db,'madu',k));return s.exists()?s.data().v:fb;}catch{return fb;}};
 const fbSet=async(k,v)=>{try{await setDoc(doc(db,'madu',k),{v});}catch(e){console.error(e);}};
+// Version ESTRICTA: distingue "no existe" (undefined) de "error de red/permisos"
+// (lanza excepcion). Evita re-sembrar datos iniciales sobre datos vivos cuando
+// solo hubo un fallo transitorio de conexion (Falencia 1).
+const fbGetStrict=async k=>{const s=await getDoc(doc(db,'madu',k));return s.exists()?s.data().v:undefined;};
 
 // ── Estado ───────────────────────────────────────────────────
 let P=[],T=[],S=[];
@@ -515,7 +521,7 @@ function _backupLocal(key, data){
 
 // Retry any backed-up writes when connection is restored
 async function _retryBackups(){
-  const keys=['products','tables','clientes'];
+  const keys=['tables','clientes','consigna'];
   let recovered=0;
   for(const key of keys){
     const raw=localStorage.getItem('madu_bk_'+key);
@@ -547,6 +553,41 @@ async function _retryBackups(){
     if(rest.length>0)localStorage.setItem('madu_bk_vdel',JSON.stringify(rest));
     else localStorage.removeItem('madu_bk_vdel');
   }catch(e){}
+  // Productos pendientes (documentos individuales en la coleccion productos)
+  try{
+    const pendP=JSON.parse(localStorage.getItem('madu_bk_prod')||'{}');
+    for(const id of Object.keys(pendP)){
+      await setDoc(doc(db,PRODUCTOS_COL,id),pendP[id]);
+      _lastPSync.set(id,JSON.stringify(pendP[id]));
+      delete pendP[id]; recovered++;
+      localStorage.setItem('madu_bk_prod',JSON.stringify(pendP));
+    }
+    if(Object.keys(pendP).length===0)localStorage.removeItem('madu_bk_prod');
+  }catch(e){ console.error('Retry productos pendientes fallo'); }
+  // Ajustes de stock pendientes (transacciones que no llegaron a confirmarse)
+  try{
+    const pendS=JSON.parse(localStorage.getItem('madu_bk_stock')||'[]');
+    const restS=[];
+    for(const op of pendS){
+      try{
+        await runTransaction(db,async tx=>{
+          const ref=doc(db,PRODUCTOS_COL,String(op.id));
+          const s=await tx.get(ref); if(!s.exists())return;
+          const p=s.data();
+          if('set' in op){ p.stock=op.set; }
+          else{
+            const cur=(typeof p.stock==='number')?p.stock:0;
+            if(cur>=999)return;
+            p.stock=Math.max(0,cur+op.delta);
+          }
+          tx.set(ref,p);
+        });
+        recovered++;
+      }catch(e){ restS.push(op); }
+    }
+    if(restS.length>0)localStorage.setItem('madu_bk_stock',JSON.stringify(restS));
+    else localStorage.removeItem('madu_bk_stock');
+  }catch(e){}
   if(recovered>0){
     console.log('Recuperados '+recovered+' cambios pendientes');
     updateHdr();
@@ -555,13 +596,137 @@ async function _retryBackups(){
 
 // Check for pending backups (shows indicator)
 function _hasPendingBackups(){
-  return ['products','tables','clientes'].some(k=>localStorage.getItem('madu_bk_'+k))||!!localStorage.getItem('madu_bk_ventas')||!!localStorage.getItem('madu_bk_vdel');
+  return ['tables','clientes','consigna'].some(k=>localStorage.getItem('madu_bk_'+k))||!!localStorage.getItem('madu_bk_ventas')||!!localStorage.getItem('madu_bk_vdel')||!!localStorage.getItem('madu_bk_prod')||!!localStorage.getItem('madu_bk_stock');
 }
 
 // FASE 2: cada venta es su propio documento en la coleccion "ventas".
 // Ya no existe el array global, asi que no hay riesgo de sobrescritura entre dispositivos.
 async function _appendSale(sale){ return saveVenta(sale); }
-const sP=()=>_write('products',P);
+// ══ FASE 3: productos como coleccion (un documento por producto) ═════════
+// - Evita el limite de 1MB por documento de Firestore (Falencia 3).
+// - Permite ajustes de stock ATOMICOS via runTransaction: dos cajas pueden
+//   vender a la vez sin pisarse el inventario (Falencia 2).
+const PRODUCTOS_COL='productos';
+let _lastPSync=new Map(); // id -> JSON del ultimo estado confirmado por Firestore
+
+function _backupProd(p){
+  try{
+    const pend=JSON.parse(localStorage.getItem('madu_bk_prod')||'{}');
+    pend[String(p.id)]=p;
+    localStorage.setItem('madu_bk_prod',JSON.stringify(pend));
+  }catch(e){}
+}
+function _backupStockOp(op){
+  try{
+    const pend=JSON.parse(localStorage.getItem('madu_bk_stock')||'[]');
+    pend.push(op);
+    localStorage.setItem('madu_bk_stock',JSON.stringify(pend));
+  }catch(e){}
+}
+
+// Escribe SOLO los productos indicados (batches de 400 por limite de Firestore)
+async function saveProductos(list){
+  const reales=list.filter(p=>p&&p.id&&!p.esConsignado);
+  if(reales.length===0)return;
+  _writing=true;
+  if(_writeTimer)clearTimeout(_writeTimer);
+  _writeTimer=setTimeout(()=>{_writing=false;},2000);
+  try{
+    for(let i=0;i<reales.length;i+=400){
+      const batch=writeBatch(db);
+      reales.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),p));
+      await batch.commit();
+    }
+    reales.forEach(p=>_lastPSync.set(String(p.id),JSON.stringify(p)));
+  }catch(e){
+    console.error('saveProductos:',e);
+    reales.forEach(_backupProd);
+  }finally{ _writing=false; }
+}
+
+// sP(): guarda los productos cuya METADATA cambio (precio, nombre, codigo,
+// active, variantes, etc.). El stock NO viaja por aqui: al escribir un producto
+// existente se conserva el stock del servidor para no pisar ventas simultaneas
+// de otra caja. El stock se mueve unicamente con ajustarStock()/fijarStock().
+async function sP(){
+  const dirty=[];
+  P.forEach(p=>{
+    if(!p||!p.id||p.esConsignado)return;
+    const key=String(p.id), prev=_lastPSync.get(key);
+    if(prev===undefined){ dirty.push({...p}); return; } // producto nuevo: va completo
+    let prevObj; try{ prevObj=JSON.parse(prev); }catch(e){ prevObj=null; }
+    if(!prevObj){ dirty.push({...p}); return; }
+    const a=JSON.stringify({...p,stock:0}), b=JSON.stringify({...prevObj,stock:0});
+    if(a!==b) dirty.push({...p,stock:prevObj.stock}); // conserva stock del servidor
+  });
+  if(dirty.length>0)await saveProductos(dirty);
+}
+
+// Ajuste RELATIVO de stock (venta, anulacion, devolucion, acta).
+// Muta el producto local para respuesta inmediata de la UI y aplica el delta
+// en Firestore con una transaccion (lee-modifica-escribe atomico).
+async function ajustarStock(productId,delta){
+  if(!productId||!delta)return;
+  const lp=P.find(x=>x.id===productId);
+  if(lp){
+    const cur=(typeof lp.stock==='number')?lp.stock:0;
+    if(cur<999) lp.stock=Math.max(0,cur+delta);
+  }
+  if(String(productId).startsWith('cg_'))return; // virtual de consignacion: su estado vive en CG
+  try{
+    await runTransaction(db,async tx=>{
+      const ref=doc(db,PRODUCTOS_COL,String(productId));
+      const s=await tx.get(ref);
+      if(!s.exists())return;
+      const p=s.data();
+      const cur=(typeof p.stock==='number')?p.stock:0;
+      if(cur>=999)return; // 999 = sin control de stock
+      p.stock=Math.max(0,cur+delta);
+      tx.set(ref,p);
+    });
+  }catch(e){
+    console.error('ajustarStock:',e);
+    _backupStockOp({id:String(productId),delta});
+  }
+}
+
+// Fijado ABSOLUTO de stock (edicion de inventario por admin, importacion CSV).
+async function fijarStock(productId,valor){
+  if(!productId||typeof valor!=='number'||isNaN(valor))return;
+  const lp=P.find(x=>x.id===productId);
+  if(lp)lp.stock=valor;
+  if(String(productId).startsWith('cg_'))return;
+  try{
+    await runTransaction(db,async tx=>{
+      const ref=doc(db,PRODUCTOS_COL,String(productId));
+      const s=await tx.get(ref);
+      if(!s.exists())return;
+      const p=s.data(); p.stock=valor;
+      tx.set(ref,p);
+    });
+  }catch(e){
+    console.error('fijarStock:',e);
+    _backupStockOp({id:String(productId),set:valor});
+  }
+}
+
+// Migracion idempotente: copia el catalogo del documento antiguo madu/products
+// (o del catalogo embebido si aquel no existe) a la coleccion productos/.
+// El documento antiguo se conserva intacto como respaldo. Si esta funcion
+// falla por red/permisos, lanza excepcion y NO siembra nada (lo captura init).
+async function migrarProductos(){
+  const flag=await getDoc(doc(db,'madu','migracion_productos'));
+  if(flag.exists()&&flag.data().done)return;
+  const old=await getDoc(doc(db,'madu','products'));
+  const arr=(old.exists()?(old.data().v||[]):INIT_PRODUCTS).filter(p=>p&&p.id&&!p.esConsignado);
+  for(let i=0;i<arr.length;i+=400){
+    const batch=writeBatch(db);
+    arr.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),p));
+    await batch.commit();
+  }
+  await setDoc(doc(db,'madu','migracion_productos'),{done:true,total:arr.length,fecha:localISO()});
+  console.log('Migracion de productos completada: '+arr.length+' productos');
+}
 const sT=()=>_write('tables',T);
 const sCL=()=>_write('clientes',CL);
 const sCG=()=>_write('consigna',CG);
@@ -728,10 +893,20 @@ function subRT(){
     }, 400);
   }
 
-  ['products','tables','clientes','consigna'].forEach(k=>{
+  // FASE 3 - Productos: coleccion con un documento por producto. Evita el
+  // limite de 1MB del documento unico y habilita transacciones de stock.
+  onSnapshot(collection(db,PRODUCTOS_COL),snap=>{
+    P=snap.docs.map(d=>d.data());
+    _lastPSync=new Map(P.filter(p=>p&&p.id).map(p=>[String(p.id),JSON.stringify(p)]));
+    injectConsignaProducts();
+    setTimeout(patchProducts,3000);
+    _loaded['products']=true;
+    if(_appShown&&!_writing) debouncedRender();
+  },()=>{online=false;showErr();});
+
+  ['tables','clientes','consigna'].forEach(k=>{
     onSnapshot(doc(db,'madu',k),snap=>{
       if(snap.exists()){
-        if(k==='products'){P=snap.data().v||[];setTimeout(patchProducts,3000);}
         if(k==='tables')T=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
         if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
@@ -1273,12 +1448,9 @@ function attachPOS(){
       item.qty-=qty;
     });
     t.order=t.order.filter(i=>i.qty>0);
-    // Deduct stock for unit-control products in split
+    // Deduct stock for unit-control products in split (transaccion atomica)
     splitOrder.forEach(i=>{
-      if(i.stockControl==='unidad'){
-        const p=P.find(x=>x.id===i.productId||x.name===i.name);
-        if(p&&p.stock<999) p.stock=Math.max(0,p.stock-i.qty);
-      }
+      if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,-i.qty); }
     });
     // If no items left, free the table
     if(t.order.length===0){t.status='libre';t.openedAt=null;t.comandas=[];selT=null;}
@@ -1291,7 +1463,7 @@ function attachPOS(){
     imprimirTicketSplit(splitOrder, splitTot, t.name);
     // Guardar la venta del split via transaccion (igual que el cobro normal):
     // evita sobrescribir y borrar ventas registradas desde otro dispositivo
-    _appendSale(splitSale); sP(); sT();
+    _appendSale(splitSale); sT();
   });
   mc.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];render();});
   mc.querySelector('#badd-pago')?.addEventListener('click',()=>{
@@ -1493,15 +1665,12 @@ async function anularVenta(ventaId){
   venta.anuladaPor=turnoUser;
   // Revertir libros consignados a "disponible" si la venta los incluia
   revertirConsignaVenta(venta);
-  // Restore stock for unidad products
+  // Restore stock for unidad products (transaccion atomica por producto)
   venta.items?.forEach(i=>{
-    if(i.stockControl==='unidad'){
-      const p=P.find(x=>x.id===i.productId||x.name===i.name);
-      if(p&&p.stock<999)p.stock+=i.qty;
-    }
+    if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,i.qty); }
   });
   render();
-  saveVenta(venta); sP();
+  saveVenta(venta);
   alert('✓ Venta anulada correctamente');
 }
 window.anularVenta=anularVenta;
@@ -1530,12 +1699,9 @@ async function confirmarCobro(){
     const ticketTotal=total;
     const ticketMesa=t.name;
     const ticketPay=metodo;
-    // Deduct stock locally
+    // Deduct stock: mutacion local inmediata + transaccion atomica en Firestore
     t.order.forEach(i=>{
-      if(i.stockControl==='unidad'){
-        const p=P.find(x=>x.id===i.productId);
-        if(p&&p.stock<999)p.stock=Math.max(0,p.stock-i.qty);
-      }
+      if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,-i.qty); }
     });
     // Clear table
     t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;
@@ -1549,7 +1715,7 @@ async function confirmarCobro(){
     imprimirTicketData(ticketItems,ticketTotal,ticketMesa,ticketPay,{monto:descMonto,subtotal:subtotal,tipo:descuentoTipo,pct:descuento});
     // Save: transaction-safe append for the sale, regular write for tables/products
     await _appendSale(venta);
-    sT(); sP();
+    sT();
   }catch(err){
     console.error('Error en cobro:',err);
     alert('Error al procesar el cobro. Intenta de nuevo.');
@@ -1957,7 +2123,7 @@ function attachProd(){
       rows.forEach(r=>{
         const existing=P.find(p=>p.name.toLowerCase()===r.name.toLowerCase());
         if(existing){
-          existing.price=r.price;existing.stock=r.stock;
+          existing.price=r.price;fijarStock(existing.id,r.stock);
           if(r.code)existing.code=r.code;
           if(r.author)existing.author=r.author;
           if(r.subcategory)existing.subcategory=r.subcategory;
@@ -2452,7 +2618,7 @@ function attachInv(){
     const i=document.getElementById('si2');if(i){i.focus();i.select();}
   }));
   mc.querySelector('#bcs2')?.addEventListener('click',()=>{editStk=null;render();});
-  mc.querySelectorAll('[data-sv]').forEach(el=>{if(el.tagName==='BUTTON'&&el.textContent==='OK')el.addEventListener('click',async()=>{const v=parseInt(document.getElementById('si2')?.value)||0;const p=P.find(x=>x.id===el.dataset.sv);if(p){p.stock=v;}editStk=null;render();sP();});});
+  mc.querySelectorAll('[data-sv]').forEach(el=>{if(el.tagName==='BUTTON'&&el.textContent==='OK')el.addEventListener('click',async()=>{const v=parseInt(document.getElementById('si2')?.value)||0;const p=P.find(x=>x.id===el.dataset.sv);if(p){fijarStock(p.id,v);}editStk=null;render();});});
   document.getElementById('si2')?.addEventListener('input',e=>stkV=e.target.value);
 }
 
@@ -2584,9 +2750,8 @@ function attachDevoluciones(){
     const prod=pid?P.find(p=>p.id===pid):P.find(p=>p.name.toLowerCase().includes(prodInput.toLowerCase())||(p.code&&p.code.includes(prodInput)));
     if(!prod){alert('Busca y selecciona un producto válido');return;}
     if(qty<=0){alert('La cantidad debe ser mayor a 0');return;}
-    // Restore stock
-    prod.stock=Math.max(0,(prod.stock||0)+qty);
-    sP();
+    // Restore stock (transaccion atomica por producto)
+    ajustarStock(prod.id,qty);
     // Register devolution
     const devRec={id:`dev${Date.now()}`,esDevolucion:true,prodName:prod.name,prodCode:prod.code||'',prodId:prod.id,proveedor:prov,qty,motivo,obs,date:localISO(),user:turnoUser,total:0,closed:false};
     S.push(devRec);
@@ -2925,12 +3090,9 @@ function attachReportes(){
     const motivo=prompt('¿Por qué anulas esta venta de '+fmt(venta.total)+'? (motivo obligatorio)');
     if(!motivo||!motivo.trim()){alert('Debes indicar un motivo para anular.');return;}
     if(!confirm('¿Confirmas anular la venta de '+venta.tableName+' por '+fmt(venta.total)+'?\nEsta acción restaura el stock y queda registrada.'))return;
-    // Restore stock
+    // Restore stock (transaccion atomica por producto)
     venta.items?.forEach(i=>{
-      if(i.stockControl==='unidad'){
-        const p=P.find(x=>x.id===i.productId);
-        if(p&&p.stock<999)p.stock=p.stock+i.qty;
-      }
+      if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,i.qty); }
     });
     // Revertir libros consignados a "disponible" si la venta los incluia
     revertirConsignaVenta(venta);
@@ -2941,7 +3103,6 @@ function attachReportes(){
     // Remove the sale (tambien elimina su documento en la coleccion ventas)
     deleteVenta(sid);
     render();
-    sP();
     alert('✓ Venta anulada y stock restaurado.');
   }));
   mc.querySelector('#bexport')?.addEventListener('click',()=>{
@@ -3525,10 +3686,9 @@ function attachActaDevolucion(){
       total:actaLibros.reduce((a,i)=>a+i.precio*i.qty,0),
       totalEjemplares:actaLibros.reduce((a,i)=>a+i.qty,0),
       fecha:localISO(),user:turnoUser};
-    // Deduct stock from products
+    // Deduct stock from products (transaccion atomica por producto)
     actaLibros.forEach(item=>{
-      const p=P.find(x=>x.id===item.productId);
-      if(p){ p.stock=Math.max(0,(p.stock||0)-item.qty); }
+      if(item.productId){ ajustarStock(item.productId,-item.qty); }
     });
     // Register acta as a special sales record for audit trail
     const actaRec={id:acta.id,esActaDevolucion:true,proveedor:acta.proveedor,libros:acta.libros,
@@ -3539,7 +3699,7 @@ function attachActaDevolucion(){
     // Reset
     actaLibros=[];actaConsignante=null;
     render();
-    sP(); saveVenta(actaRec);
+    saveVenta(actaRec);
     alert('✓ Acta generada. Stock descontado de '+acta.totalEjemplares+' ejemplares.');
   });
 }
@@ -3994,16 +4154,20 @@ setInterval(()=>{if(online)updateHdr();},60000);
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
   if(firebaseConfig.apiKey==='TU_API_KEY'){showErr();return;}
-  const ep=await fbGet('products',null);
-  if(!ep){
-    if(INIT_PRODUCTS.length>0){await fbSet('products',INIT_PRODUCTS);}
-    // else: products will load from Firebase when available
+  try{
+    // Migraciones idempotentes (ventas y productos a colecciones propias)
+    await migrarVentas();
+    await migrarProductos();
+    // Sembrar SOLO si el documento NO EXISTE. Un error de red/permisos lanza
+    // excepcion y cae al catch sin sembrar: antes, un fallo transitorio
+    // devolvia null y se sobreescribia el catalogo/mesas vivos (Falencia 1).
+    const et=await fbGetStrict('tables');
+    if(et===undefined)await fbSet('tables',INIT_TABLES);
+    const ec=await fbGetStrict('clientes');
+    if(ec===undefined)await fbSet('clientes',[]);
+  }catch(e){
+    console.error('init: error de conexion/permisos. No se siembra nada para proteger los datos existentes.',e);
   }
-  const et=await fbGet('tables',null);
-  if(!et)await fbSet('tables',INIT_TABLES);
-  await migrarVentas();
-  const ec=await fbGet('clientes',null);
-  if(!ec)fbSet('clientes',[]);
   subRT();
 }
 
