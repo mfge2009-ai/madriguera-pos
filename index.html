@@ -3687,9 +3687,11 @@ function rNomina(){
         <div class="fgrid">
           <div class="fg"><label>Empleado</label><select id="a-emp">${opts}</select></div>
           <div class="fg"><label>Monto ($)</label><input id="a-monto" type="number" step="0.01" placeholder="0.00"></div>
+          <div class="fg"><label>Sale de (método)</label><select id="a-metodo">${PAY.map(m=>`<option>${m}</option>`).join('')}</select></div>
           <div class="fg"><label>Fecha</label><input id="a-fecha" type="date" value="${today()}"></div>
           <div class="fg"><label>Nota</label><input id="a-nota" placeholder="Opcional"></div>
         </div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Se registra también como gasto en Caja (categoría "Nómina / personal") y se descuenta del sueldo por pagar.</div>
         <button class="btn btn-acc" id="a-save">Registrar anticipo</button>
       </div>`}
       <div style="font-size:12px;font-weight:700;margin-bottom:8px">Pendientes de descontar</div>
@@ -3697,7 +3699,7 @@ function rNomina(){
         pend.map(a=>`<div class="mrow" style="margin-bottom:5px">
           <div style="min-width:0;flex:1">
             <div style="font-weight:700;font-size:13px">${esc((empById(a.empId)||{}).nombre||'—')} · <span style="color:var(--red)">${fmt(a.monto)}</span></div>
-            <div style="font-size:11px;color:var(--text3)">${new Date(a.fecha).toLocaleDateString('es-EC')}${a.nota?' · '+esc(a.nota):''}</div>
+            <div style="font-size:11px;color:var(--text3)">${new Date(a.fecha).toLocaleDateString('es-EC')}${a.metodo?' · '+a.metodo:''}${a.gastoId?' · <span style="color:var(--grn)">en caja ✓</span>':''}${a.nota?' · '+esc(a.nota):''}</div>
           </div>
           <button class="btn btn-r btn-sm" data-adel="${a.id}">✕</button>
         </div>`).join('')}
@@ -3814,16 +3816,26 @@ function attachNomina(){
   mc.querySelector('#a-save')?.addEventListener('click',async()=>{
     const empId=document.getElementById('a-emp').value;
     const monto=parseFloat(document.getElementById('a-monto').value)||0;
+    const metodo=document.getElementById('a-metodo').value;
     const fecha=document.getElementById('a-fecha').value||today();
     const nota=document.getElementById('a-nota').value.trim();
     if(!empId){alert('Selecciona un empleado');return;}
     if(monto<=0){alert('Ingresa un monto válido');return;}
-    NOM.anticipos.push({id:'an'+Date.now(),empId,monto,fecha,nota,pagado:false,pagoId:null});
+    const emp=empById(empId);
+    const antId='an'+Date.now();
+    // Cruce con Caja: el anticipo sale del dinero de caja -> gasto vinculado
+    const gId='g'+Date.now();
+    const gRec={id:gId,esGasto:true,desc:'Anticipo nómina · '+(emp?emp.nombre:''),cat:'Nómina / personal',tipoGasto:catTipo('Nómina / personal'),total:monto,paymentMethod:metodo,obs:nota,proveedor:emp?emp.nombre:'',factura:'',esAnticipoNomina:true,anticipoId:antId,date:localISO(new Date(fecha+'T09:00:00')),user:turnoUser,closed:false};
+    NOM.anticipos.push({id:antId,empId,monto,metodo,fecha,nota,pagado:false,pagoId:null,gastoId:gId});
+    S.push(gRec);await saveVenta(gRec);
     await sNOM();render();
   });
   mc.querySelectorAll('[data-adel]').forEach(el=>el.addEventListener('click',async()=>{
-    if(!confirm('¿Eliminar este anticipo?'))return;
-    NOM.anticipos=NOM.anticipos.filter(a=>a.id!==el.dataset.adel);await sNOM();render();
+    const a=NOM.anticipos.find(x=>x.id===el.dataset.adel);if(!a)return;
+    if(!confirm('¿Eliminar este anticipo? También se anulará su gasto en Caja.'))return;
+    // Anular el gasto vinculado en Caja (borrado lógico, deja pista de auditoría)
+    if(a.gastoId){const g=S.find(s=>s.id===a.gastoId);if(g){g.anulada=true;g.anuladaPor=turnoUser;g.anuladaFecha=localISO();g.anuladaMotivo='Anticipo de nómina eliminado';await saveVenta(g);}}
+    NOM.anticipos=NOM.anticipos.filter(x=>x.id!==a.id);await sNOM();render();
   }));
 
   // Pagar
@@ -3843,7 +3855,15 @@ function attachNomina(){
     if(!confirm('Confirmar pago de '+fmt(neto)+' a '+emp.nombre+' ('+mesLabel(nomMes)+')?'))return;
     const pagoId='pg'+Date.now();
     pend.forEach(a=>{a.pagado=true;a.pagoId=pagoId;});
-    NOM.pagos.push({id:pagoId,empId,empNombre:emp.nombre,mes:nomMes,sueldo:+emp.sueldo||0,antIds:pend.map(a=>a.id),totalAnticipos,bono,otros,neto,fecha:localISO(),metodo,nota,resp:turnoUser});
+    // Cruce con Caja: el neto pagado se registra como gasto (categoría Nómina)
+    // con el método elegido -> solo los pagos en efectivo tocan el cuadre.
+    let gastoId=null;
+    if(neto>0.005){
+      gastoId='g'+Date.now();
+      const gRec={id:gastoId,esGasto:true,desc:'Pago nómina · '+emp.nombre+' · '+mesLabel(nomMes),cat:'Nómina / personal',tipoGasto:catTipo('Nómina / personal'),total:neto,paymentMethod:metodo,obs:nota,proveedor:emp.nombre,factura:'',esPagoNomina:true,pagoId,date:localISO(),user:turnoUser,closed:false};
+      S.push(gRec);await saveVenta(gRec);
+    }
+    NOM.pagos.push({id:pagoId,empId,empNombre:emp.nombre,mes:nomMes,sueldo:+emp.sueldo||0,antIds:pend.map(a=>a.id),totalAnticipos,bono,otros,neto,fecha:localISO(),metodo,nota,resp:turnoUser,gastoId});
     await sNOM();pagoEmpId=null;render();
   });
 
@@ -3854,6 +3874,8 @@ function attachNomina(){
     if(pin===null)return;
     if(pin!==CORRECT_PIN){alert('PIN incorrecto');return;}
     (p.antIds||[]).forEach(id=>{const a=NOM.anticipos.find(x=>x.id===id);if(a){a.pagado=false;a.pagoId=null;}});
+    // Anular también el gasto del neto en Caja (borrado lógico)
+    if(p.gastoId){const g=S.find(s=>s.id===p.gastoId);if(g){g.anulada=true;g.anuladaPor=turnoUser;g.anuladaFecha=localISO();g.anuladaMotivo='Pago de nómina anulado';await saveVenta(g);}}
     NOM.pagos=NOM.pagos.filter(x=>x.id!==p.id);await sNOM();render();
   }));
 }
