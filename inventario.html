@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Control de Insumos — La Madriguera</title>
+<style>
+:root{
+  --bg:#f8f6f1;--bg2:#fff;--bg3:#f0ede6;
+  --text:#1a1a1a;--text2:#555;--text3:#999;
+  --border:#ddd8ce;--b2:#c8c2b5;
+  --acc:#5c4a2a;--acc2:#7a6240;--acl:#ede5d0;
+  --grn:#1f6b45;--gbg:#d4edda;--gbrd:#a8d5b8;
+  --amb:#8a4f00;--abg:#fff3cd;--abrd:#ffd77a;
+  --red:#8b1a1a;--rbg:#fde8e8;--rbrd:#f5a5a5;
+  --blu:#1a3f8b;--bbg:#ddeeff;--bbrd:#93bfee;
+  --r:10px;--rs:7px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100dvh;overflow:hidden;font-size:14px}
+#app{display:none;flex-direction:column;height:100dvh}
+#loading{display:flex;align-items:center;justify-content:center;height:100dvh;flex-direction:column;gap:14px;color:var(--text2)}
+.spin{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+header{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 14px;min-height:46px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px}
+.logo{font-size:15px;font-weight:700;color:var(--acc);white-space:nowrap}
+#hinfo{font-size:11px;color:var(--text3);display:flex;align-items:center;gap:8px;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:#ccc;display:inline-block}
+.dot.on{background:#22c55e}
+nav{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;overflow-x:auto;padding:0 6px;flex-shrink:0;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{padding:10px 14px;border:none;background:none;cursor:pointer;font-size:12.5px;font-family:inherit;color:var(--text2);white-space:nowrap;border-bottom:2px solid transparent}
+nav button.on{color:var(--acc);border-bottom-color:var(--acc);font-weight:600}
+main{flex:1;overflow-y:auto;padding:14px;-webkit-overflow-scrolling:touch}
+.wrap{max-width:1180px;margin:0 auto}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.card h3{font-size:13px;color:var(--acc);margin-bottom:10px;letter-spacing:.02em}
+.sub{font-size:11.5px;color:var(--text3);line-height:1.5}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;gap:10px}
+.g4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+label{display:block;font-size:11px;color:var(--text2);margin-bottom:3px;font-weight:600}
+input,select,textarea{width:100%;padding:8px 9px;border:1px solid var(--border);border-radius:var(--rs);font-size:13.5px;font-family:inherit;background:var(--bg2);color:var(--text)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc2)}
+button.b{padding:9px 14px;border:none;border-radius:var(--rs);background:var(--acc);color:#fff;font-size:13px;font-family:inherit;cursor:pointer;font-weight:600}
+button.b:hover{background:var(--acc2)}
+button.b.sec{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+button.b.dan{background:var(--red)}
+button.b.sm{padding:6px 10px;font-size:11.5px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;padding:7px 8px;border-bottom:1.5px solid var(--border);color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+td{padding:7px 8px;border-bottom:.5px solid var(--border);vertical-align:middle}
+tr.tot td{font-weight:700;border-top:1.5px solid var(--b2);background:var(--bg3)}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tw{overflow-x:auto}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;white-space:nowrap}
+.p-red{background:var(--rbg);color:var(--red);border:1px solid var(--rbrd)}
+.p-amb{background:var(--abg);color:var(--amb);border:1px solid var(--abrd)}
+.p-grn{background:var(--gbg);color:var(--grn);border:1px solid var(--gbrd)}
+.p-blu{background:var(--bbg);color:var(--blu);border:1px solid var(--bbrd)}
+.p-gry{background:var(--bg3);color:var(--text2);border:1px solid var(--border)}
+.kpi{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px}
+.kpi .v{font-size:22px;font-weight:700;color:var(--acc);font-variant-numeric:tabular-nums}
+.kpi .l{font-size:10.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-top:2px}
+.kpi .h{font-size:11px;color:var(--text2);margin-top:4px;line-height:1.4}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:500;padding:14px}
+.mbox{background:var(--bg2);border-radius:var(--r);width:100%;max-width:620px;max-height:88dvh;overflow-y:auto;padding:16px}
+.mbox h3{font-size:15px;color:var(--acc);margin-bottom:12px}
+.empty{padding:22px;text-align:center;color:var(--text3);font-size:12.5px}
+.tag{font-size:10px;background:var(--acl);color:var(--acc);padding:1px 6px;border-radius:4px;margin-left:5px}
+.warn{background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:12px;line-height:1.5;margin-bottom:10px}
+.err{background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);padding:9px 11px;border-radius:var(--rs);font-size:12px;line-height:1.5;margin-bottom:10px}
+.ok{background:var(--gbg);border:1px solid var(--gbrd);color:var(--grn);padding:9px 11px;border-radius:var(--rs);font-size:12px;line-height:1.5;margin-bottom:10px}
+#login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9000;padding:16px}
+.lbox{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:22px;width:100%;max-width:330px}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 16px;border-radius:20px;font-size:12.5px;z-index:9999;display:none;max-width:90vw;text-align:center}
+@media(max-width:640px){
+  main{padding:10px}.card{padding:11px}
+  header{flex-wrap:wrap;padding:6px 10px;gap:6px}
+  .logo{font-size:13.5px}
+  #cuser{display:none}
+  #hinfo{flex-wrap:wrap;justify-content:flex-end}
+  .kpi .v{font-size:18px}
+}
+</style>
+</head>
+<body>
+
+<div id="loading"><div class="spin"></div><div>Cargando control de insumos…</div></div>
+
+<div id="login" style="display:none">
+  <div class="lbox">
+    <div class="logo" style="font-size:17px;margin-bottom:4px">La Madriguera</div>
+    <div class="sub" style="margin-bottom:16px">Control de insumos y recetas</div>
+    <div style="margin-bottom:9px"><label>Correo</label><input id="l-mail" type="email" autocomplete="username"></div>
+    <div style="margin-bottom:13px"><label>Contraseña</label><input id="l-pass" type="password" autocomplete="current-password"></div>
+    <button class="b" style="width:100%" id="l-btn">Entrar</button>
+    <div id="l-err" class="sub" style="color:var(--red);margin-top:9px;min-height:16px"></div>
+  </div>
+</div>
+
+<div id="app">
+  <header>
+    <div class="logo">🥬 Insumos &amp; Recetas</div>
+    <div id="hinfo"><span class="dot" id="cdot"></span><span id="cuser"></span>
+      <button class="b sec sm" id="btn-ref">↻ Ventas</button>
+      <button class="b sec sm" id="btn-pos">POS</button>
+      <button class="b sec sm" id="btn-out">Salir</button>
+    </div>
+  </header>
+  <nav id="nav"></nav>
+  <main><div class="wrap" id="view"></div></main>
+</div>
+
+<div id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBzAwD0HBDhWe7u_1o1toLPJLhiduHVJyo",
+  authDomain: "la-madriguera-cb489.firebaseapp.com",
+  projectId: "la-madriguera-cb489",
+  storageBucket: "la-madriguera-cb489.firebasestorage.app",
+  messagingSenderId: "648077569073",
+  appId: "1:648077569073:web:7b438dfdac9d5fef063910"
+};
+const fbApp=initializeApp(firebaseConfig);
+const db=getFirestore(fbApp);
+const auth=getAuth(fbApp);
+
+/* ═══════════ Colecciones ═══════════ */
+const C_INS='inv_insumos', C_REC='inv_recetas', C_COM='inv_compras', C_CON='inv_conteos', C_MER='inv_merma';
+const VENTAS_COL='ventas', PRODUCTOS_COL='productos';
+const URL_POS='index.html';
+
+/* ═══════════ Utilidades ═══════════ */
+const localISO=d=>{const x=d?new Date(d):new Date();x.setMinutes(x.getMinutes()-x.getTimezoneOffset());return x.toISOString().slice(0,-1);};
+const hoy=()=>localISO().slice(0,10);
+const diasAtras=n=>{const d=new Date();d.setDate(d.getDate()-n);return localISO(d).slice(0,10);};
+const diaAntes=f=>{const d=new Date(f+'T12:00:00');d.setDate(d.getDate()-1);return localISO(d).slice(0,10);};
+const esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const n2=v=>{const x=Number(v);return isFinite(x)?x:0;};
+// Formato consistente con el POS: coma para miles, punto para decimales
+const fmt=v=>{const x=n2(v);return (x<0?'-$':'$')+Math.abs(x).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});};
+const q3=v=>n2(v).toLocaleString('en-US',{maximumFractionDigits:3});
+const q1=v=>n2(v).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1});
+const uid=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const authUser=()=>{try{return (auth.currentUser&&auth.currentUser.email)||'';}catch(e){return '';}};
+const $=id=>document.getElementById(id);
+let toastT=null;
+function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',2800);}
+// Mismo filtro que usa el POS para distinguir una venta real de los demás registros
+const esVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada&&!s.esActaDevolucion&&!s.esCambioPrecio;
+
+const CATS_COCINA=['Platos fuertes','Bebidas','Bebidas con alcohol','Bubble Tea','Café','Postres'];
+const UNIDADES=[['g','gramos'],['ml','mililitros'],['u','unidades']];
+
+/* ═══════════ Estado ═══════════ */
+let INS=[], REC={}, COM=[], CON=[], MER=[], PROD=[], VENTAS=[];
+let tab='alertas', listo=false;
+
+/* ═══════════ Persistencia ═══════════ */
+async function guardar(col,id,obj){
+  try{ await setDoc(doc(db,col,String(id)),obj); return true; }
+  catch(e){ console.error('guardar',col,e); toast('⚠ No se guardó: '+(e.code||e.message)); return false; }
+}
+async function borrar(col,id){
+  try{ await deleteDoc(doc(db,col,String(id))); return true; }
+  catch(e){ console.error('borrar',col,e); toast('⚠ No se borró: '+(e.code||e.message)); return false; }
+}
+
+/* ═══════════ Motor de cálculo ═══════════
+   Nada se "descuenta" al vender: todo se DERIVA de los datos que ya existen.
+   stock actual = último conteo físico
+                + compras posteriores
+                − consumo teórico según recetas (ventas posteriores)
+                − mermas registradas
+   Así el número se recalcula solo y nunca se descuadra por doble descuento. */
+
+// Última línea de conteo de un insumo: {fecha, fisico}
+function baseDe(insId){
+  let mejor=null;
+  for(const c of CON){
+    const l=(c.lineas||[]).find(x=>x.insumoId===insId);
+    if(l&&(!mejor||c.fecha>mejor.fecha)) mejor={fecha:c.fecha,fisico:n2(l.fisico)};
+  }
+  if(mejor) return mejor;
+  const i=INS.find(x=>x.id===insId);
+  return {fecha:(i&&i.fechaBase)||'2000-01-01', fisico:n2(i&&i.stockInicial)};
+}
+
+function comprasDesde(insId,desde){
+  let t=0;
+  for(const c of COM){ if(c.fecha>desde) for(const l of (c.items||[])) if(l.insumoId===insId) t+=n2(l.cant); }
+  return t;
+}
+function mermaDesde(insId,desde){
+  let t=0;
+  for(const m of MER){ if(m.fecha>desde && m.insumoId===insId) t+=n2(m.cant); }
+  return t;
+}
+
+// Consumo teórico de TODOS los insumos entre dos fechas.
+// exclDesde=true → el día "desde" NO se cuenta (se usa cuando "desde" es la fecha
+// de un conteo hecho al cierre: lo vendido ese día ya está reflejado en el físico).
+function consumoTeorico(desde,hasta,exclDesde){
+  const out={}, sinReceta={};
+  for(const v of VENTAS){
+    if(!esVenta(v)) continue;
+    const f=String(v.date).slice(0,10);
+    if(desde && (exclDesde ? f<=desde : f<desde)) continue;
+    if(hasta&&f>hasta) continue;
+    for(const it of (v.items||[])){
+      const pid=it.productId;
+      const r=REC[pid];
+      const qty=n2(it.qty)||1;
+      if(!r||!r.items||!r.items.length){
+        const p=PROD.find(x=>x.id===pid);
+        if(p&&CATS_COCINA.includes(p.category)){
+          if(!sinReceta[pid]) sinReceta[pid]={id:pid,name:it.name||p.name,qty:0,venta:0};
+          sinReceta[pid].qty+=qty; sinReceta[pid].venta+=qty*n2(it.price);
+        }
+        continue;
+      }
+      const rinde=n2(r.rinde)||1;
+      for(const li of r.items){
+        out[li.insumoId]=(out[li.insumoId]||0)+ (n2(li.cant)/rinde)*qty;
+      }
+    }
+  }
+  return {consumo:out, sinReceta:Object.values(sinReceta).sort((a,b)=>b.venta-a.venta)};
+}
+
+// Stock actual derivado, por insumo
+function stockActual(){
+  const cache={};
+  return id=>{
+    if(cache[id]!==undefined) return cache[id];
+    const b=baseDe(id);
+    const cons=consumoCache(b.fecha)[id]||0;
+    const val=b.fisico + comprasDesde(id,b.fecha) - cons - mermaDesde(id,b.fecha);
+    cache[id]=val; return val;
+  };
+}
+const _consCache={};
+function consumoCache(desde){
+  if(!_consCache[desde]) _consCache[desde]=consumoTeorico(desde,null,true).consumo;
+  return _consCache[desde];
+}
+function limpiarCache(){ for(const k in _consCache) delete _consCache[k]; }
+
+// Consumo promedio diario de los últimos N días (para días de cobertura)
+function promedioDiario(dias){
+  const d0=diasAtras(dias);
+  const c=consumoTeorico(d0,hoy()).consumo;
+  const out={};
+  for(const k in c) out[k]=c[k]/dias;
+  return out;
+}
+
+/* ═══════════ Carga ═══════════ */
+function subs(){
+  onSnapshot(collection(db,C_INS),s=>{INS=s.docs.map(d=>d.data());limpiarCache();render();},e=>errCarga('insumos',e));
+  onSnapshot(collection(db,C_REC),s=>{REC={};s.docs.forEach(d=>{const r=d.data();REC[r.productId||d.id]=r;});limpiarCache();render();},e=>errCarga('recetas',e));
+  onSnapshot(collection(db,C_COM),s=>{COM=s.docs.map(d=>d.data()).sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));limpiarCache();render();},e=>errCarga('compras',e));
+  onSnapshot(collection(db,C_CON),s=>{CON=s.docs.map(d=>d.data()).sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||''));limpiarCache();render();},e=>errCarga('conteos',e));
+  onSnapshot(collection(db,C_MER),s=>{MER=s.docs.map(d=>d.data()).sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));limpiarCache();render();},e=>errCarga('mermas',e));
+}
+function errCarga(qué,e){
+  console.error(qué,e);
+  $('view').innerHTML='<div class="err"><b>No se pudieron leer los '+esc(qué)+'.</b><br>'+esc(e.code||e.message)+
+  '<br><br>Si dice <b>permission-denied</b>, falta publicar las reglas de Firestore para las colecciones <code>inv_*</code>. Está explicado en la guía que acompaña a este archivo.</div>';
+}
+
+async function cargarProductos(){
+  try{ const s=await getDocs(collection(db,PRODUCTOS_COL)); PROD=s.docs.map(d=>d.data()); }
+  catch(e){ console.error('productos',e); PROD=[]; }
+}
+async function cargarVentas(){
+  // Trae ventas desde el conteo más antiguo relevante o 60 días atrás, lo que sea mayor
+  let desde=diasAtras(60);
+  if(CON.length){ const primera=CON[0].fecha; if(primera<desde) desde=primera; }
+  try{
+    const s=await getDocs(query(collection(db,VENTAS_COL),where('date','>=',desde)));
+    VENTAS=s.docs.map(d=>d.data());
+    limpiarCache();
+  }catch(e){ console.error('ventas',e); toast('⚠ No se pudieron leer las ventas'); }
+}
+
+/* ═══════════ Navegación ═══════════ */
+const TABS=[['alertas','⚠️ Alertas y compras'],['insumos','🥬 Insumos'],['recetas','📋 Recetas'],['compras','🧾 Compras'],['conteo','📦 Conteo'],['varianza','📊 Varianza'],['merma','🗑️ Merma']];
+function pintarNav(){
+  $('nav').innerHTML=TABS.map(([k,l])=>'<button data-t="'+k+'" class="'+(tab===k?'on':'')+'">'+l+'</button>').join('');
+  $('nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;pintarNav();render();});
+}
+
+function render(){
+  if(!listo)return;
+  const v=$('view');
+  try{
+    if(tab==='alertas')v.innerHTML=vAlertas();
+    else if(tab==='insumos')v.innerHTML=vInsumos();
+    else if(tab==='recetas')v.innerHTML=vRecetas();
+    else if(tab==='compras')v.innerHTML=vCompras();
+    else if(tab==='conteo')v.innerHTML=vConteo();
+    else if(tab==='varianza')v.innerHTML=vVarianza();
+    else if(tab==='merma')v.innerHTML=vMerma();
+    enlazar();
+  }catch(e){ console.error('render',e); v.innerHTML='<div class="err">Error al dibujar la pantalla: '+esc(e.message)+'</div>'; }
+}
+
+/* ═══════════ VISTA: Alertas ═══════════ */
+function filaEstado(stock,min,par,diasCob){
+  if(stock<=0) return ['p-red','SIN STOCK'];
+  if(stock<=min) return ['p-red','REPONER YA'];
+  if(diasCob!==null&&diasCob<3) return ['p-amb','&lt; 3 días'];
+  if(par&&stock<par*0.6) return ['p-amb','BAJO'];
+  return ['p-grn','OK'];
+}
+function vAlertas(){
+  const act=INS.filter(i=>i.activo!==false);
+  if(!act.length) return '<div class="card"><h3>Todavía no hay insumos</h3><div class="sub">Empieza en la pestaña <b>Insumos</b>: carga los 20–30 que concentran tu costo (carne, pan, queso, papas, colas, cerveza, café, leche). Luego arma sus recetas.</div></div>';
+  const st=stockActual(), prom=promedioDiario(14);
+  const filas=act.map(i=>{
+    const s=st(i.id), pd=prom[i.id]||0;
+    const dias=pd>0?(s/pd):null;
+    const [cls,txt]=filaEstado(s,n2(i.minimo),n2(i.par),dias);
+    const sug=Math.max(0,n2(i.par)-s);
+    return {i,s,pd,dias,cls,txt,sug};
+  });
+  const urg=filas.filter(f=>f.cls==='p-red').length, aten=filas.filter(f=>f.cls==='p-amb').length;
+  const compra=filas.filter(f=>f.sug>0&&(f.cls==='p-red'||f.cls==='p-amb'));
+  const costoCompra=compra.reduce((a,f)=>a+f.sug*n2(f.i.costoUnit),0);
+  filas.sort((a,b)=>{const o={'p-red':0,'p-amb':1,'p-grn':2};return o[a.cls]-o[b.cls]||(a.dias??999)-(b.dias??999);});
+
+  let h='<div class="grid g4" style="margin-bottom:12px">'+
+    kpi(urg,'Reponer ya','Están en o bajo el mínimo')+
+    kpi(aten,'Por terminarse','Menos de 3 días de cobertura')+
+    kpi(fmt(costoCompra),'Compra sugerida','Para volver al nivel par')+
+    kpi(act.length,'Insumos controlados','Activos en el sistema')+
+  '</div>';
+
+  h+='<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h3 style="margin:0">Semáforo de insumos</h3>'+
+     '<div class="row"><button class="b sec sm" id="a-copy">Copiar lista de compras</button><button class="b sec sm" id="a-csv">Exportar CSV</button></div></div>'+
+     '<div class="tw"><table><tr><th>Insumo</th><th class="num">Stock hoy</th><th class="num">Mínimo</th><th class="num">Par</th><th class="num">Consumo/día</th><th class="num">Días</th><th class="num">Sugerido comprar</th><th>Estado</th></tr>';
+  for(const f of filas){
+    h+='<tr><td><b>'+esc(f.i.nombre)+'</b><div class="sub">'+esc(f.i.categoria||'')+(f.i.proveedor?' · '+esc(f.i.proveedor):'')+'</div></td>'+
+       '<td class="num">'+q3(f.s)+' '+esc(f.i.unidad)+'</td>'+
+       '<td class="num">'+q3(f.i.minimo)+'</td>'+
+       '<td class="num">'+q3(f.i.par)+'</td>'+
+       '<td class="num">'+q3(f.pd)+'</td>'+
+       '<td class="num">'+(f.dias===null?'—':q1(f.dias))+'</td>'+
+       '<td class="num">'+(f.sug>0?'<b>'+q3(f.sug)+'</b> '+esc(f.i.unidad):'—')+'</td>'+
+       '<td><span class="pill '+f.cls+'">'+f.txt+'</span></td></tr>';
+  }
+  h+='</table></div>';
+  h+='<div class="sub" style="margin-top:9px">«Stock hoy» = último conteo físico + compras − consumo según recetas − merma. Si no calza con lo que ves en bodega, la diferencia es exactamente lo que hay que investigar: revísala en <b>Conteo</b> y <b>Varianza</b>.</div></div>';
+
+  const sr=consumoTeorico(diasAtras(30),hoy()).sinReceta;
+  if(sr.length){
+    h+='<div class="card"><h3>Productos de cocina y bar vendidos SIN receta (últimos 30 días)</h3>'+
+       '<div class="warn">Estas ventas no descuentan ningún insumo, así que hoy son invisibles para el control. Mientras existan, las compras nunca van a justificar.</div>'+
+       '<div class="tw"><table><tr><th>Producto</th><th class="num">Unidades vendidas</th><th class="num">Venta</th><th></th></tr>';
+    sr.slice(0,40).forEach(p=>{h+='<tr><td>'+esc(p.name)+'</td><td class="num">'+q3(p.qty)+'</td><td class="num">'+fmt(p.venta)+'</td><td><button class="b sm" data-rec="'+esc(p.id)+'">Crear receta</button></td></tr>';});
+    h+='</table></div></div>';
+  }
+  return h;
+}
+function kpi(v,l,hint){return '<div class="kpi"><div class="v">'+v+'</div><div class="l">'+l+'</div><div class="h">'+hint+'</div></div>';}
+
+/* ═══════════ VISTA: Insumos ═══════════ */
+function vInsumos(){
+  const st=stockActual();
+  let h='<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Catálogo de insumos</h3><button class="b sm" id="i-nuevo">+ Nuevo insumo</button></div>'+
+  '<div class="sub" style="margin-top:6px">Controla estrictamente solo lo que pesa en tu costo: carne, pan, queso, papas, tocino, colas, cerveza, café, leches y jarabes. Lo demás puede quedarse sin receta y solo con mínimo.</div></div>';
+  if(!INS.length) return h+'<div class="card empty">Aún no hay insumos cargados.</div>';
+  const porCat={};
+  INS.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).forEach(i=>{(porCat[i.categoria||'Sin categoría']=porCat[i.categoria||'Sin categoría']||[]).push(i);});
+  for(const cat in porCat){
+    h+='<div class="card"><h3>'+esc(cat)+'</h3><div class="tw"><table><tr><th>Insumo</th><th>Unidad control</th><th>Presentación de compra</th><th class="num">Costo unit.</th><th class="num">Mínimo</th><th class="num">Par</th><th class="num">Stock hoy</th><th></th></tr>';
+    porCat[cat].forEach(i=>{
+      h+='<tr'+(i.activo===false?' style="opacity:.45"':'')+'><td><b>'+esc(i.nombre)+'</b>'+(i.activo===false?'<span class="tag">inactivo</span>':'')+'</td>'+
+      '<td>'+esc(i.unidad)+'</td>'+
+      '<td class="sub">'+esc(i.unidadCompra||'—')+' = '+q3(i.factor||1)+' '+esc(i.unidad)+'</td>'+
+      '<td class="num">'+fmt(i.costoUnit)+' /'+esc(i.unidad)+'</td>'+
+      '<td class="num">'+q3(i.minimo)+'</td><td class="num">'+q3(i.par)+'</td>'+
+      '<td class="num"><b>'+q3(st(i.id))+'</b></td>'+
+      '<td class="num"><button class="b sec sm" data-ie="'+esc(i.id)+'">Editar</button></td></tr>';
+    });
+    h+='</table></div></div>';
+  }
+  return h;
+}
+
+function modalInsumo(id){
+  const i=INS.find(x=>x.id===id)||{id:uid('ins_'),unidad:'g',factor:1,activo:true,minimo:0,par:0,costoUnit:0,stockInicial:0,fechaBase:hoy()};
+  const nuevo=!INS.find(x=>x.id===id);
+  const cats=[...new Set(INS.map(x=>x.categoria).filter(Boolean))];
+  abrirModal((nuevo?'Nuevo insumo':'Editar insumo'),
+  '<div class="grid g3">'+
+  '<div><label>Nombre</label><input id="f-nom" value="'+esc(i.nombre||'')+'" placeholder="Carne de hamburguesa 120g"></div>'+
+  '<div><label>Categoría</label><input id="f-cat" list="dl-cat" value="'+esc(i.categoria||'')+'" placeholder="Cocina / Bar / Café"><datalist id="dl-cat">'+cats.map(c=>'<option value="'+esc(c)+'">').join('')+'</datalist></div>'+
+  '<div><label>Proveedor</label><input id="f-prov" value="'+esc(i.proveedor||'')+'"></div>'+
+  '<div><label>Unidad de control</label><select id="f-uni">'+UNIDADES.map(([u,l])=>'<option value="'+u+'"'+(i.unidad===u?' selected':'')+'>'+u+' — '+l+'</option>').join('')+'</select></div>'+
+  '<div><label>Presentación de compra</label><input id="f-ucom" value="'+esc(i.unidadCompra||'')+'" placeholder="Caja 24 / Funda 1 kg"></div>'+
+  '<div><label>Equivale a (en unidad de control)</label><input id="f-fac" type="number" step="0.001" value="'+n2(i.factor||1)+'"></div>'+
+  '<div><label>Costo por unidad de control</label><input id="f-cos" type="number" step="0.0001" value="'+n2(i.costoUnit)+'"></div>'+
+  '<div><label>Stock mínimo (alerta)</label><input id="f-min" type="number" step="0.001" value="'+n2(i.minimo)+'"></div>'+
+  '<div><label>Nivel par (hasta dónde reponer)</label><input id="f-par" type="number" step="0.001" value="'+n2(i.par)+'"></div>'+
+  (nuevo?'<div><label>Stock inicial hoy</label><input id="f-ini" type="number" step="0.001" value="0"></div>':'')+
+  '<div><label>Estado</label><select id="f-act"><option value="1"'+(i.activo!==false?' selected':'')+'>Activo</option><option value="0"'+(i.activo===false?' selected':'')+'>Inactivo</option></select></div>'+
+  '</div>'+
+  '<div class="sub" style="margin-top:9px">El <b>nivel par</b> es cuánto quieres tener después de comprar: consumo promedio durante el tiempo que tarda el proveedor, más un colchón. Si tu proveedor de pan llega cada 3 días y gastas 40 panes diarios, tu par son ~150 panes y tu mínimo ~50.</div>',
+  [['Guardar','b',async()=>{
+    const o={id:i.id,nombre:($('f-nom').value||'').trim(),categoria:($('f-cat').value||'').trim(),proveedor:($('f-prov').value||'').trim(),
+      unidad:$('f-uni').value,unidadCompra:($('f-ucom').value||'').trim(),factor:n2($('f-fac').value)||1,
+      costoUnit:n2($('f-cos').value),minimo:n2($('f-min').value),par:n2($('f-par').value),
+      activo:$('f-act').value==='1',
+      stockInicial:nuevo?n2($('f-ini').value):n2(i.stockInicial),fechaBase:i.fechaBase||hoy(),
+      updatedAt:localISO(),user:authUser()};
+    if(!o.nombre){toast('Falta el nombre');return false;}
+    await guardar(C_INS,o.id,o); toast('Insumo guardado'); return true;
+  }],
+  ...(nuevo?[]:[['Eliminar','b dan',async()=>{
+    if(!confirm('¿Eliminar '+i.nombre+'? Se mantendrán los conteos y compras históricos.'))return false;
+    await borrar(C_INS,i.id); toast('Insumo eliminado'); return true;
+  }]])]);
+}
+
+/* ═══════════ VISTA: Recetas ═══════════ */
+let recFiltro='', recCat='Todas';
+function vRecetas(){
+  const cocina=PROD.filter(p=>CATS_COCINA.includes(p.category)&&p.active!==false);
+  const cats=['Todas',...CATS_COCINA];
+  let lista=cocina;
+  if(recCat!=='Todas') lista=lista.filter(p=>p.category===recCat);
+  if(recFiltro) lista=lista.filter(p=>(p.name||'').toLowerCase().includes(recFiltro.toLowerCase()));
+  lista=lista.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const conRec=cocina.filter(p=>REC[p.id]&&REC[p.id].items&&REC[p.id].items.length).length;
+
+  let h='<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:9px"><h3 style="margin:0">Recetas (escandallo)</h3>'+
+  '<span class="pill p-blu">'+conRec+' de '+cocina.length+' productos con receta</span></div>'+
+  '<div class="row"><select id="r-cat" style="max-width:190px">'+cats.map(c=>'<option'+(recCat===c?' selected':'')+'>'+esc(c)+'</option>').join('')+'</select>'+
+  '<input id="r-q" placeholder="Buscar producto…" value="'+esc(recFiltro)+'" style="max-width:260px"></div>'+
+  '<div class="sub" style="margin-top:7px">Cada receta dice cuánto insumo sale del inventario por cada unidad vendida. Es lo que convierte «vendí 30 hamburguesas» en «salieron 3,6 kg de carne y 30 panes».</div></div>';
+
+  if(!lista.length) return h+'<div class="card empty">No hay productos que coincidan.</div>';
+  h+='<div class="card"><div class="tw"><table><tr><th>Producto</th><th>Categoría</th><th class="num">P. venta</th><th class="num">Costo receta</th><th class="num">Food cost %</th><th class="num">Margen</th><th></th></tr>';
+  for(const p of lista){
+    const r=REC[p.id];
+    const tiene=r&&r.items&&r.items.length;
+    const costo=tiene?costoReceta(r):0;
+    const pv=n2(p.price);
+    const fc=(tiene&&pv>0)?(costo/pv*100):null;
+    let cls='p-gry',txt='sin receta';
+    if(tiene){ if(fc===null)cls='p-gry',txt='—'; else if(fc<=35)cls='p-grn',txt=q1(fc)+'%'; else if(fc<=45)cls='p-amb',txt=q1(fc)+'%'; else cls='p-red',txt=q1(fc)+'%'; }
+    h+='<tr><td><b>'+esc(p.name)+'</b></td><td class="sub">'+esc(p.category)+'</td><td class="num">'+fmt(pv)+'</td>'+
+    '<td class="num">'+(tiene?fmt(costo):'—')+'</td><td class="num"><span class="pill '+cls+'">'+txt+'</span></td>'+
+    '<td class="num">'+(tiene?fmt(pv-costo):'—')+'</td>'+
+    '<td class="num"><button class="b '+(tiene?'sec ':'')+'sm" data-rec="'+esc(p.id)+'">'+(tiene?'Editar':'Crear')+'</button></td></tr>';
+  }
+  h+='</table></div><div class="sub" style="margin-top:8px">Referencia: en cafetería un food cost de <b>25–35%</b> en cocina y <b>18–25%</b> en bebidas es sano. Sobre 45% el plato se vende pero no deja.</div></div>';
+  return h;
+}
+function costoReceta(r){
+  const rinde=n2(r.rinde)||1;
+  return (r.items||[]).reduce((a,li)=>{
+    const i=INS.find(x=>x.id===li.insumoId);
+    return a + (n2(li.cant)*n2(i&&i.costoUnit));
+  },0)/rinde;
+}
+
+let recEdit=null;
+function modalReceta(pid){
+  const p=PROD.find(x=>x.id===pid); if(!p){toast('Producto no encontrado');return;}
+  recEdit=JSON.parse(JSON.stringify(REC[pid]||{productId:pid,nombre:p.name,rinde:1,items:[]}));
+  pintarModalReceta(p);
+}
+function pintarModalReceta(p){
+  const act=INS.filter(i=>i.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  let body='<div class="row" style="justify-content:space-between;margin-bottom:10px"><div><b>'+esc(p.name)+'</b><div class="sub">'+esc(p.category)+' · precio '+fmt(p.price)+'</div></div>'+
+  '<div style="max-width:130px"><label>Rinde (porciones)</label><input id="rc-rinde" type="number" step="0.1" value="'+(n2(recEdit.rinde)||1)+'"></div></div>';
+  body+='<div class="tw"><table><tr><th>Insumo</th><th class="num" style="width:120px">Cantidad</th><th class="num">Costo</th><th></th></tr>';
+  if(!recEdit.items.length) body+='<tr><td colspan="4" class="empty">Sin ingredientes todavía</td></tr>';
+  recEdit.items.forEach((li,idx)=>{
+    const i=INS.find(x=>x.id===li.insumoId);
+    body+='<tr><td>'+esc(i?i.nombre:'(insumo eliminado)')+'</td>'+
+    '<td class="num"><input type="number" step="0.001" value="'+n2(li.cant)+'" data-rq="'+idx+'" style="text-align:right"></td>'+
+    '<td class="num">'+fmt(n2(li.cant)*n2(i&&i.costoUnit))+' <span class="sub">'+esc(i?i.unidad:'')+'</span></td>'+
+    '<td class="num"><button class="b sec sm" data-rx="'+idx+'">✕</button></td></tr>';
+  });
+  const costo=costoReceta(recEdit), pv=n2(p.price), fc=pv>0?costo/pv*100:0;
+  body+='<tr class="tot"><td>Costo por porción</td><td></td><td class="num">'+fmt(costo)+'</td><td></td></tr>';
+  body+='</table></div>';
+  body+='<div class="grid g3" style="margin-top:10px"><div><label>Agregar insumo</label><select id="rc-sel"><option value="">— elegir —</option>'+act.map(i=>'<option value="'+esc(i.id)+'">'+esc(i.nombre)+' ('+esc(i.unidad)+')</option>').join('')+'</select></div>'+
+  '<div><label>Cantidad por porción</label><input id="rc-cant" type="number" step="0.001" placeholder="120"></div>'+
+  '<div style="display:flex;align-items:flex-end"><button class="b" id="rc-add" style="width:100%">Agregar</button></div></div>';
+  body+='<div class="row" style="margin-top:11px;gap:14px"><span class="pill '+(fc<=35?'p-grn':fc<=45?'p-amb':'p-red')+'">Food cost '+q1(fc)+'%</span><span class="sub">Margen por unidad: <b>'+fmt(pv-costo)+'</b></span></div>';
+
+  abrirModal('Receta',body,[
+    ['Guardar receta','b',async()=>{
+      recEdit.rinde=n2($('rc-rinde').value)||1;
+      recEdit.nombre=p.name; recEdit.productId=p.id; recEdit.updatedAt=localISO(); recEdit.user=authUser();
+      recEdit.costoUnitario=costoReceta(recEdit);
+      await guardar(C_REC,p.id,recEdit); toast('Receta guardada'); return true;
+    }],
+    ...(REC[p.id]?[['Eliminar','b dan',async()=>{if(!confirm('¿Eliminar la receta de '+p.name+'?'))return false;await borrar(C_REC,p.id);toast('Receta eliminada');return true;}]]:[])
+  ]);
+  // enlaces internos del modal
+  $('rc-add').onclick=()=>{
+    const id=$('rc-sel').value, c=n2($('rc-cant').value);
+    if(!id||c<=0){toast('Elige el insumo y la cantidad');return;}
+    if(recEdit.items.find(x=>x.insumoId===id)){toast('Ese insumo ya está en la receta');return;}
+    recEdit.rinde=n2($('rc-rinde').value)||1;
+    recEdit.items.push({insumoId:id,cant:c});
+    cerrarModal(); pintarModalReceta(p);
+  };
+  document.querySelectorAll('[data-rq]').forEach(el=>el.onchange=()=>{recEdit.items[+el.dataset.rq].cant=n2(el.value);recEdit.rinde=n2($('rc-rinde').value)||1;cerrarModal();pintarModalReceta(p);});
+  document.querySelectorAll('[data-rx]').forEach(el=>el.onclick=()=>{recEdit.items.splice(+el.dataset.rx,1);recEdit.rinde=n2($('rc-rinde').value)||1;cerrarModal();pintarModalReceta(p);});
+}
+
+/* ═══════════ VISTA: Compras ═══════════ */
+let compraEdit=null;
+function vCompras(){
+  let h='<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Compras de insumos</h3><button class="b sm" id="c-nueva">+ Registrar compra</button></div>'+
+  '<div class="sub" style="margin-top:6px">Registra aquí la <b>cantidad</b> que entra, no solo el monto. El módulo de Gastos del POS sigue llevando el dinero; esta pantalla lleva las unidades, que es lo que permite cuadrar contra las ventas.</div></div>';
+  if(!COM.length) return h+'<div class="card empty">Sin compras registradas.</div>';
+  h+='<div class="card"><div class="tw"><table><tr><th>Fecha</th><th>Proveedor</th><th>Factura</th><th>Detalle</th><th class="num">Total</th><th></th></tr>';
+  COM.slice(0,80).forEach(c=>{
+    const det=(c.items||[]).map(l=>{const i=INS.find(x=>x.id===l.insumoId);return esc(i?i.nombre:'?')+' '+q3(l.cant)+(i?' '+esc(i.unidad):'');}).join(' · ');
+    h+='<tr><td>'+esc(c.fecha)+'</td><td>'+esc(c.proveedor||'—')+'</td><td>'+esc(c.factura||'—')+'</td><td class="sub">'+det+'</td>'+
+    '<td class="num">'+fmt(c.total)+'</td><td class="num"><button class="b sec sm" data-cx="'+esc(c.id)+'">Eliminar</button></td></tr>';
+  });
+  h+='</table></div></div>';
+  return h;
+}
+function modalCompra(){
+  compraEdit={id:uid('cmp_'),fecha:hoy(),proveedor:'',factura:'',items:[],total:0};
+  pintarModalCompra();
+}
+function pintarModalCompra(){
+  const act=INS.filter(i=>i.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  let b='<div class="grid g3"><div><label>Fecha</label><input id="cp-f" type="date" value="'+esc(compraEdit.fecha)+'"></div>'+
+  '<div><label>Proveedor</label><input id="cp-p" value="'+esc(compraEdit.proveedor)+'"></div>'+
+  '<div><label>N° factura</label><input id="cp-n" value="'+esc(compraEdit.factura)+'"></div></div>';
+  b+='<div class="tw" style="margin-top:11px"><table><tr><th>Insumo</th><th class="num">Cantidad</th><th class="num">Costo total</th><th class="num">Costo unit.</th><th></th></tr>';
+  if(!compraEdit.items.length)b+='<tr><td colspan="5" class="empty">Agrega los renglones de la factura</td></tr>';
+  compraEdit.items.forEach((l,idx)=>{
+    const i=INS.find(x=>x.id===l.insumoId);
+    b+='<tr><td>'+esc(i?i.nombre:'?')+'</td><td class="num">'+q3(l.cant)+' '+esc(i?i.unidad:'')+'</td><td class="num">'+fmt(l.costo)+'</td>'+
+    '<td class="num">'+fmt(l.cant>0?l.costo/l.cant:0)+'</td><td class="num"><button class="b sec sm" data-cpx="'+idx+'">✕</button></td></tr>';
+  });
+  const tot=compraEdit.items.reduce((a,l)=>a+n2(l.costo),0);
+  b+='<tr class="tot"><td>Total</td><td></td><td class="num">'+fmt(tot)+'</td><td></td><td></td></tr></table></div>';
+  b+='<div class="grid g4" style="margin-top:10px">'+
+  '<div><label>Insumo</label><select id="cp-sel"><option value="">— elegir —</option>'+act.map(i=>'<option value="'+esc(i.id)+'">'+esc(i.nombre)+' ('+esc(i.unidad)+')</option>').join('')+'</select></div>'+
+  '<div><label>Presentaciones compradas</label><input id="cp-q" type="number" step="0.001" placeholder="2"></div>'+
+  '<div><label>Costo total del renglón</label><input id="cp-c" type="number" step="0.01" placeholder="24.00"></div>'+
+  '<div style="display:flex;align-items:flex-end"><button class="b" id="cp-add" style="width:100%">Agregar</button></div></div>'+
+  '<div class="sub" style="margin-top:6px">«Presentaciones» usa la equivalencia del insumo: si la Coca Cola está configurada como «Caja 24 = 24 u», escribe 2 y entran 48 unidades. El costo unitario se recalcula como promedio ponderado.</div>';
+
+  abrirModal('Registrar compra',b,[['Guardar compra','b',async()=>{
+    compraEdit.fecha=$('cp-f').value||hoy(); compraEdit.proveedor=($('cp-p').value||'').trim(); compraEdit.factura=($('cp-n').value||'').trim();
+    if(!compraEdit.items.length){toast('Agrega al menos un renglón');return false;}
+    compraEdit.total=compraEdit.items.reduce((a,l)=>a+n2(l.costo),0);
+    compraEdit.user=authUser(); compraEdit.createdAt=localISO();
+    const ok=await guardar(C_COM,compraEdit.id,compraEdit);
+    if(ok){ await recalcularCostos(compraEdit); toast('Compra registrada'); }
+    return ok;
+  }]]);
+  $('cp-add').onclick=()=>{
+    const id=$('cp-sel').value, q=n2($('cp-q').value), c=n2($('cp-c').value);
+    if(!id||q<=0){toast('Elige insumo y cantidad');return;}
+    const i=INS.find(x=>x.id===id);
+    compraEdit.fecha=$('cp-f').value||hoy(); compraEdit.proveedor=($('cp-p').value||'').trim(); compraEdit.factura=($('cp-n').value||'').trim();
+    compraEdit.items.push({insumoId:id,cant:q*(n2(i.factor)||1),costo:c,presentaciones:q});
+    cerrarModal(); pintarModalCompra();
+  };
+  document.querySelectorAll('[data-cpx]').forEach(el=>el.onclick=()=>{compraEdit.items.splice(+el.dataset.cpx,1);cerrarModal();pintarModalCompra();});
+}
+// Costo promedio ponderado tras una compra
+async function recalcularCostos(compra){
+  const st=stockActual();
+  for(const l of (compra.items||[])){
+    const i=INS.find(x=>x.id===l.insumoId); if(!i||n2(l.cant)<=0) continue;
+    const stockPrevio=Math.max(0,st(i.id)-n2(l.cant));
+    const costoNuevo=n2(l.costo)/n2(l.cant);
+    const pond=(stockPrevio+n2(l.cant))>0 ? (stockPrevio*n2(i.costoUnit)+n2(l.costo))/(stockPrevio+n2(l.cant)) : costoNuevo;
+    await guardar(C_INS,i.id,{...i,costoUnit:Math.round(pond*10000)/10000,ultimaCompra:compra.fecha,updatedAt:localISO()});
+  }
+}
+
+/* ═══════════ VISTA: Conteo ═══════════ */
+let conteoBorrador=null;
+function vConteo(){
+  const act=INS.filter(i=>i.activo!==false);
+  let h='<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Conteo físico</h3>'+
+  (conteoBorrador?'':'<button class="b sm" id="k-nuevo">+ Iniciar conteo</button>')+'</div>'+
+  '<div class="sub" style="margin-top:6px">Hazlo el mismo día y a la misma hora cada semana (recomendado: domingo al cierre, o lunes antes de abrir). El conteo es lo que convierte el sistema en control real: sin él, el stock teórico es solo una suposición.</div></div>';
+
+  if(conteoBorrador){
+    h+='<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:9px"><h3 style="margin:0">Conteo del '+esc(conteoBorrador.fecha)+'</h3>'+
+    '<div class="row"><button class="b sec sm" id="k-cancel">Cancelar</button><button class="b sm" id="k-save">Guardar conteo</button></div></div>'+
+    '<div class="warn">Cuenta primero y escribe después. Al guardar, el físico pasa a ser el nuevo punto de partida del stock.</div>'+
+    '<div class="tw"><table><tr><th>Insumo</th><th class="num">Teórico</th><th class="num" style="width:130px">Físico contado</th><th class="num">Diferencia</th><th class="num">Valor</th></tr>';
+    conteoBorrador.lineas.forEach((l,idx)=>{
+      const i=INS.find(x=>x.id===l.insumoId); if(!i)return;
+      const dif=(l.fisico===''||l.fisico===null||l.fisico===undefined)?null:(n2(l.fisico)-n2(l.teorico));
+      const val=dif===null?null:dif*n2(i.costoUnit);
+      h+='<tr><td><b>'+esc(i.nombre)+'</b> <span class="sub">'+esc(i.unidad)+'</span></td>'+
+      '<td class="num">'+q3(l.teorico)+'</td>'+
+      '<td class="num"><input type="number" step="0.001" data-kf="'+idx+'" value="'+(l.fisico===''?'':n2(l.fisico))+'" style="text-align:right"></td>'+
+      '<td class="num">'+(dif===null?'—':'<span class="pill '+(Math.abs(dif)<=n2(l.teorico)*0.02?'p-grn':dif<0?'p-red':'p-amb')+'">'+(dif>0?'+':'')+q3(dif)+'</span>')+'</td>'+
+      '<td class="num">'+(val===null?'—':fmt(val))+'</td></tr>';
+    });
+    const totVal=conteoBorrador.lineas.reduce((a,l)=>{const i=INS.find(x=>x.id===l.insumoId);if(!i||l.fisico==='')return a;return a+(n2(l.fisico)-n2(l.teorico))*n2(i.costoUnit);},0);
+    h+='<tr class="tot"><td>Diferencia valorizada</td><td></td><td></td><td></td><td class="num">'+fmt(totVal)+'</td></tr></table></div></div>';
+    return h;
+  }
+
+  if(!CON.length) return h+'<div class="card empty">Todavía no has hecho ningún conteo. El primero fija la línea de partida.</div>';
+  h+='<div class="card"><h3>Conteos anteriores</h3><div class="tw"><table><tr><th>Fecha</th><th class="num">Insumos contados</th><th class="num">Diferencia valorizada</th><th>Responsable</th><th></th></tr>';
+  CON.slice().reverse().forEach(c=>{
+    const val=(c.lineas||[]).reduce((a,l)=>a+n2(l.valorDif),0);
+    h+='<tr><td><b>'+esc(c.fecha)+'</b></td><td class="num">'+(c.lineas||[]).length+'</td>'+
+    '<td class="num"><span class="pill '+(val<-1?'p-red':val>1?'p-amb':'p-grn')+'">'+fmt(val)+'</span></td>'+
+    '<td class="sub">'+esc(c.user||'—')+'</td><td class="num"><button class="b sec sm" data-kx="'+esc(c.id)+'">Eliminar</button></td></tr>';
+  });
+  h+='</table></div></div>';
+  return h;
+}
+function iniciarConteo(){
+  const st=stockActual();
+  const act=INS.filter(i=>i.activo!==false).sort((a,b)=>(a.categoria||'').localeCompare(b.categoria||'')||(a.nombre||'').localeCompare(b.nombre||''));
+  if(!act.length){toast('Primero carga insumos');return;}
+  conteoBorrador={id:uid('cnt_'),fecha:hoy(),lineas:act.map(i=>({insumoId:i.id,teorico:Math.round(st(i.id)*1000)/1000,fisico:''}))};
+  render();
+}
+async function guardarConteo(){
+  const faltan=conteoBorrador.lineas.filter(l=>l.fisico===''||l.fisico===null);
+  if(faltan.length && !confirm('Hay '+faltan.length+' insumo(s) sin contar. Se guardarán con su valor teórico (sin diferencia). ¿Continuar?')) return;
+  const lineas=conteoBorrador.lineas.map(l=>{
+    const i=INS.find(x=>x.id===l.insumoId)||{};
+    const fis=(l.fisico===''||l.fisico===null)?n2(l.teorico):n2(l.fisico);
+    const dif=fis-n2(l.teorico);
+    return {insumoId:l.insumoId,nombre:i.nombre||'',teorico:n2(l.teorico),fisico:fis,dif:dif,costoUnit:n2(i.costoUnit),valorDif:dif*n2(i.costoUnit),contado:!(l.fisico===''||l.fisico===null)};
+  });
+  const c={id:conteoBorrador.id,fecha:conteoBorrador.fecha,lineas,user:authUser(),createdAt:localISO(),
+    valorDifTotal:lineas.reduce((a,l)=>a+n2(l.valorDif),0)};
+  const ok=await guardar(C_CON,c.id,c);
+  if(ok){ conteoBorrador=null; limpiarCache(); toast('Conteo guardado'); tab='varianza'; pintarNav(); render(); }
+}
+
+/* ═══════════ VISTA: Varianza ═══════════ */
+function vVarianza(){
+  if(CON.length<1) return '<div class="card"><h3>Varianza teórico vs. real</h3><div class="sub">Necesitas al menos un conteo físico guardado. Hazlo en la pestaña <b>Conteo</b>.</div></div>';
+  if(CON.length<2) return '<div class="card"><h3>Varianza teórico vs. real</h3>'+
+    '<div class="warn">Tienes un solo conteo, el del <b>'+esc(CON[0].fecha)+'</b>. Ese primero solo fija la línea de partida: no hay período que comparar todavía.</div>'+
+    '<div class="sub">La varianza aparece con el <b>segundo</b> conteo. Entre uno y otro, el sistema va acumulando: lo que compraste, lo que las recetas dicen que debió salir y la merma que declaraste. Al contar de nuevo, la diferencia entre lo que debía quedar y lo que realmente hay es tu varianza.</div></div>';
+  const ult=CON[CON.length-1];
+  const ant=CON.length>1?CON[CON.length-2]:null;
+  // Corte: todo lo posterior a esta fecha (exclusiva) pertenece al período analizado
+  const desde=ant?ant.fecha:diaAntes(INS.map(i=>i.fechaBase||'2000-01-01').sort()[0]||'2000-01-01');
+
+  const {consumo,sinReceta}=consumoTeorico(desde,ult.fecha,true);
+  const filas=[];
+  let totTeo=0,totReal=0,totVarV=0;
+  for(const l of (ult.lineas||[])){
+    const i=INS.find(x=>x.id===l.insumoId); if(!i) continue;
+    const ini = ant ? (n2((ant.lineas||[]).find(x=>x.insumoId===l.insumoId)?.fisico)) : n2(i.stockInicial);
+    const comp = comprasEntre(l.insumoId,desde,ult.fecha);
+    const merm = mermaEntre(l.insumoId,desde,ult.fecha);
+    const real = ini + comp - n2(l.fisico);             // lo que realmente salió
+    const teo  = (consumo[l.insumoId]||0) + merm;        // lo que debía salir (recetas + merma declarada)
+    const varU = real - teo;                             // + = se fue más de lo que explica la receta
+    const varV = varU * n2(i.costoUnit);
+    totTeo += teo*n2(i.costoUnit); totReal += real*n2(i.costoUnit); totVarV += varV;
+    filas.push({i,ini,comp,fis:n2(l.fisico),real,teo,merm,varU,varV,pct:teo>0?varU/teo*100:null});
+  }
+  filas.sort((a,b)=>Math.abs(b.varV)-Math.abs(a.varV));
+
+  const pctTot = totTeo>0 ? (totVarV/totTeo*100) : 0;
+  let h='<div class="card"><h3>Período analizado</h3><div class="sub">'+(ant?('Del conteo del <b>'+esc(ant.fecha)+'</b> al del <b>'+esc(ult.fecha)+'</b>'):('Desde el stock inicial hasta el conteo del <b>'+esc(ult.fecha)+'</b>'))+'</div></div>';
+  h+='<div class="grid g4" style="margin-bottom:12px">'+
+    kpi(fmt(totTeo),'Costo teórico','Lo que las recetas explican')+
+    kpi(fmt(totReal),'Costo real','Lo que de verdad salió de bodega')+
+    kpi(fmt(totVarV),'Varianza','Real − teórico, valorizada')+
+    kpi(q1(pctTot)+'%','Varianza %','Sobre el consumo teórico')+
+  '</div>';
+  h+='<div class="'+(Math.abs(pctTot)<=2?'ok':Math.abs(pctTot)<=5?'warn':'err')+'">'+
+    (Math.abs(pctTot)<=2?'<b>Bajo control.</b> Una varianza de ±2% es lo normal por redondeo de porciones y recortes.':
+     Math.abs(pctTot)<=5?'<b>Atención.</b> Entre 2% y 5% hay un problema de proceso: porciones sin pesar, recetas desactualizadas o merma no declarada.':
+     '<b>Fuera de control.</b> Más de 5% de varianza no se explica por porcionado. Revisa recepción de mercadería, consumo del personal, cortesías no registradas y ventas sin cobrar.')+'</div>';
+
+  h+='<div class="card"><h3>Detalle por insumo</h3><div class="tw"><table>'+
+  '<tr><th>Insumo</th><th class="num">Inicial</th><th class="num">+ Compras</th><th class="num">− Final</th><th class="num">= Consumo real</th><th class="num">Consumo teórico</th><th class="num">Varianza</th><th class="num">$ Varianza</th><th class="num">%</th></tr>';
+  for(const f of filas){
+    const cls = f.pct===null?'p-gry':Math.abs(f.pct)<=2?'p-grn':Math.abs(f.pct)<=5?'p-amb':'p-red';
+    h+='<tr><td><b>'+esc(f.i.nombre)+'</b> <span class="sub">'+esc(f.i.unidad)+'</span></td>'+
+    '<td class="num">'+q3(f.ini)+'</td><td class="num">'+q3(f.comp)+'</td><td class="num">'+q3(f.fis)+'</td>'+
+    '<td class="num"><b>'+q3(f.real)+'</b></td><td class="num">'+q3(f.teo)+(f.merm>0?' <span class="sub">(incl. merma '+q3(f.merm)+')</span>':'')+'</td>'+
+    '<td class="num">'+(f.varU>0?'+':'')+q3(f.varU)+'</td>'+
+    '<td class="num">'+fmt(f.varV)+'</td>'+
+    '<td class="num"><span class="pill '+cls+'">'+(f.pct===null?'—':(f.pct>0?'+':'')+q1(f.pct)+'%')+'</span></td></tr>';
+  }
+  h+='<tr class="tot"><td>Total</td><td></td><td></td><td></td><td></td><td class="num">'+fmt(totTeo)+'</td><td></td><td class="num">'+fmt(totVarV)+'</td><td class="num">'+q1(pctTot)+'%</td></tr>';
+  h+='</table></div>'+
+  '<div class="sub" style="margin-top:9px">Varianza <b>positiva</b> = salió más insumo del que las ventas justifican (merma no declarada, porciones generosas, consumo interno, faltante). Varianza <b>negativa</b> = salió menos de lo previsto: casi siempre una receta mal cargada o un conteo mal hecho.</div></div>';
+
+  if(sinReceta.length){
+    h+='<div class="card"><h3>Ventas sin receta en el período</h3><div class="warn">Estos productos consumieron insumos que el cálculo no puede atribuir. Mientras sigan sin receta, parte de la varianza de arriba es solo ruido.</div><div class="tw"><table><tr><th>Producto</th><th class="num">Vendidos</th><th class="num">Venta</th><th></th></tr>';
+    sinReceta.slice(0,25).forEach(p=>{h+='<tr><td>'+esc(p.name)+'</td><td class="num">'+q3(p.qty)+'</td><td class="num">'+fmt(p.venta)+'</td><td><button class="b sm" data-rec="'+esc(p.id)+'">Crear receta</button></td></tr>';});
+    h+='</table></div></div>';
+  }
+  return h;
+}
+function comprasEntre(id,desde,hasta){
+  let t=0; for(const c of COM){ if(c.fecha>desde&&c.fecha<=hasta) for(const l of (c.items||[])) if(l.insumoId===id) t+=n2(l.cant); } return t;
+}
+function mermaEntre(id,desde,hasta){
+  let t=0; for(const m of MER){ if(m.fecha>desde&&m.fecha<=hasta&&m.insumoId===id) t+=n2(m.cant); } return t;
+}
+
+/* ═══════════ VISTA: Merma ═══════════ */
+function vMerma(){
+  let h='<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Merma y consumo interno</h3><button class="b sm" id="m-nueva">+ Registrar merma</button></div>'+
+  '<div class="sub" style="margin-top:6px">Todo lo que sale de bodega y no se vende: se quemó, se cayó, se venció, cortesía a un cliente, consumo del personal, prueba de receta. Declararlo es lo que separa una merma normal de un faltante que hay que investigar.</div></div>';
+  if(!MER.length) return h+'<div class="card empty">Sin mermas registradas.</div>';
+  const mes=MER.filter(m=>m.fecha>=diasAtras(30));
+  const total=mes.reduce((a,m)=>{const i=INS.find(x=>x.id===m.insumoId);return a+n2(m.cant)*n2(i&&i.costoUnit);},0);
+  h+='<div class="grid g4" style="margin-bottom:12px">'+kpi(fmt(total),'Merma 30 días','Valorizada al costo')+kpi(mes.length,'Registros','Últimos 30 días')+'</div>';
+  h+='<div class="card"><div class="tw"><table><tr><th>Fecha</th><th>Insumo</th><th class="num">Cantidad</th><th class="num">Costo</th><th>Motivo</th><th>Quién</th><th></th></tr>';
+  MER.slice(0,100).forEach(m=>{
+    const i=INS.find(x=>x.id===m.insumoId);
+    h+='<tr><td>'+esc(m.fecha)+'</td><td>'+esc(i?i.nombre:'?')+'</td><td class="num">'+q3(m.cant)+' '+esc(i?i.unidad:'')+'</td>'+
+    '<td class="num">'+fmt(n2(m.cant)*n2(i&&i.costoUnit))+'</td><td class="sub">'+esc(m.motivo||'—')+'</td><td class="sub">'+esc(m.user||'')+'</td>'+
+    '<td class="num"><button class="b sec sm" data-mx="'+esc(m.id)+'">✕</button></td></tr>';
+  });
+  h+='</table></div></div>';
+  return h;
+}
+function modalMerma(){
+  const act=INS.filter(i=>i.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  abrirModal('Registrar merma',
+  '<div class="grid g3"><div><label>Fecha</label><input id="mm-f" type="date" value="'+hoy()+'"></div>'+
+  '<div><label>Insumo</label><select id="mm-i">'+act.map(i=>'<option value="'+esc(i.id)+'">'+esc(i.nombre)+' ('+esc(i.unidad)+')</option>').join('')+'</select></div>'+
+  '<div><label>Cantidad</label><input id="mm-c" type="number" step="0.001"></div></div>'+
+  '<div style="margin-top:9px"><label>Motivo</label><select id="mm-m"><option>Se dañó / venció</option><option>Error de preparación</option><option>Cortesía a cliente</option><option>Consumo del personal</option><option>Prueba de receta</option><option>Se cayó / rompió</option><option>Otro</option></select></div>'+
+  '<div style="margin-top:9px"><label>Detalle (opcional)</label><input id="mm-d" placeholder="Ej: 3 panes quemados en la plancha"></div>',
+  [['Guardar','b',async()=>{
+    const c=n2($('mm-c').value); if(c<=0){toast('Falta la cantidad');return false;}
+    const o={id:uid('mer_'),fecha:$('mm-f').value||hoy(),insumoId:$('mm-i').value,cant:c,
+      motivo:$('mm-m').value+($('mm-d').value?(' — '+$('mm-d').value.trim()):''),user:authUser(),createdAt:localISO()};
+    await guardar(C_MER,o.id,o); toast('Merma registrada'); return true;
+  }]]);
+}
+
+/* ═══════════ Modal genérico ═══════════ */
+function abrirModal(titulo,body,botones){
+  cerrarModal();
+  const d=document.createElement('div');
+  d.className='modal'; d.id='modal';
+  d.innerHTML='<div class="mbox"><h3>'+esc(titulo)+'</h3><div id="mbody">'+body+'</div>'+
+  '<div class="row" style="margin-top:14px;justify-content:flex-end" id="mbtns"><button class="b sec" id="m-close">Cerrar</button></div></div>';
+  document.body.appendChild(d);
+  d.onclick=e=>{if(e.target===d)cerrarModal();};
+  $('m-close').onclick=cerrarModal;
+  (botones||[]).forEach(([txt,cls,fn],ix)=>{
+    const b=document.createElement('button'); b.className=cls; b.textContent=txt;
+    b.onclick=async()=>{b.disabled=true;const r=await fn();b.disabled=false;if(r!==false)cerrarModal();};
+    $('mbtns').insertBefore(b,$('m-close'));
+  });
+}
+function cerrarModal(){ const m=$('modal'); if(m)m.remove(); }
+
+/* ═══════════ Enlaces de eventos ═══════════ */
+function enlazar(){
+  const on=(id,fn)=>{const e=$(id); if(e)e.onclick=fn;};
+  on('i-nuevo',()=>modalInsumo(null));
+  on('c-nueva',modalCompra);
+  on('m-nueva',modalMerma);
+  on('k-nuevo',iniciarConteo);
+  on('k-save',guardarConteo);
+  on('k-cancel',()=>{if(confirm('¿Descartar el conteo en curso?')){conteoBorrador=null;render();}});
+  on('a-copy',copiarLista);
+  on('a-csv',exportarCSV);
+  document.querySelectorAll('[data-ie]').forEach(el=>el.onclick=()=>modalInsumo(el.dataset.ie));
+  document.querySelectorAll('[data-rec]').forEach(el=>el.onclick=()=>modalReceta(el.dataset.rec));
+  document.querySelectorAll('[data-cx]').forEach(el=>el.onclick=async()=>{if(confirm('¿Eliminar esta compra?')){await borrar(C_COM,el.dataset.cx);limpiarCache();}});
+  document.querySelectorAll('[data-mx]').forEach(el=>el.onclick=async()=>{if(confirm('¿Eliminar este registro de merma?')){await borrar(C_MER,el.dataset.mx);limpiarCache();}});
+  document.querySelectorAll('[data-kx]').forEach(el=>el.onclick=async()=>{if(confirm('¿Eliminar este conteo? El stock se recalculará desde el conteo anterior.')){await borrar(C_CON,el.dataset.kx);limpiarCache();}});
+  document.querySelectorAll('[data-kf]').forEach(el=>el.onchange=()=>{conteoBorrador.lineas[+el.dataset.kf].fisico=el.value===''?'':n2(el.value);render();});
+  const rq=$('r-q'); if(rq){rq.oninput=()=>{recFiltro=rq.value;const p=rq.selectionStart;render();const e2=$('r-q');if(e2){e2.focus();e2.setSelectionRange(p,p);}};}
+  const rc=$('r-cat'); if(rc)rc.onchange=()=>{recCat=rc.value;render();};
+}
+
+function listaCompras(){
+  const st=stockActual(), prom=promedioDiario(14);
+  return INS.filter(i=>i.activo!==false).map(i=>{
+    const s=st(i.id),pd=prom[i.id]||0,dias=pd>0?s/pd:null;
+    const [cls]=filaEstado(s,n2(i.minimo),n2(i.par),dias);
+    return {i,s,sug:Math.max(0,n2(i.par)-s),cls,dias};
+  }).filter(f=>f.sug>0&&(f.cls==='p-red'||f.cls==='p-amb'));
+}
+function copiarLista(){
+  const l=listaCompras();
+  if(!l.length){toast('No hay nada que reponer');return;}
+  const txt='🛒 LISTA DE COMPRAS — La Madriguera — '+hoy()+'\n\n'+
+    l.map(f=>'• '+f.i.nombre+': '+q3(f.sug)+' '+f.i.unidad+(f.i.unidadCompra?'  ('+f.i.unidadCompra+')':'')+(f.i.proveedor?'  – '+f.i.proveedor:'')).join('\n')+
+    '\n\nCosto estimado: '+fmt(l.reduce((a,f)=>a+f.sug*n2(f.i.costoUnit),0));
+  navigator.clipboard.writeText(txt).then(()=>toast('Lista copiada — pégala en WhatsApp')).catch(()=>{
+    abrirModal('Lista de compras','<textarea rows="14" style="font-family:monospace;font-size:12px">'+esc(txt)+'</textarea>',[]);
+  });
+}
+function exportarCSV(){
+  const st=stockActual(), prom=promedioDiario(14);
+  const rows=[['Insumo','Categoria','Unidad','Stock','Minimo','Par','Consumo_dia','Dias_cobertura','Sugerido','Costo_unit','Proveedor']];
+  INS.filter(i=>i.activo!==false).forEach(i=>{
+    const s=st(i.id),pd=prom[i.id]||0;
+    rows.push([i.nombre,i.categoria||'',i.unidad,s.toFixed(3),n2(i.minimo),n2(i.par),pd.toFixed(3),pd>0?(s/pd).toFixed(1):'',Math.max(0,n2(i.par)-s).toFixed(3),n2(i.costoUnit),i.proveedor||'']);
+  });
+  const csv='﻿'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download='insumos_'+hoy()+'.csv'; a.click();
+  toast('CSV descargado');
+}
+
+/* ═══════════ Arranque ═══════════ */
+$('l-btn').onclick=async()=>{
+  const e=($('l-mail').value||'').trim(), p=$('l-pass').value||'';
+  $('l-err').textContent='';
+  try{ await signInWithEmailAndPassword(auth,e,p); }
+  catch(err){ $('l-err').textContent = err.code==='auth/invalid-credential'?'Correo o contraseña incorrectos.':(err.code||err.message); }
+};
+$('l-pass').onkeydown=e=>{if(e.key==='Enter')$('l-btn').click();};
+$('btn-out').onclick=()=>signOut(auth);
+$('btn-pos').onclick=()=>{ if(window.opener && !window.opener.closed){ window.close(); } else { location.href=URL_POS; } };
+$('btn-ref').onclick=async()=>{ $('btn-ref').disabled=true; await cargarVentas(); render(); $('btn-ref').disabled=false; toast('Ventas actualizadas ('+VENTAS.length+' registros)'); };
+
+let arrancado=false;
+onAuthStateChanged(auth,async user=>{
+  if(user){
+    $('login').style.display='none';
+    if(arrancado)return; arrancado=true;
+    $('cuser').textContent=user.email||'';
+    $('cdot').className='dot on';
+    await cargarProductos();
+    subs();
+    await new Promise(r=>setTimeout(r,1000));   // deja llegar los primeros snapshots
+    await cargarVentas();
+    listo=true;
+    $('loading').style.display='none';
+    $('app').style.display='flex';
+    pintarNav(); render();
+  }else{
+    $('loading').style.display='none';
+    $('app').style.display='none';
+    $('login').style.display='flex';
+    setTimeout(()=>$('l-mail').focus(),120);
+  }
+});
+</script>
+</body>
+</html>
