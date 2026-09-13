@@ -3542,6 +3542,8 @@ function attachDevoluciones(){
 
 // ── REPORTES ─────────────────────────────────────────────────
 let repPeriodo='semana'; // semana | mes | custom
+let repProvSel='';   // proveedor expandido en el reporte
+let repItemQ='';     // busqueda de la ficha de producto
 let repCatFilter='Todos';
 let repFechaDesde='';
 let repFechaHasta='';
@@ -3901,6 +3903,91 @@ function rReportes(){
         </div>
       </div>`).join('')}
     </div>`:''}
+
+    <!-- ── VENTAS POR PROVEEDOR ─────────────────────────── -->
+    ${(()=>{
+      const provs=mapaProveedores(ventas);
+      if(!provs.length) return '';
+      const totV=provs.reduce((a,g)=>a+g.venta,0);
+      return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--acc)">
+        <div style="font-weight:700;font-size:12px;margin-bottom:4px">\uD83E\uDDFE Corte por proveedor \u2014 todas las l\u00edneas (${provs.length})</div>
+        <div style="font-size:10.5px;color:var(--text3);margin-bottom:10px;line-height:1.5">
+          Incluye <b>todos</b> los proveedores, no solo libros. Toca uno para ver t\u00edtulo por t\u00edtulo con su ISBN y exportar su corte.
+          El proveedor y el ISBN se guardan en cada venta al momento de cobrar, as\u00ed que un corte ya emitido no cambia aunque despu\u00e9s edites el cat\u00e1logo.
+          <br>La tarjeta <b>\uD83D\uDCDA Libros vendidos por proveedor</b>, m\u00e1s arriba, exporta el mismo per\u00edodo <b>venta por venta</b> con fecha y hora \u2014 \u00fatil cuando el proveedor pide el movimiento cronol\u00f3gico.
+        </div>
+        ${provs.map(g=>`
+          <div style="border-bottom:.5px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;cursor:pointer;gap:8px" data-prov="${esc(g.prov)}">
+              <div style="min-width:0;flex:1">
+                <span style="font-weight:600;font-size:12px">${esc(g.prov)}</span>
+                ${g.consignado?'<span class="badge ba" style="margin-left:6px">consignado</span>':''}
+                <div style="font-size:10px;color:var(--text3)">${g.items.length} t\u00edtulo(s) \u00b7 ${g.uds} unidad(es)</div>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div style="font-weight:700;font-size:12px">${fmt(g.venta)}</div>
+                ${g.consignado?`<div style="font-size:10px;color:var(--text3)">a pagar ${fmt(g.venta*PCT_CONSIGNANTE)}</div>`:`<div style="font-size:10px;color:var(--text3)">${totV>0?Math.round(g.venta/totV*100):0}% del total</div>`}
+              </div>
+              <span style="color:var(--text3);font-size:11px;flex-shrink:0">${repProvSel===g.prov?'\u25b2':'\u25bc'}</span>
+            </div>
+            ${repProvSel===g.prov?`<div style="padding:0 0 10px 0">
+              <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px">
+                <tr><th style="text-align:left;padding:5px;border-bottom:1px solid var(--border)">ISBN / c\u00f3digo</th>
+                <th style="text-align:left;padding:5px;border-bottom:1px solid var(--border)">T\u00edtulo</th>
+                <th style="text-align:right;padding:5px;border-bottom:1px solid var(--border)">Uds</th>
+                <th style="text-align:right;padding:5px;border-bottom:1px solid var(--border)">P. venta</th>
+                <th style="text-align:right;padding:5px;border-bottom:1px solid var(--border)">Total</th></tr>
+                ${g.items.map(it=>`<tr>
+                  <td style="padding:5px;border-bottom:.5px solid var(--border);font-family:monospace;font-size:10.5px">${esc(it.isbn||'\u2014')}</td>
+                  <td style="padding:5px;border-bottom:.5px solid var(--border)">${esc(it.name)}</td>
+                  <td style="padding:5px;text-align:right;border-bottom:.5px solid var(--border)">${it.uds}</td>
+                  <td style="padding:5px;text-align:right;border-bottom:.5px solid var(--border)">${fmt(it.precio)}</td>
+                  <td style="padding:5px;text-align:right;border-bottom:.5px solid var(--border);font-weight:600">${fmt(it.venta)}</td></tr>`).join('')}
+                <tr><td colspan="4" style="padding:6px 5px;font-weight:700;border-top:1px solid var(--b2)">Total ${esc(g.prov)}</td>
+                <td style="padding:6px 5px;text-align:right;font-weight:700;border-top:1px solid var(--b2)">${fmt(g.venta)}</td></tr>
+                ${g.consignado?`<tr><td colspan="4" style="padding:4px 5px;color:var(--text2)">Le corresponde (${Math.round(PCT_CONSIGNANTE*100)}%)</td>
+                <td style="padding:4px 5px;text-align:right;font-weight:700;color:var(--grn)">${fmt(g.venta*PCT_CONSIGNANTE)}</td></tr>`:''}
+              </table></div>
+              <button class="btn btn-g btn-sm" style="margin-top:8px" data-provcsv="${esc(g.prov)}">\u2193 Exportar el corte de ${esc(g.prov)}</button>
+            </div>`:''}
+          </div>`).join('')}
+      </div>`;
+    })()}
+
+    <!-- ── FICHA DE UN PRODUCTO ─────────────────────────── -->
+    ${(()=>{
+      const f=fichaProducto(ventas,repItemQ);
+      return `<div class="card" style="margin-bottom:12px">
+        <div style="font-weight:700;font-size:12px;margin-bottom:4px">Movimiento de un producto</div>
+        <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">Escribe parte del nombre o el ISBN. Usa el per\u00edodo elegido arriba.</div>
+        <input id="rep-item-q" value="${esc(repItemQ)}" placeholder="Ej: hamburguesa, 9788417851194\u2026"
+          style="width:100%;max-width:340px;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-family:inherit;font-size:13px;box-sizing:border-box">
+        ${!f?`<div style="font-size:11px;color:var(--text3);margin-top:8px">Escribe al menos 2 caracteres.</div>`:
+          (f.productos.length===0?`<div style="font-size:11px;color:var(--text3);margin-top:8px">Sin ventas de ese producto en el per\u00edodo.</div>`:
+          `<div style="margin-top:10px">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+              <span class="badge bg">${f.uds} unidad(es)</span>
+              <span class="badge bg">${fmt(f.venta)} vendidos</span>
+              <span class="badge ba">${f.productos.length} producto(s) coinciden</span>
+              <span class="badge ba">${f.dias.length} d\u00eda(s) con venta</span>
+            </div>
+            ${f.productos.map(pr=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:.5px solid var(--border);font-size:11.5px;gap:8px">
+              <div style="min-width:0;flex:1"><b>${esc(pr.name)}</b>
+                <div style="font-size:10px;color:var(--text3)">${pr.isbn?esc(pr.isbn)+' \u00b7 ':''}${esc(pr.prov||'sin proveedor')}</div></div>
+              <div style="text-align:right;flex-shrink:0"><div style="font-weight:700">${pr.uds} uds</div><div style="font-size:10px;color:var(--text3)">${fmt(pr.venta)}</div></div>
+            </div>`).join('')}
+            <div style="font-weight:600;font-size:11.5px;margin:10px 0 4px">D\u00eda por d\u00eda</div>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px">
+              <tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">D\u00eda</th>
+              <th style="text-align:right;padding:4px;border-bottom:1px solid var(--border)">Unidades</th>
+              <th style="text-align:right;padding:4px;border-bottom:1px solid var(--border)">Venta</th></tr>
+              ${f.dias.map(d=>`<tr><td style="padding:4px;border-bottom:.5px solid var(--border)">${new Date(d.dia+'T12:00:00').toLocaleDateString('es-EC',{weekday:'short',day:'numeric',month:'short'})}</td>
+              <td style="padding:4px;text-align:right;border-bottom:.5px solid var(--border);font-weight:600">${d.uds}</td>
+              <td style="padding:4px;text-align:right;border-bottom:.5px solid var(--border)">${fmt(d.venta)}</td></tr>`).join('')}
+            </table></div>
+          </div>`)}
+      </div>`;
+    })()}
   </div>`;
 }
 
@@ -3934,7 +4021,81 @@ function checkAutoBackup(){
   }catch(e){}
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  VENTAS POR PROVEEDOR y FICHA DE PRODUCTO
+// ═══════════════════════════════════════════════════════════════
+//  Cada renglon vendido ya guarda proveedor, editorial e ISBN desde
+//  el momento del cobro. Eso es importante: el reporte no depende del
+//  catalogo actual, sino de como estaba el producto cuando se vendio.
+//  Si mañana cambias de proveedor o corriges un ISBN, los cortes ya
+//  emitidos siguen cuadrando.
+// ═══════════════════════════════════════════════════════════════
+function ventasDelPeriodo(){
+  const f=getRangeFilter();
+  return S.filter(x=>isVenta(x)&&f(x));
+}
+function mapaProveedores(ventas){
+  const m={};
+  ventas.forEach(s=>(s.items||[]).forEach(i=>{
+    const prov=((i.proveedor||'')+'').trim()||'(sin proveedor)';
+    if(!m[prov]) m[prov]={prov,uds:0,venta:0,items:{},consignado:/^Consignaci/i.test(prov)};
+    const g=m[prov];
+    const uds=+i.qty||0, tot=(+i.price||0)*uds;
+    g.uds+=uds; g.venta+=tot;
+    const k=(i.isbn||i.name||'?');
+    if(!g.items[k]) g.items[k]={isbn:i.isbn||'',name:i.name||'?',editorial:i.editorial||'',uds:0,venta:0,precio:+i.price||0};
+    g.items[k].uds+=uds; g.items[k].venta+=tot;
+  }));
+  return Object.values(m).map(g=>({...g,items:Object.values(g.items).sort((a,b)=>b.venta-a.venta)}))
+    .sort((a,b)=>b.venta-a.venta);
+}
+function fichaProducto(ventas,q){
+  q=(q||'').trim().toLowerCase();
+  if(q.length<2) return null;
+  const prods={}, dias={};
+  let uds=0, venta=0;
+  ventas.forEach(s=>(s.items||[]).forEach(i=>{
+    const nom=((i.name||'')+'').toLowerCase(), isbn=((i.isbn||'')+'').toLowerCase();
+    if(nom.indexOf(q)<0 && (!isbn||isbn.indexOf(q)<0)) return;
+    const u=+i.qty||0, t=(+i.price||0)*u;
+    uds+=u; venta+=t;
+    const k=i.name||'?';
+    if(!prods[k]) prods[k]={name:i.name||'?',isbn:i.isbn||'',prov:i.proveedor||'',uds:0,venta:0};
+    prods[k].uds+=u; prods[k].venta+=t;
+    const d=(s.date||'').slice(0,10);
+    if(!dias[d]) dias[d]={dia:d,uds:0,venta:0};
+    dias[d].uds+=u; dias[d].venta+=t;
+  }));
+  return {uds,venta,
+    productos:Object.values(prods).sort((a,b)=>b.venta-a.venta),
+    dias:Object.values(dias).sort((a,b)=>b.dia.localeCompare(a.dia))};
+}
+
 function attachReportes(){
+  const _mc=document.getElementById('mc');
+  _mc.querySelectorAll('[data-prov]').forEach(el=>el.addEventListener('click',()=>{
+    repProvSel = (repProvSel===el.dataset.prov) ? '' : el.dataset.prov; render();
+  }));
+  _mc.querySelectorAll('[data-provcsv]').forEach(el=>el.addEventListener('click',ev=>{
+    ev.stopPropagation();
+    const prov=el.dataset.provcsv;
+    const g=mapaProveedores(ventasDelPeriodo()).find(x=>x.prov===prov);
+    if(!g) return;
+    const rows=[['Proveedor','ISBN/Codigo','Titulo','Editorial','Unidades','Precio venta','Total']];
+    g.items.forEach(it=>rows.push([prov,it.isbn,it.name,it.editorial,it.uds,it.precio.toFixed(2),it.venta.toFixed(2)]));
+    rows.push(['','','','TOTAL',g.uds,'',g.venta.toFixed(2)]);
+    if(g.consignado) rows.push(['','','','LE CORRESPONDE ('+Math.round(PCT_CONSIGNANTE*100)+'%)','','',(g.venta*PCT_CONSIGNANTE).toFixed(2)]);
+    const csv='\uFEFF'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\n');
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    a.download='corte_'+prov.replace(/[^a-zA-Z0-9]+/g,'_')+'_'+today()+'.csv'; a.click();
+  }));
+  const _q=_mc.querySelector('#rep-item-q');
+  if(_q) _q.addEventListener('input',()=>{
+    const pos=_q.selectionStart; repItemQ=_q.value; render();
+    const n=document.getElementById('rep-item-q');
+    if(n){ n.focus(); try{ n.setSelectionRange(pos,pos); }catch(e){} }
+  });
   const mc=document.getElementById('mc');
   mc.querySelector('#bbackup')?.addEventListener('click',()=>{
     descargarRespaldo();
