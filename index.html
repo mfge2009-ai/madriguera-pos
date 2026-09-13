@@ -217,7 +217,9 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 <div id="app">
   <header>
     <div class="logo">La Madriguera</div>
-    <div id="hinfo"><div class="dot" id="cdot"></div><span id="hturno" style="color:var(--acc);font-weight:600"></span><span id="htime"></span></div>
+    <div id="hinfo"><div class="dot" id="cdot"></div><span id="hturno" style="color:var(--acc);font-weight:600"></span><span id="htime"></span>
+      <button id="btn-salir" title="Cerrar sesion" style="margin-left:10px;padding:4px 10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--bg3);font-family:inherit;font-size:11px;cursor:pointer">Cerrar sesion</button>
+    </div>
   </header>
   <div id="tbar"></div>
   <nav>
@@ -462,7 +464,12 @@ function avisoError(msg){
 
 // ── Estado ───────────────────────────────────────────────────
 let P=[],T=[],S=[];
-let turnoUser=localStorage.getItem('madu_turno')||'';
+// El turno YA NO se elige de una lista: se deriva de la cuenta con la que se
+// inicio sesion. Antes era un boton que cualquiera pulsaba, asi que el campo
+// "quien atendio" se podia falsear en dos clics; ahora es la identidad real.
+let turnoUser='';
+let MI_NOMBRE='';
+let _diaSesion='';
 let CL=[]; // clientes frecuentes
 let CG={consignantes:[],libros:[],liquidaciones:[]}; // consignación
 let NOM={empleados:[],anticipos:[],pagos:[]}; // nómina: sueldo fijo + anticipos
@@ -551,9 +558,12 @@ function _admPedirDatos(accion){
   });
 }
 
-async function pedirAutorizacionAdmin(accion){
+async function pedirAutorizacionAdmin(accion, extra){
+  // "extra" viaja tal cual a la bitacora: sirve para dejar el rastro concreto
+  // (que venta, que mesa, que productos) y no solo el monto.
+  const _ex = extra || {};
   if(_admOK && Date.now()<_admOK.exp){
-    bitacora('autorizacion_reutilizada',{accion:accion||'', autorizadoPor:_admOK.email, autorizadoUid:_admOK.uid});
+    bitacora('autorizacion_reutilizada',Object.assign({accion:accion||'', autorizadoPor:_admOK.email, autorizadoUid:_admOK.uid},_ex));
     return _admOK;
   }
   const cred=await _admPedirDatos(accion);
@@ -571,21 +581,21 @@ async function pedirAutorizacionAdmin(accion){
     const rol=snap.exists()?(snap.data().rol||''):'';
     if(!snap.exists()){
       alert('Esa cuenta no tiene rol asignado en Firebase.\nAccion NO autorizada.');
-      bitacora('autorizacion_rechazada',{accion:accion||'', motivo:'la cuenta no tiene rol asignado', correoIntento:cred.email});
+      bitacora('autorizacion_rechazada',Object.assign({accion:accion||'', motivo:'la cuenta no tiene rol asignado', correoIntento:cred.email},_ex));
     } else if(rol!=='admin'){
       alert('Esa cuenta tiene rol "'+rol+'", no de administracion.\nAccion NO autorizada.');
-      bitacora('autorizacion_rechazada',{accion:accion||'', motivo:'rol insuficiente: '+rol, correoIntento:cred.email});
+      bitacora('autorizacion_rechazada',Object.assign({accion:accion||'', motivo:'rol insuficiente: '+rol, correoIntento:cred.email},_ex));
     } else {
       r={uid:u.uid, email:u.email, exp:Date.now()+ADM_MINUTOS*60000};
       _admOK=r;
-      bitacora('autorizacion_concedida',{accion:accion||'', autorizadoPor:u.email, autorizadoUid:u.uid});
+      bitacora('autorizacion_concedida',Object.assign({accion:accion||'', autorizadoPor:u.email, autorizadoUid:u.uid},_ex));
     }
     try{ await signOut(auth2); }catch(e){}
   }catch(e){
     const c=(e&&e.code)||'';
     if(c==='auth/invalid-credential'||c==='auth/wrong-password'||c==='auth/user-not-found'||c==='auth/invalid-email')
       { alert('Correo o contrasena incorrectos. Accion NO autorizada.');
-        bitacora('autorizacion_rechazada',{accion:accion||'', motivo:'correo o contrasena incorrectos', correoIntento:(cred&&cred.email)||''}); }
+        bitacora('autorizacion_rechazada',Object.assign({accion:accion||'', motivo:'correo o contrasena incorrectos', correoIntento:(cred&&cred.email)||''},_ex)); }
     else if(c==='permission-denied')
       alert('No se pudo leer el rol de esa cuenta.\nRevisa las reglas de Firestore para la coleccion roles.');
     else if(c==='auth/too-many-requests')
@@ -652,6 +662,31 @@ async function cargarBitacora(dias){
   }
 }
 
+// Para un registro de anulacion, encuentra la venta correspondiente.
+// Los registros nuevos traen ventaId; los anteriores se buscan por monto
+// y cercania en el tiempo entre las ventas marcadas como anuladas.
+function ventaDelRegistro(b){
+  try{
+    if(b.ventaId){ const v=S.find(x=>String(x.id)===String(b.ventaId)); if(v) return v; }
+    if(!/Anular venta/i.test(b.accion||'')) return null;
+    const m=/\$\s*([\d.,]+)/.exec(b.accion||''); if(!m) return null;
+    const monto=parseFloat(m[1].replace(/,/g,''));
+    if(!isFinite(monto)) return null;
+    const t=new Date(b.fecha).getTime();
+    const cand=S.filter(x=>x.anulada && Math.abs((+x.total||0)-monto)<0.005);
+    if(!cand.length) return null;
+    cand.sort((a,c)=>Math.abs(new Date(a.fechaAnulacion||a.date).getTime()-t)-Math.abs(new Date(c.fechaAnulacion||c.date).getTime()-t));
+    return cand[0];
+  }catch(e){ return null; }
+}
+function detalleDelRegistro(b){
+  if(b.detalle) return {texto:b.detalle, mesa:b.mesa||'', origen:'registrado'};
+  const v=ventaDelRegistro(b);
+  if(!v) return null;
+  const txt=(v.items||[]).map(i=>(i.qty||1)+'x '+(i.name||'?')+(i.variant?' ('+i.variant+')':'')).join(', ');
+  return {texto:txt||'(sin productos)', mesa:v.tableName||'', origen:'reconstruido', motivo:v.motivoAnulacion||''};
+}
+
 function bitFiltrada(){
   return BIT.filter(b=>
     (bitPersona==='Todas'||b.usuario===bitPersona) &&
@@ -709,6 +744,12 @@ function rBitacora(){
           ${b.motivo?` \u00b7 ${esc(b.motivo)}`:''}
           ${b.correoIntento?` \u00b7 intent\u00f3 con ${esc(b.correoIntento)}`:''}
         </div>
+        ${(()=>{ const d=detalleDelRegistro(b); if(!d) return '';
+          return `<div style="margin-top:5px;padding:6px 8px;background:var(--bg3);border-radius:var(--rs);font-size:11px;line-height:1.5">
+            ${d.mesa?`<b>${esc(d.mesa)}</b> \u00b7 `:''}${esc(d.texto)}
+            ${d.motivo?`<div style="color:var(--red);margin-top:2px">Motivo: ${esc(d.motivo)}</div>`:''}
+            ${d.origen==='reconstruido'?`<div style="color:var(--text3);margin-top:2px;font-size:10px">Detalle recuperado de la venta anulada (este registro es anterior a la mejora)</div>`:''}
+          </div>`; })()}
       </div>
       <span class="badge ${rechazado?'br':(b.evento==='inicio_sesion'?'ba':'bg')}" style="flex-shrink:0">${esc(BIT_ETIQUETAS[b.evento]||b.evento)}</span>
     </div>`;
@@ -728,8 +769,9 @@ function attachBitacora(){
   if(ee) ee.addEventListener('change',()=>{ bitEvento=ee.value; render(); });
   const cs=mc.querySelector('#bit-csv');
   if(cs) cs.addEventListener('click',()=>{
-    const rows=[['Fecha','Evento','Accion','Opero (cuenta)','Turno','Autorizo','Motivo','Correo del intento']];
-    bitFiltrada().forEach(b=>rows.push([b.fecha||'',BIT_ETIQUETAS[b.evento]||b.evento||'',b.accion||'',b.usuario||'',b.turno||'',b.autorizadoPor||'',b.motivo||'',b.correoIntento||'']));
+    const rows=[['Fecha','Evento','Accion','Mesa','Productos','Opero (cuenta)','Turno','Autorizo','Motivo','Correo del intento']];
+    bitFiltrada().forEach(b=>{const d=detalleDelRegistro(b)||{};
+      rows.push([b.fecha||'',BIT_ETIQUETAS[b.evento]||b.evento||'',b.accion||'',d.mesa||'',d.texto||'',b.usuario||'',b.turno||'',b.autorizadoPor||'',b.motivo||'',b.correoIntento||'']);});
     const csv='\uFEFF'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\n');
     const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
@@ -1244,7 +1286,8 @@ function showErr(){
 // ── Header/bar ───────────────────────────────────────────────
 function updateHdr(){
   const now=new Date();
-  document.getElementById('hturno').textContent=turnoUser?turnoUser+' · ':'';
+  const ht=document.getElementById('hturno');
+  if(ht){ ht.textContent=turnoUser?turnoUser+' \u00b7 ':''; ht.title=authUser()?('Sesion iniciada como '+authUser()):''; }
   document.getElementById('htime').textContent=now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'});
   // Connection + pending indicator
   const cdot=document.getElementById('cdot');
@@ -1272,7 +1315,7 @@ function render(){
   const mc=document.getElementById('mc');
   if(!mc)return;
   if(view==='pos'){
-    if(!turnoUser){showTurnoModal();return;}
+    if(!turnoUser){ turnoUser = MI_NOMBRE || authUser() || ''; }
     mc.innerHTML=rPOS();attachPOS();
   } else if(view==='productos'){mc.innerHTML=`<div class="sc">${rProductos()}</div>`;attachProd();}
   else if(view==='dashboard'){mc.innerHTML=`<div class="sc">${rDash()}</div>`;}
@@ -1950,7 +1993,10 @@ function enviarComanda(){
 async function anularVenta(ventaId){
   const venta=S.find(s=>s.id===ventaId);
   if(!venta){alert('Venta no encontrada');return;}
-  if(!await pedirAutorizacionAdmin('Anular venta de '+fmt(venta.total)))return;
+  const _resumen=(venta.items||[]).map(i=>(i.qty||1)+'x '+(i.name||'?')+(i.variant?' ('+i.variant+')':'')).join(', ');
+  if(!await pedirAutorizacionAdmin('Anular venta de '+fmt(venta.total),
+      {ventaId:String(venta.id), mesa:venta.tableName||'', detalle:_resumen, monto:+venta.total||0,
+       fechaVenta:venta.date||'', cobradaPor:venta.userAuth||venta.user||''}))return;
   const motivo=prompt('Motivo de la anulación (obligatorio):');
   if(!motivo||!motivo.trim()){alert('Debes indicar un motivo');return;}
   // Mark sale as annulled instead of deleting (keeps audit trail)
@@ -2630,7 +2676,7 @@ function rCaja(){
 
   const cierresAnteriores=S.filter(s=>s.esCierre&&s.date).sort((a,b)=>b.date.localeCompare(a.date));
   const tabs=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto;scrollbar-width:none">
-    ${['resumen','gastos','contabilidad','cierre','historial'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?'Cuadre':'Historial ('+cierresAnteriores.length+')'}</button>`).join('')}
+    ${['resumen','gastos','contabilidad','cierre','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?'Cuadre':t==='historial'?('Historial ('+cierresAnteriores.length+')'):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
   </div>`;
 
   let body='';
@@ -2887,7 +2933,9 @@ function rCaja(){
       </div>`;
   }
 
-  if(cajaTab==='historial'){
+  if(cajaTab==='reconstruccion'){ body=rReconstruccion(); }
+
+  else if(cajaTab==='historial'){
     body=`<div>
       <div style="font-size:13px;font-weight:700;margin-bottom:14px">Historial de cierres de caja</div>
       ${cierresAnteriores.length===0?'<div style="text-align:center;padding:40px;color:var(--text3)">Sin cierres registrados</div>':
@@ -2931,16 +2979,214 @@ function rCaja(){
       <span class="stitle" style="margin:0">Caja</span>
       <div style="display:flex;gap:7px;align-items:center">
         <span style="font-size:11px;color:var(--text3)">${esc(turnoUser)}</span>
-        <button class="btn btn-g btn-sm" id="bctcambio">Cambiar turno</button>
+        <button class="btn btn-g btn-sm" id="bctcambio">Cambiar de persona (cierra sesión)</button>
       </div>
     </div>
+    ${avisoSinCierre()}
     ${tabs}${body}
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  RECONSTRUCCION DE CAJA de un periodo sin cierres
+// ═══════════════════════════════════════════════════════════════
+//  Lo que NO se puede hacer: reconstruir el faltante de un dia pasado.
+//  La diferencia de caja exige el conteo fisico de ESE dia, y ese dato
+//  no existe si nadie conto. No se puede inventar.
+//
+//  Lo que SI se puede: calcular con exactitud el efectivo que DEBIO
+//  entrar y salir cada dia (eso esta en las ventas y los gastos), y
+//  contrastar el acumulado del periodo contra el efectivo real de hoy
+//  mas los depositos. Es una prueba GLOBAL: dice si el total cuadra,
+//  no que dia se descuadro. En auditoria es el procedimiento estandar
+//  cuando faltan los cortes intermedios.
+// ═══════════════════════════════════════════════════════════════
+function efectivoDeVenta(s){
+  if(s.pagosParciales&&s.pagosParciales.length>0)
+    return s.pagosParciales.filter(p=>p.metodo==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
+  return s.paymentMethod==='Efectivo' ? (+s.total||0) : 0;
+}
+function _recGet(k,d){ try{ const v=localStorage.getItem('madu_rec_'+k); return v===null?d:v; }catch(e){ return d; } }
+function _recSet(k,v){ try{ localStorage.setItem('madu_rec_'+k,v); }catch(e){} }
+
+function filasReconstruccion(desde,hasta){
+  const porDia={};
+  const tocar=d=>porDia[d]=porDia[d]||{dia:d,ventas:0,efectivo:0,gastosEf:0,gastosTot:0,anuladas:0,montoAnulado:0,descuentos:0,pedidos:0};
+  S.forEach(x=>{
+    if(!x||!x.date) return;
+    const d=x.date.slice(0,10);
+    if(d<desde||d>hasta) return;
+    if(isVenta(x)){ const f=tocar(d); f.ventas+=+x.total||0; f.efectivo+=efectivoDeVenta(x); f.pedidos++; f.descuentos+=+x.descuento||0; }
+    else if(x.anulada&&x.items){ const f=tocar(d); f.anuladas++; f.montoAnulado+=+x.total||0; }
+    else if(x.esGasto&&!x.anulada){ const f=tocar(d); f.gastosTot+=+x.total||0; if(x.paymentMethod==='Efectivo') f.gastosEf+=+x.total||0; }
+  });
+  const cierres={};
+  S.forEach(x=>{ if(x&&x.esCierre&&x.date) cierres[x.date.slice(0,10)]=x; });
+  const filas=Object.values(porDia).sort((a,b)=>a.dia.localeCompare(b.dia));
+  let acum=0;
+  filas.forEach(f=>{ f.neto=f.efectivo-f.gastosEf; acum+=f.neto; f.acumulado=acum; f.cierre=cierres[f.dia]||null; });
+  return filas;
+}
+
+function rReconstruccion(){
+  const hoy=today();
+  const desde=_recGet('desde', VENTAS_DESDE);
+  const hasta=_recGet('hasta', hoy);
+  const inicial=+_recGet('inicial','0')||0;
+  const retiros=+_recGet('retiros','0')||0;
+  const contado=+_recGet('contado','0')||0;
+
+  const filas=filasReconstruccion(desde,hasta);
+  const totEfectivo=filas.reduce((a,f)=>a+f.efectivo,0);
+  const totGastosEf=filas.reduce((a,f)=>a+f.gastosEf,0);
+  const totVentas=filas.reduce((a,f)=>a+f.ventas,0);
+  const debioAcumular=inicial+totEfectivo-totGastosEf;
+  const deberiaHaber=debioAcumular-retiros;
+  const diferencia=contado-deberiaHaber;
+  const sinCuadre=filas.filter(f=>!f.cierre).length;
+
+  const campo=(id,lbl,val,hint)=>`<div style="flex:1;min-width:150px">
+    <label style="display:block;font-size:11px;color:var(--text2);font-weight:600;margin-bottom:3px">${lbl}</label>
+    <input id="${id}" type="${id==='rec-desde'||id==='rec-hasta'?'month':'number'}" step="0.01" value="${esc(val)}"
+      style="width:100%;padding:8px;border:1px solid var(--border);border-radius:var(--rs);font-family:inherit;font-size:13px;box-sizing:border-box">
+    ${hint?`<div style="font-size:10px;color:var(--text3);margin-top:2px;line-height:1.4">${hint}</div>`:''}
+  </div>`;
+
+  let h=`<div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Per\u00edodo a reconstruir</div>
+    <div style="font-size:11.5px;color:var(--text3);line-height:1.5;margin-bottom:10px">
+      El efectivo que <b>debi\u00f3</b> entrar y salir cada d\u00eda s\u00ed se puede calcular: est\u00e1 en las ventas y los gastos.
+      Lo que no se puede reconstruir es el <b>conteo f\u00edsico</b> de un d\u00eda pasado, porque nadie lo hizo.
+      Por eso la prueba de abajo es del <b>total del per\u00edodo</b>: te dice si el conjunto cuadra, no qu\u00e9 d\u00eda se descuadr\u00f3.
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      ${campo('rec-desde','Desde el mes',desde.slice(0,7),'')}
+      ${campo('rec-hasta','Hasta el mes',hasta.slice(0,7),'')}
+      <div style="display:flex;align-items:flex-end"><button class="btn btn-acc btn-sm" id="rec-cargar">Cargar per\u00edodo</button></div>
+    </div>
+  </div>`;
+
+  h+=`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--acc)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:10px">Prueba global del per\u00edodo</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      ${campo('rec-inicial','Efectivo en caja al inicio',inicial,'Lo que hab\u00eda en la caja el primer d\u00eda del per\u00edodo. Si no lo sabes, pon 0 y el resultado ser\u00e1 aproximado por ese monto.')}
+      ${campo('rec-retiros','Dep\u00f3sitos y retiros del per\u00edodo',retiros,'Todo el efectivo que sacaste de la caja: dep\u00f3sitos al banco, pagos, retiros personales.')}
+      ${campo('rec-contado','Efectivo contado HOY',contado,'Cuenta f\u00edsicamente el dinero que hay ahora en la caja.')}
+    </div>
+    <div style="font-size:12.5px;line-height:2">
+      <div style="display:flex;justify-content:space-between"><span>Efectivo al inicio</span><span>${fmt(inicial)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span>+ Ventas cobradas en efectivo (${filas.length} d\u00edas)</span><span>${fmt(totEfectivo)}</span></div>
+      <div style="display:flex;justify-content:space-between;color:var(--red)"><span>\u2212 Gastos pagados en efectivo</span><span>${fmt(totGastosEf)}</span></div>
+      <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:4px"><span>= Debi\u00f3 acumularse</span><span style="font-weight:700">${fmt(debioAcumular)}</span></div>
+      <div style="display:flex;justify-content:space-between;color:var(--red)"><span>\u2212 Dep\u00f3sitos y retiros</span><span>${fmt(retiros)}</span></div>
+      <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:4px"><span>= Deber\u00eda haber hoy en caja</span><span style="font-weight:700">${fmt(deberiaHaber)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span>Efectivo contado hoy</span><span>${fmt(contado)}</span></div>
+    </div>
+    <div style="margin-top:10px;padding:10px;border-radius:var(--rs);background:${Math.abs(diferencia)<1?'var(--gbg)':diferencia<0?'var(--rbg)':'var(--bbg)'};border:1px solid ${Math.abs(diferencia)<1?'var(--gbrd)':diferencia<0?'var(--rbrd)':'var(--bbrd)'}">
+      <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px;color:${Math.abs(diferencia)<1?'var(--grn)':diferencia<0?'var(--red)':'var(--blu)'}">
+        <span>${diferencia<0?'FALTANTE':diferencia>0?'SOBRANTE':'CUADRA'}</span><span>${fmt(Math.abs(diferencia))}</span>
+      </div>
+      <div style="font-size:11px;margin-top:4px;color:var(--text2);line-height:1.5">
+        ${contado===0?'Escribe el efectivo contado hoy para que este n\u00famero signifique algo.':
+          (diferencia<-1?'Este faltante corresponde a TODO el per\u00edodo, no a un d\u00eda. Con los datos disponibles no se puede atribuir a una fecha: por eso el cuadre diario importa.':
+           diferencia>1?'Un sobrante suele indicar ventas cobradas en efectivo que no se registraron, o dep\u00f3sitos anotados de m\u00e1s.':
+           'El efectivo del per\u00edodo cuadra con lo registrado.')}
+      </div>
+    </div>
+  </div>`;
+
+  h+=`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div style="font-weight:700;font-size:13px">Detalle d\u00eda por d\u00eda</div>
+      <button class="btn btn-g btn-sm" id="rec-csv">\u2193 Exportar CSV</button>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">${filas.length} d\u00edas con movimiento \u00b7 ${sinCuadre} sin cuadre \u00b7 ventas del per\u00edodo ${fmt(totVentas)}</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr><th style="text-align:left;padding:6px;border-bottom:1.5px solid var(--border)">D\u00eda</th>
+      <th style="text-align:right;padding:6px;border-bottom:1.5px solid var(--border)">Ventas</th>
+      <th style="text-align:right;padding:6px;border-bottom:1.5px solid var(--border)">Efectivo</th>
+      <th style="text-align:right;padding:6px;border-bottom:1.5px solid var(--border)">Gastos ef.</th>
+      <th style="text-align:right;padding:6px;border-bottom:1.5px solid var(--border)">Neto</th>
+      <th style="text-align:right;padding:6px;border-bottom:1.5px solid var(--border)">Acumulado</th>
+      <th style="text-align:left;padding:6px;border-bottom:1.5px solid var(--border)">Se\u00f1ales</th></tr>`;
+  filas.slice().reverse().forEach(f=>{
+    const pctEf=f.ventas>0?(f.efectivo/f.ventas*100):0;
+    const señales=[];
+    if(f.anuladas>0) señales.push(`<span class="badge br">${f.anuladas} anulada(s) ${fmt(f.montoAnulado)}</span>`);
+    if(f.descuentos>0.005) señales.push(`<span class="badge ba">desc. ${fmt(f.descuentos)}</span>`);
+    if(f.ventas>0&&pctEf>95) señales.push(`<span class="badge ba">100% efectivo</span>`);
+    if(f.cierre) señales.push(`<span class="badge bg">cuadrada</span>`);
+    else señales.push(`<span class="badge" style="background:var(--bg3);color:var(--text3)">sin cuadre</span>`);
+    h+=`<tr><td style="padding:6px;border-bottom:.5px solid var(--border);white-space:nowrap">${new Date(f.dia+'T12:00:00').toLocaleDateString('es-EC',{weekday:'short',day:'numeric',month:'short'})}</td>
+      <td style="padding:6px;text-align:right;border-bottom:.5px solid var(--border)">${fmt(f.ventas)}</td>
+      <td style="padding:6px;text-align:right;border-bottom:.5px solid var(--border)">${fmt(f.efectivo)}</td>
+      <td style="padding:6px;text-align:right;border-bottom:.5px solid var(--border);color:var(--red)">${fmt(f.gastosEf)}</td>
+      <td style="padding:6px;text-align:right;border-bottom:.5px solid var(--border);font-weight:700">${fmt(f.neto)}</td>
+      <td style="padding:6px;text-align:right;border-bottom:.5px solid var(--border);color:var(--text2)">${fmt(f.acumulado)}</td>
+      <td style="padding:6px;border-bottom:.5px solid var(--border)">${señales.join(' ')}</td></tr>`;
+  });
+  h+=`</table></div>
+    <div style="font-size:11px;color:var(--text3);margin-top:9px;line-height:1.5">
+      «Neto» es el efectivo que debi\u00f3 quedar ese d\u00eda: ventas cobradas en efectivo menos gastos pagados en efectivo.
+      «Acumulado» es la suma corrida desde el inicio del per\u00edodo. Ninguno de los dos prueba que ese dinero est\u00e9: solo dice cu\u00e1nto deber\u00eda estar.
+    </div>
+  </div>`;
+  return h;
+}
+
+function attachReconstruccion(){
+  const mc=document.getElementById('mc');
+  ['inicial','retiros','contado'].forEach(k=>{
+    const el=mc.querySelector('#rec-'+k);
+    if(el) el.addEventListener('change',()=>{ _recSet(k,el.value||'0'); render(); });
+  });
+  const btn=mc.querySelector('#rec-cargar');
+  if(btn) btn.addEventListener('click',async()=>{
+    const d=mc.querySelector('#rec-desde').value, hh=mc.querySelector('#rec-hasta').value;
+    if(!d||!hh) return;
+    _recSet('desde', d+'-01');
+    const fin=new Date(hh+'-01'); fin.setMonth(fin.getMonth()+1); fin.setDate(0);
+    _recSet('hasta', localISO(fin).slice(0,10));
+    btn.textContent='Cargando\u2026'; btn.disabled=true;
+    await cargarMeses(d, hh);
+    render();
+  });
+  const csv=mc.querySelector('#rec-csv');
+  if(csv) csv.addEventListener('click',()=>{
+    const filas=filasReconstruccion(_recGet('desde',VENTAS_DESDE),_recGet('hasta',today()));
+    const rows=[['Dia','Pedidos','Ventas','Efectivo','Gastos efectivo','Neto efectivo','Acumulado','Anuladas','Monto anulado','Descuentos','Tuvo cierre']];
+    filas.forEach(f=>rows.push([f.dia,f.pedidos,f.ventas.toFixed(2),f.efectivo.toFixed(2),f.gastosEf.toFixed(2),f.neto.toFixed(2),f.acumulado.toFixed(2),f.anuladas,f.montoAnulado.toFixed(2),f.descuentos.toFixed(2),f.cierre?'si':'no']));
+    const txt='\uFEFF'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\n');
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+    a.download='reconstruccion_caja_'+today()+'.csv'; a.click();
+  });
+}
+
+// Dias con ventas que nunca se cuadraron. Sin conteo fisico no hay forma de
+// detectar un faltante, asi que conviene tenerlos a la vista.
+function diasSinCierre(){
+  const conVentas=new Set();
+  S.forEach(x=>{ if(isVenta(x)&&x.date) conVentas.add(x.date.slice(0,10)); });
+  const cerrados=new Set(S.filter(x=>x.esCierre&&x.date).map(x=>x.date.slice(0,10)));
+  const hoy=today();
+  return [...conVentas].filter(d=>d<hoy&&!cerrados.has(d)).sort().reverse();
+}
+function avisoSinCierre(){
+  const d=diasSinCierre();
+  if(!d.length) return '';
+  const muestra=d.slice(0,5).map(x=>new Date(x+'T12:00:00').toLocaleDateString('es-EC',{day:'numeric',month:'short'})).join(' \u00b7 ');
+  return `<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:10px 12px;border-radius:var(--rs);font-size:12px;line-height:1.5;margin-bottom:12px">
+    <b>${d.length} d\u00eda(s) con ventas sin cierre de caja.</b>
+    Los m\u00e1s recientes: ${muestra}${d.length>5?' \u00b7 y '+(d.length-5)+' m\u00e1s':''}.
+    <div style="margin-top:4px;font-size:11px">Un d\u00eda sin cuadre es un d\u00eda en el que un faltante no se puede detectar. El cuadre se hace en la pesta\u00f1a <b>Cuadre</b>, contando el efectivo real de la caja.</div>
   </div>`;
 }
 
 function attachCaja(){
   const mc=document.getElementById('mc');
-  mc.querySelector('#bctcambio')?.addEventListener('click',()=>{turnoUser='';localStorage.removeItem('madu_turno');view='pos';render();});
+  mc.querySelector('#bctcambio')?.addEventListener('click',()=>cerrarSesionPOS('cambio de turno'));
+  if(cajaTab==='reconstruccion') attachReconstruccion();
   mc.querySelector('#bhistmes')?.addEventListener('click',async()=>{
     if(!histMesPtr)histMesPtr=VENTAS_DESDE.slice(0,7);
     const d=new Date(histMesPtr+'-15');d.setMonth(d.getMonth()-1);
@@ -3089,7 +3335,13 @@ function attachCaja(){
     msg+='Conteo real: $'+conteo2.toFixed(2)+'\n';
     msg+='DIFERENCIA: '+(diferencia>=0?'+':'')+'$'+diferencia.toFixed(2)+'\n\n';
     if(Math.abs(diferencia)>0.5){ msg+='⚠ Hay una diferencia de $'+Math.abs(diferencia).toFixed(2)+'\n\n'; }
-    msg+='¿Confirmar cierre de caja?';
+    msg+='\u00bfConfirmar cierre de caja?';
+    // Sin conteo fisico no hay control de faltantes: cerrar con el conteo en
+    // cero produce una "diferencia" que no significa nada. Se exige contar.
+    if(!(conteo2>0)){
+      alert('Falta el CONTEO del efectivo que hay en la caja.\n\nCerrar sin contar no permite detectar un faltante: la diferencia se calcularia contra cero.\n\nCuenta el efectivo, escribe el monto y vuelve a cerrar.');
+      return;
+    }
     if(!confirm(msg))return;
     // Require PIN de administrador to close
     if(!await pedirAutorizacionAdmin('Cerrar la caja del día'))return;
@@ -3139,7 +3391,9 @@ function rInv(){
 function attachInv(){
   const mc=document.getElementById('mc');
   mc.querySelectorAll('[data-es]').forEach(el=>el.addEventListener('click',async()=>{
-    if(!await pedirAutorizacionAdmin('Editar stock'))return;
+    const _p=P.find(x=>x.id===el.dataset.es);
+    if(!await pedirAutorizacionAdmin('Editar stock de "'+((_p&&_p.name)||el.dataset.es)+'"',
+        {productoId:el.dataset.es, detalle:'Stock antes del cambio: '+el.dataset.sv+' uds'}))return;
     editStk=el.dataset.es;stkV=el.dataset.sv;render();
     const i=document.getElementById('si2');if(i){i.focus();i.select();}
   }));
@@ -4940,6 +5194,7 @@ function attachConsigna(){
 document.getElementById('nav-insumos')?.addEventListener('click',()=>{
   window.open('inventario.html','_blank');
 });
+document.getElementById('btn-salir')?.addEventListener('click',()=>cerrarSesionPOS('manual'));
 document.querySelectorAll('nav button[data-v]').forEach(btn=>btn.addEventListener('click',()=>{
   document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');view=btn.dataset.v;editP=null;cajaConf=false;editStk=null;render();
@@ -5333,11 +5588,37 @@ function patchProducts(){
 // ── FASE 2 - Autenticacion: se exige inicio de sesion antes de cargar datos ──
 const auth=getAuth(fbapp);
 let _initDone=false;
+// Cierra la sesion del POS. Cambiar de persona = volver a autenticarse:
+// es lo unico que hace que la bitacora identifique a alguien de verdad.
+async function cerrarSesionPOS(motivo){
+  const abiertas=T.filter(t=>t.order&&t.order.length>0).length;
+  if(abiertas>0 && !confirm('Hay '+abiertas+' mesa(s) con pedido abierto.\nLas mesas NO se pierden: quedan guardadas para quien entre despues.\n\n\u00bfCerrar sesion igual?')) return;
+  try{ await bitacora('cierre_sesion',{accion:'Cerro sesion ('+(motivo||'manual')+')'}); }catch(e){}
+  try{ localStorage.removeItem('madu_turno'); }catch(e){}
+  turnoUser=''; MI_NOMBRE=''; MI_ROL=''; _admOK=null; _diaSesion='';
+  try{ await signOut(auth); }catch(e){ location.reload(); }
+}
+window.cerrarSesionPOS=cerrarSesionPOS;
+
+// Vigila el cambio de dia: cada jornada debe empezar con un ingreso real.
+setInterval(()=>{
+  if(_diaSesion && today()!==_diaSesion){
+    _diaSesion='';
+    cerrarSesionPOS('cambio de dia');
+  }
+},60000);
+
 async function _prepararBitacora(user){
+  let nombre='';
   try{
     const snap=await getDoc(doc(db,'roles',user.uid));
     MI_ROL=snap.exists()?(snap.data().rol||''):'';
+    nombre=snap.exists()?(snap.data().nombre||''):'';
   }catch(e){ MI_ROL=''; }
+  MI_NOMBRE = nombre || (user.email||'').split('@')[0] || user.email || '';
+  turnoUser = MI_NOMBRE;
+  _diaSesion = today();
+  try{ localStorage.setItem('madu_turno',MI_NOMBRE); }catch(e){}
   const nb=document.getElementById('nav-bitacora');
   if(nb) nb.style.display = (MI_ROL==='admin') ? '' : 'none';
   bitacora('inicio_sesion',{accion:'Abrio el POS', rol:MI_ROL});
