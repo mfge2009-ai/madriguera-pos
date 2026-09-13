@@ -36,7 +36,7 @@ CONFIGURACIÓN FIREBASE:
   --r:10px;--rs:7px;
 }
 body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100dvh;overflow:hidden;font-size:14px}
-#app{display:none;flex-direction:column;height:100dvh}
+#app{display:none;flex-direction:column;height:calc(100dvh - var(--avisos,0px));margin-top:var(--avisos,0px)}
 #loading{display:flex;align-items:center;justify-content:center;height:100dvh;flex-direction:column;gap:14px}
 .spin{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -356,7 +356,7 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
@@ -440,9 +440,52 @@ const CAT_COLORS={
 
 // ── Firebase ─────────────────────────────────────────────────
 const fbapp=initializeApp(firebaseConfig);
-const db=getFirestore(fbapp);
+
+// ── COPIA LOCAL DE FIRESTORE ─────────────────────────────────
+// Antes, cada apertura del POS releia el catalogo COMPLETO (1.838 productos)
+// mas la ventana de ventas: ~2.100 lecturas por apertura, con una cuota diaria
+// de 50.000. Unas 23 aperturas agotaban el dia; el 12 de septiembre se llego a
+// 103.000 lecturas y el servicio quedo por encima del limite.
+// Con la copia local, al reabrir solo se traen del servidor los documentos que
+// CAMBIARON: los demas salen del disco del navegador y no se cobran.
+// Si el navegador no admite la copia (modo incognito, almacenamiento bloqueado),
+// se cae a la version de siempre en vez de dejar la caja sin abrir.
+let CACHE_LOCAL=false;
+const db=(()=>{
+  try{
+    const d=initializeFirestore(fbapp,{
+      localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})
+    });
+    CACHE_LOCAL=true;
+    return d;
+  }catch(e){
+    console.warn('Sin copia local de Firestore; se sigue sin ella:',e);
+    return getFirestore(fbapp);
+  }
+})();
+
+// ── LIMITE DE ESPERA DE LAS ESCRITURAS ───────────────────────
+// Firestore encola la escritura cuando no hay red y la promesa NO se resuelve
+// hasta que el servidor la confirma. Sin un limite, un corte de internet dejaria
+// la caja congelada a mitad de una operacion, esperando para siempre.
+// Pasado el limite se sigue adelante y se trata como pendiente: sale el aviso,
+// queda el respaldo local y la barra ambar. La escritura encolada igual sube
+// despues, y el reintento vuelve a escribir el MISMO documento con el MISMO
+// contenido, asi que repetirla no duplica ni pisa nada.
+const ESPERA_SERVIDOR_MS=6000;
+function conLimite(promesa){
+  const norm=Promise.resolve(promesa).then(v=>({ok:true,v}),e=>({ok:false,e}));
+  return new Promise((res,rej)=>{
+    const t=setTimeout(()=>{
+      const e=new Error('El servidor no confirmo la escritura');
+      e.code='unavailable';
+      rej(e);
+    },ESPERA_SERVIDOR_MS);
+    norm.then(r=>{ clearTimeout(t); r.ok?res(r.v):rej(r.e); });
+  });
+}
 const fbGet=async(k,fb)=>{try{const s=await getDoc(doc(db,'madu',k));return s.exists()?s.data().v:fb;}catch{return fb;}};
-const fbSet=async(k,v)=>{try{await setDoc(doc(db,'madu',k),{v});}catch(e){console.error(e);avisoError(msgError(e,'guardar "'+k+'"'));throw e;}};
+const fbSet=async(k,v)=>{try{await conLimite(setDoc(doc(db,'madu',k),{v}));}catch(e){console.error(e);avisoError(msgError(e,'guardar "'+k+'"'));throw e;}};
 
 // Traduce el error de Firebase a algo que el cajero entienda y pueda actuar.
 function msgError(e,accion){
@@ -476,7 +519,7 @@ function avisoError(msg){
       x.setAttribute('aria-label','Cerrar aviso');
       x.style.cssText='position:absolute;right:8px;top:7px;background:none;border:1px solid rgba(255,255,255,.5);'+
         'color:#fff;border-radius:6px;width:28px;height:26px;cursor:pointer;font-size:13px;font-family:inherit';
-      x.addEventListener('click',()=>b.remove());
+      x.addEventListener('click',()=>{b.remove();try{avisoPendientes();_ajustarAvisos();}catch(z){}});
       const t=document.createElement('span');
       t.id='aviso-error-txt';
       b.appendChild(t);b.appendChild(x);
@@ -484,8 +527,70 @@ function avisoError(msg){
     }
     const t=document.getElementById('aviso-error-txt');
     if(t)t.textContent='⚠ '+msg;
+    try{ avisoPendientes(); _ajustarAvisos(); }catch(z){}
     try{navigator.vibrate&&navigator.vibrate(200);}catch(e){}
   }catch(e){ alert('⚠ '+msg); }
+}
+
+// ── REGISTRO DEL FALLO EN LA BITACORA ────────────────────────
+// Cuando el servidor RECHAZA la escritura (permisos o cuota) si hay conexion,
+// asi que el renglon de bitacora si se puede escribir: queda constancia de que
+// alguien intento la accion y el servidor no la dejo pasar. Cuando el fallo es
+// de red no se intenta, porque tampoco llegaria.
+function registrarFallo(accion,e){
+  try{
+    const c=(e&&e.code)||'';
+    if(!c.includes('permission-denied')&&!c.includes('resource-exhausted'))return;
+    bitacora('escritura_fallida',{accion:'FALLO al '+accion,codigo:c});
+  }catch(x){}
+}
+
+// ── BARRA DE PENDIENTES POR SUBIR ────────────────────────────
+// El aviso rojo se cierra y desaparece; el punto naranja del encabezado no lo
+// mira nadie. Mientras haya datos guardados SOLO en este navegador tiene que
+// verse, porque limpiar el historial o cambiar de equipo los borra.
+function _contarPendientes(){
+  let n=0;
+  try{
+    ['tables','clientes','consigna','nomina','gastos_fijos'].forEach(k=>{
+      if(localStorage.getItem('madu_bk_'+k))n++; });
+    n+=Object.keys(JSON.parse(localStorage.getItem('madu_bk_ventas')||'{}')).length;
+    n+=(JSON.parse(localStorage.getItem('madu_bk_vdel')||'[]')).length;
+    n+=Object.keys(JSON.parse(localStorage.getItem('madu_bk_prod')||'{}')).length;
+    n+=(JSON.parse(localStorage.getItem('madu_bk_stock')||'[]')).length;
+  }catch(e){}
+  return n;
+}
+// Empuja la aplicacion hacia abajo lo que midan las barras de aviso, para que
+// nunca tapen el encabezado (turno, reloj y el boton de cerrar sesion).
+function _ajustarAvisos(){
+  try{
+    const e=document.getElementById('aviso-error');
+    const q=document.getElementById('aviso-pend');
+    const h=(e?e.offsetHeight:0)+(q?q.offsetHeight:0);
+    document.documentElement.style.setProperty('--avisos',h+'px');
+  }catch(x){}
+}
+
+function avisoPendientes(){
+  try{
+    const n=_contarPendientes();
+    let b=document.getElementById('aviso-pend');
+    if(n===0){ if(b)b.remove(); _ajustarAvisos(); return; }
+    if(!b){
+      b=document.createElement('div');
+      b.id='aviso-pend';
+      b.style.cssText='position:fixed;left:0;right:0;z-index:11900;background:#8a5a00;color:#fff;'+
+        'font-family:inherit;font-size:12.5px;font-weight:600;padding:9px 14px;line-height:1.35;'+
+        'box-shadow:0 2px 8px rgba(0,0,0,.25)';
+      document.body.appendChild(b);
+    }
+    const eb=document.getElementById('aviso-error');
+    b.style.top=(eb?eb.offsetHeight:0)+'px';
+    b.textContent='\u23F3 '+n+(n===1?' cambio guardado':' cambios guardados')+
+      ' solo en este navegador, sin subir a la nube. NO cierres la sesion ni limpies el historial hasta que este aviso desaparezca.';
+    _ajustarAvisos();
+  }catch(e){}
 }
 
 // ── Estado ───────────────────────────────────────────────────
@@ -669,9 +774,14 @@ async function bitacora(evento, datos){
       uid:(auth.currentUser&&auth.currentUser.uid)||'',
       turno:(typeof turnoUser!=='undefined'&&turnoUser)||'' };
     for(const k in (datos||{})) reg[k]=datos[k];
-    await setDoc(doc(db,'bitacora',id),reg);
+    await conLimite(setDoc(doc(db,'bitacora',id),reg));
     if(bitCargado) BIT.unshift(reg);
-  }catch(e){ console.error('bitacora:',e); }
+  }catch(e){
+    // Una accion sensible que ocurre y NO queda registrada es justo lo que la
+    // bitacora existe para impedir. Tiene que verse en el momento.
+    console.error('bitacora:',e);
+    avisoError(msgError(e,'registrar la accion en la bitacora'));
+  }
 }
 
 async function cargarBitacora(dias){
@@ -813,7 +923,9 @@ async function _write(key, data){
   _writing=true;
   if(_writeTimer) clearTimeout(_writeTimer);
   _writeTimer=setTimeout(()=>{_writing=false;},2000);
-  try{ await fbSet(key,data); }catch(e){ console.error('Write error:',e); _backupLocal(key,data); }
+  // fbSet ya muestra el aviso rojo; aqui solo queda el respaldo local y la
+  // barra de pendientes, que no se cierra hasta que el dato suba de verdad.
+  try{ await fbSet(key,data); }catch(e){ console.error('Write error:',e); _backupLocal(key,data); registrarFallo('guardar "'+key+'"',e); avisoPendientes(); }
   finally{ _writing=false; }
 }
 
@@ -850,7 +962,8 @@ async function _retryBackups(){
       localStorage.setItem('madu_bk_ventas',JSON.stringify(pend));
     }
     if(Object.keys(pend).length===0)localStorage.removeItem('madu_bk_ventas');
-  }catch(e){ console.error('Retry ventas pendientes fallo'); }
+  }catch(e){ console.error('Retry ventas pendientes fallo',e);
+    avisoError('No se pudieron subir las ventas que quedaron pendientes. Siguen guardadas en este dispositivo; no cierres la sesion.'); }
   // Eliminaciones pendientes
   try{
     const dels=JSON.parse(localStorage.getItem('madu_bk_vdel')||'[]');
@@ -858,9 +971,12 @@ async function _retryBackups(){
     for(const id of dels){
       try{ await deleteDoc(doc(db,VENTAS_COL,id)); recovered++; }catch(e){ rest.push(id); }
     }
-    if(rest.length>0)localStorage.setItem('madu_bk_vdel',JSON.stringify(rest));
+    if(rest.length>0){
+      localStorage.setItem('madu_bk_vdel',JSON.stringify(rest));
+      avisoError('Quedaron '+rest.length+' eliminacion(es) de registros sin aplicar en la nube.');
+    }
     else localStorage.removeItem('madu_bk_vdel');
-  }catch(e){}
+  }catch(e){ console.error('Retry eliminaciones fallo',e); }
   // Productos pendientes (documentos individuales en la coleccion productos)
   try{
     const pendP=JSON.parse(localStorage.getItem('madu_bk_prod')||'{}');
@@ -871,7 +987,8 @@ async function _retryBackups(){
       localStorage.setItem('madu_bk_prod',JSON.stringify(pendP));
     }
     if(Object.keys(pendP).length===0)localStorage.removeItem('madu_bk_prod');
-  }catch(e){ console.error('Retry productos pendientes fallo'); }
+  }catch(e){ console.error('Retry productos pendientes fallo',e);
+    avisoError('No se pudieron subir los cambios de productos que quedaron pendientes. Siguen guardados en este dispositivo; no cierres la sesion.'); }
   // Ajustes de stock pendientes (transacciones que no llegaron a confirmarse)
   try{
     const pendS=JSON.parse(localStorage.getItem('madu_bk_stock')||'[]');
@@ -893,13 +1010,17 @@ async function _retryBackups(){
         recovered++;
       }catch(e){ restS.push(op); }
     }
-    if(restS.length>0)localStorage.setItem('madu_bk_stock',JSON.stringify(restS));
+    if(restS.length>0){
+      localStorage.setItem('madu_bk_stock',JSON.stringify(restS));
+      avisoError('Quedaron '+restS.length+' ajuste(s) de stock sin aplicar en la nube.');
+    }
     else localStorage.removeItem('madu_bk_stock');
-  }catch(e){}
+  }catch(e){ console.error('Retry ajustes de stock fallo',e); }
   if(recovered>0){
     console.log('Recuperados '+recovered+' cambios pendientes');
     updateHdr();
   }
+  avisoPendientes();
 }
 
 // Check for pending backups (shows indicator)
@@ -943,12 +1064,15 @@ async function saveProductos(list){
     for(let i=0;i<reales.length;i+=400){
       const batch=writeBatch(db);
       reales.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),p));
-      await batch.commit();
+      await conLimite(batch.commit());
     }
     reales.forEach(p=>_lastPSync.set(String(p.id),JSON.stringify(p)));
   }catch(e){
     console.error('saveProductos:',e);
+    avisoError(msgError(e,'guardar '+reales.length+' producto(s)'));
+    registrarFallo('guardar productos',e);
     reales.forEach(_backupProd);
+    avisoPendientes();
   }finally{ _writing=false; }
 }
 
@@ -995,7 +1119,9 @@ async function ajustarStock(productId,delta){
   }catch(e){
     console.error('ajustarStock:',e);
     avisoError(msgError(e,'actualizar el stock'));
+    registrarFallo('actualizar el stock',e);
     _backupStockOp({id:String(productId),delta});
+    avisoPendientes();
   }
 }
 
@@ -1015,7 +1141,10 @@ async function fijarStock(productId,valor){
     });
   }catch(e){
     console.error('fijarStock:',e);
+    avisoError(msgError(e,'fijar el stock'));
+    registrarFallo('fijar el stock',e);
     _backupStockOp({id:String(productId),set:valor});
+    avisoPendientes();
   }
 }
 
@@ -1127,12 +1256,14 @@ async function saveVenta(r){
   S_pending.set(String(r.id),r);
   rebuildS();
   try{
-    await setDoc(doc(db,VENTAS_COL,String(r.id)),r);
+    await conLimite(setDoc(doc(db,VENTAS_COL,String(r.id)),r));
     S_pending.delete(String(r.id));
   }catch(e){
     console.error('saveVenta error:',e);
     avisoError(msgError(e,'guardar el registro'));
+    registrarFallo('guardar el registro',e);
     _backupVenta(r);
+    avisoPendientes();
   }
 }
 
@@ -1159,14 +1290,17 @@ async function deleteVenta(id){
   S_pending.delete(id); S_old.delete(id);
   S_live=S_live.filter(s=>String(s.id)!==id);
   rebuildS();
-  try{ await deleteDoc(doc(db,VENTAS_COL,id)); }
+  try{ await conLimite(deleteDoc(doc(db,VENTAS_COL,id))); }
   catch(e){
     console.error('deleteVenta error:',e);
+    avisoError(msgError(e,'eliminar el registro'));
+    registrarFallo('eliminar el registro',e);
     try{
       const dels=JSON.parse(localStorage.getItem('madu_bk_vdel')||'[]');
       if(!dels.includes(id))dels.push(id);
       localStorage.setItem('madu_bk_vdel',JSON.stringify(dels));
     }catch(e2){}
+    avisoPendientes();
   }
 }
 
@@ -1330,6 +1464,7 @@ function updateHdr(){
       cdot.title='Sin conexión';
     }
   }
+  avisoPendientes();
   const ts=openS(),tot=ts.reduce((a,x)=>a+x.total,0);
   const ocp=T.filter(t=>t.status!=='libre').length;
   document.getElementById('tbar').textContent=
@@ -5763,6 +5898,10 @@ async function openScanner(){
 
 // ── Time ticker ───────────────────────────────────────────────
 setInterval(()=>{if(online)updateHdr();},60000);
+// Si quedaron cambios sin subir, reintentar cada 2 minutos mientras haya red.
+// Sin esto, un aviso por lentitud momentanea dejaria la barra ambar encendida
+// hasta la siguiente recarga, y un aviso que no se apaga deja de leerse.
+setInterval(()=>{ try{ if(navigator.onLine && _contarPendientes()>0) _retryBackups(); }catch(e){} },120000);
 
 // ── PWA: service worker para operacion offline real ─────────
 // Solo se registra sobre https o localhost (requisito del navegador).
