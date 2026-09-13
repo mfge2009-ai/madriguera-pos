@@ -385,7 +385,33 @@ async function cargarSemilla(){
 
 const MESA_NAMES=['Mesa 1','Mesa 2','Mesa 3','Mesa 4','Mesa 5','Mesa 6','Mesa 7','Mesa 8','Mesa 9','Mesa 10','Mesa 11','Mesa 12','Mesa 13','Cliente individual','Servientrega'];
 const INIT_TABLES=MESA_NAMES.map((n,i)=>({id:`t${i+1}`,name:n,status:'libre',order:[],comandas:[],openedAt:null}));
-const PAY=['Efectivo','T.Crédito','T.Débito','Transferencia'];
+const PAY=['Efectivo','T.Crédito','T.Débito','Transferencia']
+// ── Normalizacion de metodos de pago ──────────────────────────────
+//  Las ventas importadas del sistema anterior traen "Tarjeta De Credito"
+//  y "Tarjeta De Debito", que no coinciden con ninguno de los cuatro de
+//  arriba. Sin esto, esas ventas desaparecen del desglose por metodo y
+//  la suma de las filas no da el total (medido: 13 de 137 ventas, $243.75).
+const _PAGO_ALIAS={
+  'efectivo':'Efectivo','cash':'Efectivo',
+  't.credito':'T.Crédito','t. credito':'T.Crédito','tarjeta de credito':'T.Crédito',
+  'tarjeta credito':'T.Crédito','credito':'T.Crédito','tc':'T.Crédito',
+  't.debito':'T.Débito','t. debito':'T.Débito','tarjeta de debito':'T.Débito',
+  'tarjeta debito':'T.Débito','debito':'T.Débito','td':'T.Débito',
+  'transferencia':'Transferencia','transf':'Transferencia','deposito':'Transferencia'
+};
+function metodoPago(m){
+  const t=String(m||'').trim();
+  if(!t) return '';
+  if(PAY.indexOf(t)>=0) return t;
+  const k=t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  return _PAGO_ALIAS[k] || t;   // si no se reconoce, se devuelve tal cual y cae en "Otros"
+}
+// Efectivo cobrado en una venta, contemplando el pago dividido
+function efectivoDe(s){
+  if(s.pagosParciales&&s.pagosParciales.length>0)
+    return s.pagosParciales.filter(p=>metodoPago(p.metodo)==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
+  return metodoPago(s.paymentMethod)==='Efectivo' ? (+s.total||0) : 0;
+};
 // Categorías de gasto: [nombre, tipo] donde tipo = 'fijo' o 'variable'
 const GASTO_CATS=[
   ['Costo mercadería (café)','variable'],
@@ -1843,7 +1869,7 @@ async function addItem(p,variant){
   const lid=p.id+'_'+(variant||'base')+(persona?'_p'+persona:'');
   const ex=t.order.find(i=>i.lid===lid);
   if(ex){ex.qty++;}
-  else{t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,qty:1,variant:variant||null,stockControl:p.stockControl||'sin_control',persona:persona});}
+  else{t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:1,variant:variant||null,stockControl:p.stockControl||'sin_control',persona:persona});}
   t.status='ocupada';
   if(!t.openedAt)t.openedAt=localISO();
   render(); // instant UI feedback
@@ -2660,7 +2686,26 @@ async function generarGastosFijos(mes){
 
 function rCaja(){
   const ts=openS(),tT=ts.reduce((a,x)=>a+x.total,0);
-  const byPay=PAY.map(m=>{let t=0,ct=0;ts.forEach(s=>{if(s.pagosParciales&&s.pagosParciales.length>0){const pp=s.pagosParciales.filter(p=>p.metodo===m);if(pp.length>0){t+=pp.reduce((a,p)=>a+p.monto,0);ct++;}}else if(s.paymentMethod===m){t+=s.total;ct++;}});return{m,t,c:ct};});
+  const byPay=(()=>{
+    const base=PAY.map(m=>({m,t:0,c:0}));
+    const otros={m:'Otros m\u00e9todos',t:0,c:0};
+    ts.forEach(s=>{
+      if(s.pagosParciales&&s.pagosParciales.length>0){
+        s.pagosParciales.forEach(p=>{
+          const mm=metodoPago(p.metodo);
+          const fila=base.find(x=>x.m===mm)||otros;
+          fila.t+=(+p.monto||0);
+        });
+        const mm0=metodoPago(s.pagosParciales[0].metodo);
+        (base.find(x=>x.m===mm0)||otros).c++;
+      } else {
+        const mm=metodoPago(s.paymentMethod);
+        const fila=base.find(x=>x.m===mm)||otros;
+        fila.t+=(+s.total||0); fila.c++;
+      }
+    });
+    return otros.c>0||otros.t>0 ? base.concat([otros]) : base;
+  })();
   const efectivoVentas=byPay[0].t;
   const gastos=S.filter(s=>s.esGasto&&!s.anulada&&s.date.startsWith(today()));
   const totalGastos=gastos.reduce((a,g)=>a+g.total,0);
@@ -2807,7 +2852,7 @@ function rCaja(){
     const lineas={'Café/Bebidas':0,'Cocina':0,'Libros':0,'Merch/Otros':0};
     ventasMes.forEach(s=>(s.items||[]).forEach(i=>{
       const p=P.find(x=>x.id===i.productId||x.name===i.name);
-      const cat=p?p.category:'';
+      const cat=catDeItem(i);
       const monto=i.price*i.qty;
       if(['Café','Bebidas','Bubble Tea','Bebidas con alcohol'].includes(cat))lineas['Café/Bebidas']+=monto;
       else if(['Platos fuertes','Postres'].includes(cat))lineas['Cocina']+=monto;
@@ -2922,7 +2967,7 @@ function rCaja(){
         <div class="fg" style="margin-bottom:10px"><label>Responsable</label>
           <input id="cresp" value="${todayCierre?.responsable||turnoUser}"${yaHayCierre?' readonly':''}></div>
         <div class="fg" style="margin-bottom:13px"><label>Observaciones</label>
-          <input id="cobs" placeholder="Notas del cierre..." value="${todayCierre?.obs||''}"${yaHayCierre?' readonly':''}></div>
+          <input id="cobs" placeholder="Notas del cierre..." value="${esc(todayCierre?.obs||'')}"${yaHayCierre?' readonly':''}></div>
         ${!yaHayCierre?`<div style="display:flex;flex-direction:column;gap:7px">
           <div style="display:flex;gap:7px">
             <button class="btn btn-b" style="flex:1;font-size:12px" id="bguardar-inicio">💾 Guardar inicio</button>
@@ -3491,7 +3536,7 @@ function rDevoluciones(){
       devoluciones.map(d=>`<div class="mrow" style="margin-bottom:6px">
         <div style="min-width:0;flex:1">
           <div style="font-weight:600;font-size:12px">${d.prodName}</div>
-          <div style="font-size:10px;color:var(--text3)">${d.proveedor} · ${esc(d.motivo)} · ${new Date(d.date).toLocaleDateString('es-EC')} · ${esc(d.user)}</div>
+          <div style="font-size:10px;color:var(--text3)">${esc(d.proveedor)} · ${esc(d.motivo)} · ${new Date(d.date).toLocaleDateString('es-EC')} · ${esc(d.user)}</div>
           ${d.obs?`<div style="font-size:10px;color:var(--text3)">${esc(d.obs)}</div>`:''}
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -3587,7 +3632,7 @@ function getRangeFilter(){
 function infoLibroItem(i){
   const prod=P.find(x=>x.id===i.productId||x.name===i.name);
   const esCg=String(i.productId||'').startsWith('cg_')||prod?.esConsignado;
-  let cat=prod?.category||(esCg?'Consignados':null);
+  let cat=(i&&i.category)||prod?.category||(esCg?'Consignados':null);
   let proveedor=i.proveedor||null, editorial=i.editorial??null, isbn=i.isbn||prod?.code||'';
   if(esCg){
     cat='Consignados';
@@ -3604,6 +3649,15 @@ function infoLibroItem(i){
   return {cat,proveedor:proveedor||'(sin proveedor)',editorial:editorial||'',isbn};
 }
 const esItemLibro=i=>{const inf=infoLibroItem(i);return inf.cat==='Libros'||inf.cat==='Consignados';};
+// Categoria de un renglon vendido. Los renglones nuevos la traen congelada
+// desde el cobro; los anteriores se resuelven contra el catalogo actual.
+// Sin esto, borrar o recategorizar un producto cambiaba reportes ya cerrados
+// (medido: 22 de 384 renglones, $212.00, caian en "Otro" y se gravaban al 15%).
+function catDeItem(i){
+  if(i && i.category) return i.category;
+  const p=P.find(x=>x.id===i.productId||x.name===i.name);
+  return (p&&p.category)||'Otro';
+}
 
 function rReportes(){
   const PERIODOS=[
@@ -3632,13 +3686,32 @@ function rReportes(){
   if(repCatFilter!=='Todos') items=items.filter(i=>i.cat===repCatFilter);
 
   // By payment method
-  const byPay=PAY.map(m=>{let t=0,ct=0;ventas.forEach(s=>{if(s.pagosParciales&&s.pagosParciales.length>0){const pp=s.pagosParciales.filter(p=>p.metodo===m);if(pp.length>0){t+=pp.reduce((a,p)=>a+p.monto,0);ct++;}}else if(s.paymentMethod===m){t+=s.total;ct++;}});return{m,t,c:ct};});
+  const byPay=(()=>{
+    const base=PAY.map(m=>({m,t:0,c:0}));
+    const otros={m:'Otros m\u00e9todos',t:0,c:0};
+    ventas.forEach(s=>{
+      if(s.pagosParciales&&s.pagosParciales.length>0){
+        s.pagosParciales.forEach(p=>{
+          const mm=metodoPago(p.metodo);
+          const fila=base.find(x=>x.m===mm)||otros;
+          fila.t+=(+p.monto||0);
+        });
+        const mm0=metodoPago(s.pagosParciales[0].metodo);
+        (base.find(x=>x.m===mm0)||otros).c++;
+      } else {
+        const mm=metodoPago(s.paymentMethod);
+        const fila=base.find(x=>x.m===mm)||otros;
+        fila.t+=(+s.total||0); fila.c++;
+      }
+    });
+    return otros.c>0||otros.t>0 ? base.concat([otros]) : base;
+  })();
 
   // By category revenue
   const catMap={};
   ventas.forEach(s=>s.items?.forEach(i=>{
     const p=P.find(x=>x.id===i.productId||x.name===i.name);
-    const cat=p?.category||'Otro';
+    const cat=catDeItem(i);
     if(!catMap[cat])catMap[cat]={rev:0,qty:0,cost:0,costRev:0,costQty:0};
     catMap[cat].rev+=i.price*i.qty;catMap[cat].qty+=i.qty;
     // Margen: usa el costo capturado en la venta; si no existe, el costo actual del producto
@@ -3662,8 +3735,7 @@ function rReportes(){
   // IVA y negocio (Ecuador: Libros 0%, resto 15%)
   let revLibreria=0, revCafeteria=0;
   ventas.forEach(s=>s.items?.forEach(i=>{
-    const p=P.find(x=>x.id===i.productId||x.name===i.name);
-    const cat=p?.category||'Otro';
+    const cat=catDeItem(i);
     const sub=i.price*i.qty;
     if(cat==='Libros'){revLibreria+=sub;}else{revCafeteria+=sub;}
   }));
@@ -5695,9 +5767,10 @@ setInterval(()=>{if(online)updateHdr();},60000);
 // ── PWA: service worker para operacion offline real ─────────
 // Solo se registra sobre https o localhost (requisito del navegador).
 // Abierta como archivo local (file://) simplemente no aplica y no falla.
-if('serviceWorker' in navigator && (location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1')){
-  navigator.serviceWorker.register('sw.js').then(()=>console.log('Service worker registrado: la app cargara sin internet.')).catch(e=>console.warn('Service worker no registrado:',e));
-}
+// Service worker retirado el 13-sep-2026: sw.js nunca se subio al repositorio,
+// asi que el registro fallaba en silencio en cada carga. Si algun dia se quiere
+// funcionamiento sin internet, hay que subir sw.js Y versionarlo con cada cambio,
+// o la caja se queda con una version vieja en cache.
 
 // ── Init ─────────────────────────────────────────────────────
 async function init(){
