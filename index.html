@@ -78,6 +78,8 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 #ctabs::-webkit-scrollbar{display:none}
 .ctab{padding:4px 11px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid var(--b2);background:var(--bg3);color:var(--text2);white-space:nowrap;font-family:inherit;flex-shrink:0}
 .ctab.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+/* Consignación en modo consulta (cajeros): se registra, devuelve y paga en Segunda Vida */
+.cg-consulta [data-lbdev],.cg-consulta [data-cgadd],.cg-consulta [data-cgdev],.cg-consulta [data-cgedit],.cg-consulta #cg-new,.cg-consulta [data-liq]{display:none!important}
 #results{flex:1;overflow-y:auto;padding:0}
 .rrow{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:.5px solid var(--border);cursor:pointer}
 .rrow:active{background:var(--acl)}
@@ -5025,8 +5027,13 @@ function saldoConsignante(cid){
   return { libros:pendientes, totalVenta:+totalVenta.toFixed(2), pago, pago60:pago, pct:PCT_CONSIGNANTE };
 }
 
+// Segunda Vida es la fuente de verdad de la consignación: ahí se ingresan los libros,
+// se devuelven y se paga a los consignantes. El POS solo COBRA (y esta pestaña consulta).
+const SV_URL='https://mfge2009-ai.github.io/segunda-vida/';
 function rConsigna(){
-  const subs=[['libros','Libros'],['consignantes','Consignantes'],['liquidaciones','Liquidaciones'],['devolucion','📋 Acta Devolución']];
+  const soloConsulta = MI_ROL!=='admin';
+  if(soloConsulta && consignaSub!=='libros'){ consignaSub='libros'; editConsignante=null; addLibrosTo=null; liquidarTo=null; devolverTo=null; }
+  const subs = soloConsulta ? [['libros','Libros']] : [['libros','Libros'],['consignantes','Consignantes'],['liquidaciones','Liquidaciones'],['devolucion','📋 Acta Devolución']];
   const tabs=subs.map(([k,l])=>`<button class="ctab${consignaSub===k?' on':''}" data-csub="${k}">${l}</button>`).join('');
 
   // KPIs
@@ -5040,7 +5047,7 @@ function rConsigna(){
   const kpis=`<div class="stats-grid" style="margin-bottom:14px">
     <div class="stat"><div class="stat-n">${disp}</div><div class="stat-l">En consignación</div></div>
     <div class="stat"><div class="stat-n">${vend}</div><div class="stat-l">Vendidos</div></div>
-    <div class="stat"><div class="stat-n">${fmt(porPagar)}</div><div class="stat-l">Por pagar (${PCT_C_TXT})</div></div>
+    <div class="stat"><div class="stat-n" style="font-size:15px"><a href="${SV_URL}" target="_blank" rel="noopener" style="color:inherit">Segunda Vida ↗</a></div><div class="stat-l">Pagos a consignantes</div></div>
     <div class="stat"><div class="stat-n" style="color:${vencidos>0?'#b03030':'inherit'}">${vencidos}</div><div class="stat-l">Vencidos (+${PLAZO_DIAS}d)</div></div>
   </div>`;
 
@@ -5052,9 +5059,10 @@ function rConsigna(){
 
   return `<h2 style="margin:0 0 4px">Consignación de libros</h2>
     <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Programa «Tu libro tiene otra vida» · ${PCT_C_TXT} consignante / ${PCT_L_TXT} librería · plazo ${PLAZO_DIAS} días</div>
+    <div style="background:#fff7e0;border:1px solid #e8c96a;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.5;margin-bottom:14px;color:#4a3b12">📚 Esta pestaña es de <b>consulta</b>. Para <b>ingresar libros, devolverlos o pagar a un consignante</b> usa la app <a href="${SV_URL}" target="_blank" rel="noopener" style="color:#7a5a00"><b>Segunda Vida</b></a>. Los libros se cobran aquí en caja, como siempre.${soloConsulta?'':'<br><b>Modo administración:</b> los botones de abajo quedan solo para emergencias. Lo que hagas aquí NO se refleja en Segunda Vida.'}</div>
     ${kpis}
     <div class="ctabs" style="margin-bottom:14px">${tabs}</div>
-    ${body}`;
+    <div class="${soloConsulta?'cg-consulta':''}">${body}</div>`;
 }
 
 // ── Sub-vista: Consignantes ───────────────────────────────────
@@ -5196,7 +5204,7 @@ function rConsignaLibros(){
   return `<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
       <input id="cg-search" placeholder="Buscar libro, autor o consignante..." value="${csearch.replace(/"/g,'&quot;')}" style="flex:1">
     </div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Para ingresar libros, ve a la pestaña Consignantes y pulsa «+ Libros».</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Para ingresar libros usa la app <a href="${SV_URL}" target="_blank" rel="noopener">Segunda Vida</a>: allí quedan con contrato y precio aprobado, y pasan solos a la caja.</div>
     ${rows}`;
 }
 
@@ -5459,6 +5467,7 @@ function attachConsigna(){
   });
   mc.querySelector('#lb-cancel')?.addEventListener('click',()=>{addLibrosTo=null;render();});
   mc.querySelector('#lb-save')?.addEventListener('click',async()=>{
+    if(!window._cgAvisoIngreso){ if(!confirm('⚠ Lo normal es ingresar los libros en Segunda Vida (con contrato y precio aprobado).\n\nSi lo ingresas aquí, Segunda Vida lo verá como «alta del POS» y tendrás que importarlo allá.\n\n¿Continuar de todas formas?'))return; window._cgAvisoIngreso=true; }
     const titulo=document.getElementById('lb-titulo').value.trim();
     const precio=parseFloat(document.getElementById('lb-precio').value);
     if(!titulo){alert('El título es obligatorio');return;}
@@ -5541,6 +5550,7 @@ function attachConsigna(){
   mc.querySelector('#liq-pagar')?.addEventListener('click',async()=>{
     const s=saldoConsignante(liquidarTo);
     if(s.libros.length===0)return;
+    if(!confirm('⚠ Los pagos a consignantes se registran en Segunda Vida.\n\nSi pagas aquí, Segunda Vida NO se entera y el consignante podría cobrar dos veces.\n\n¿Seguro que quieres liquidar desde el POS?'))return;
     const metodo=document.getElementById('liq-metodo').value;
     if(!confirm(`Liquidar a ${nombreConsignante(liquidarTo)}\n\n`+
       `${s.libros.length} libro(s) vendido(s)\nTotal vendido: ${fmt(s.totalVenta)}\n`+
