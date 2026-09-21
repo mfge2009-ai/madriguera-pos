@@ -309,6 +309,11 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
         <label style="font-size:11px;font-weight:700;color:#555;display:block;margin-bottom:4px">Teléfono (opcional)</label>
         <input id="fac-tel" placeholder="09XXXXXXXX" style="width:100%;padding:9px 10px;border-radius:7px;border:1.5px solid #ddd;font-size:13px;font-family:inherit;outline:none">
       </div>
+      <div id="fac-dir-div" style="display:none">
+        <label style="font-size:11px;font-weight:700;color:#555;display:block;margin-bottom:4px">Dirección (opcional)</label>
+        <input id="fac-dir" placeholder="Dirección del comprador" style="width:100%;padding:9px 10px;border-radius:7px;border:1.5px solid #ddd;font-size:13px;font-family:inherit;outline:none">
+      </div>
+      <div id="fac-sri-err" role="alert" style="font-size:12px;color:#8b1a1a;font-weight:600;min-height:0"></div>
     </div>
     <div style="display:flex;gap:7px">
       <button id="fac-cancelar" style="flex:1;padding:10px;border-radius:8px;border:1.5px solid #ddd;background:#f5f5f5;font-size:12px;cursor:pointer;font-family:inherit">Cancelar</button>
@@ -371,6 +376,13 @@ const firebaseConfig = {
   appId: "1:648077569073:web:7b438dfdac9d5fef063910"
 };
 // ▲▲▲ FIN CONFIG ▲▲▲
+
+// ▼▼▼ FACTURACION ELECTRONICA SRI ▼▼▼
+// URL de la aplicacion web de Apps Script (termina en /exec). NO es un
+// secreto: el servicio verifica la sesion de Firebase y el rol de cada
+// cajero. La firma electronica y su contrasena NUNCA van en este archivo.
+const SRI_SERVICIO_URL = '';
+// ▲▲▲ FIN FACTURACION ▲▲▲
 
 // ── Catálogo completo de La Madriguera ───────────────────────
 // El catalogo semilla ya NO vive embebido en el HTML (pesaba ~350KB y era la
@@ -2156,6 +2168,8 @@ function enviarComanda(){
 async function anularVenta(ventaId){
   const venta=S.find(s=>s.id===ventaId);
   if(!venta){alert('Venta no encontrada');return;}
+  const _ctlFac=await sriControlAnulacion(venta);
+  if(!_ctlFac.ok){alert('Anulación cancelada: la venta tiene factura electrónica.');return;}
   const _resumen=(venta.items||[]).map(i=>(i.qty||1)+'x '+(i.name||'?')+(i.variant?' ('+i.variant+')':'')).join(', ');
   if(!await pedirAutorizacionAdmin('Anular venta de '+fmt(venta.total),
       {ventaId:String(venta.id), mesa:venta.tableName||'', detalle:_resumen, monto:+venta.total||0,
@@ -2168,6 +2182,7 @@ async function anularVenta(ventaId){
   venta.fechaAnulacion=localISO();
   venta.anuladaPor=turnoUser;
   venta.anuladaPorAuth=authUser(); // identidad real, no falsificable
+  if(_ctlFac.referencia){ venta.anulacionFacturaRef=_ctlFac.referencia; venta.anulacionFacturaNumero=_ctlFac.factura; }
   // Revertir libros consignados a "disponible" si la venta los incluia
   revertirConsignaVenta(venta);
   // Restore stock for unidad products (transaccion atomica por producto)
@@ -2225,6 +2240,7 @@ async function confirmarCobro(){
     // Save: transaction-safe append for the sale, regular write for tables/products
     await _appendSale(venta);
     sT();
+    return venta;
   }catch(err){
     console.error('Error en cobro:',err);
     alert('Error al procesar el cobro. Intenta de nuevo.');
@@ -2378,7 +2394,9 @@ function rFooter(){
       <div style="display:flex;gap:6px">
         <button class="btn btn-g btn-sm" id="bccc">Atrás</button>
         <button class="btn btn-ok" style="flex:2;padding:9px;${cubierto?'':'opacity:.4;cursor:not-allowed'}" id="bconf" data-disabled="${cubierto?'0':'1'}">✓ Confirmar pago</button>
-      </div>`;
+      </div>
+      ${cubierto?`<button class="btn btn-full" style="padding:9px;margin-top:6px;background:#1a3f8b;color:#fff;border:none;font-weight:700" id="bcobrar-fac">🧾 Confirmar pago y emitir factura</button>`:''}`;
+    ftr.querySelector('#bcobrar-fac')?.addEventListener('click',()=>sriCobrarYFacturar(tot));
     // Attach events
     ftr.querySelectorAll('.payb').forEach(el=>el.addEventListener('click',()=>{selPay=el.dataset.pay;rFooter();}));
     ftr.querySelector('#badd-pago')?.addEventListener('click',()=>{
@@ -2421,12 +2439,14 @@ function rFooter(){
         <button class="btn" style="padding:9px;font-size:11px;background:#dbeafe;color:#1a3f8b;border:1px solid #93c5fd" id="bfactura2">🧾 Factura</button>
         <button class="btn btn-ok" style="flex:2;padding:9px" id="bconf">✓ Cobrar ${fmt(totalConDesc)}</button>
       </div>
+      <button class="btn btn-full" style="padding:9px;margin-bottom:6px;background:#1a3f8b;color:#fff;border:none;font-weight:700" id="bcobrar-fac">🧾 Cobrar ${fmt(totalConDesc)} y emitir factura</button>
       <button class="btn btn-g btn-full" style="font-size:11px" id="bparcial">Dividir en varios métodos de pago</button>`;
     ftr.querySelectorAll('.payb').forEach(el=>el.addEventListener('click',()=>{selPay=el.dataset.pay;rFooter();}));
     ftr.querySelector('#bccc')?.addEventListener('click',()=>{cobConf=false;modoParcial=false;pagosParciales=[];render();});
     ftr.querySelector('#bconf')?.addEventListener('click',async()=>await confirmarCobro(),{once:true});
     ftr.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];rFooter();});
     ftr.querySelector('#bfactura2')?.addEventListener('click',()=>{window.openFacturaModal();});
+    ftr.querySelector('#bcobrar-fac')?.addEventListener('click',()=>sriCobrarYFacturar(totalConDesc));
     // Discount handlers
     ftr.querySelector('#bdesc-pct')?.addEventListener('click',async()=>{
       const v=prompt('Descuento en porcentaje (%):', descuentoTipo==='porcentaje'?descuento:'10');
@@ -2469,6 +2489,7 @@ function rProductos(){
         <div class="fg"><label>Autor / Proveedor</label><input id="fauth" value="${(p.author||'').replace(/"/g,'&quot;')}"></div>
         <div class="fg"><label>Control stock</label><select id="fctrl"><option value="sin_control"${p.stockControl==='sin_control'?' selected':''}>Sin control (café, comida)</option><option value="unidad"${p.stockControl==='unidad'?' selected':''}>Por unidad (libros, merch, postres)</option></select></div>
         <div class="fg"><label>Variantes café</label><select id="fvar"><option value="0"${!p.hasVariants?' selected':''}>No</option><option value="1"${p.hasVariants?' selected':''}>Sí (tamaño + leche)</option></select></div>
+        <div class="fg"><label>IVA (factura electrónica)</label><select id="fiva">${[['','Según su categoría'],['IVA15','IVA 15%'],['IVA0','IVA 0%'],['IVA5','IVA 5%'],['IVA8','IVA diferenciado 8%'],['NO_OBJETO','No objeto de IVA'],['EXENTO','Exento de IVA']].map(([v,t])=>`<option value="${v}"${(p.claseIVA||'')===v?' selected':''}>${t}</option>`).join('')}</select></div>
       </div>
       <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="bpc">Cancelar</button><button class="btn btn-acc" id="bps">Guardar</button></div>
     </div>`;
@@ -2534,8 +2555,11 @@ function attachProd(){
     const author=document.getElementById('fauth').value.trim();
     const stockControl=document.getElementById('fctrl').value;
     const hasVariants=document.getElementById('fvar').value==='1';
+    const claseIVA=document.getElementById('fiva')?.value||'';
     if(!name||isNaN(price))return alert('Nombre y precio son requeridos');
-    const obj={name,category,subcategory,price,cost,stock,code,author,active:true,stockControl,hasVariants};
+    const obj={name,category,subcategory,price,cost,stock,code,author,active:true,stockControl,hasVariants,claseIVA};
+    const _pPrev=editP!=='new'?P.find(x=>x.id===editP):null;
+    if(_pPrev && (_pPrev.claseIVA||'')!==claseIVA && !await pedirAutorizacionAdmin('Cambiar el IVA de "'+_pPrev.name+'" a '+(claseIVA||'según categoría'),{producto:_pPrev.name,ivaAnterior:_pPrev.claseIVA||'',ivaNuevo:claseIVA}))return;
     if(editP==='new'){
       // Crear producto nuevo: tambien es una decision de precio -> PIN de admin
       if(!await pedirAutorizacionAdmin('Crear el producto "'+name+'" a '+fmt(price)))return;
@@ -4412,6 +4436,9 @@ function attachReportes(){
 
 // ── FACTURAS ─────────────────────────────────────────────────
 function rFacturas(){
+  return rFacturasSri()+rFacturasManual();
+}
+function rFacturasManual(){
   const facturas=S.filter(s=>s.esFactura).sort((a,b)=>b.fecha.localeCompare(a.fecha));
   const pendientes=facturas.filter(f=>f.estado==='pendiente');
   const hechas=facturas.filter(f=>f.estado==='hecha');
@@ -4457,6 +4484,7 @@ function rFacturas(){
 }
 
 function attachFacturas(){
+  attachFacturasSri();
   const mc=document.getElementById('mc');
   mc.querySelectorAll('[data-fac-copy]').forEach(el=>el.addEventListener('click',()=>{
     const f=S.find(s=>s.id===el.dataset.facCopy);if(!f)return;
@@ -5674,6 +5702,7 @@ function llenarFormCliente(cl){
   var nb=document.getElementById('fac-nombre'); if(nb) nb.value=cl.nombre||'';
   var em=document.getElementById('fac-email'); if(em) em.value=cl.email||'';
   var tel=document.getElementById('fac-tel'); if(tel) tel.value=cl.telefono||'';
+  var dir=document.getElementById('fac-dir'); if(dir) dir.value=cl.direccion||'';
   document.getElementById('fac-sugerencias').style.display='none';
   document.getElementById('fac-buscar').value=cl.nombre||cl.identificacion||'';
 }
@@ -5724,11 +5753,12 @@ function llenarFormCliente(cl){
 
     // Close
     document.getElementById('fac-cancelar')?.addEventListener('click', function(){
-      modal.style.display='none'; facturaVentaRef=null;
+      modal.style.display='none'; facturaVentaRef=null; window._facModoSri=null;
     });
 
     // Save
     document.getElementById('fac-guardar')?.addEventListener('click', async function(){
+      if(window._facModoSri){ await window._sriConfirmarModal(); return; }
       var tipo = facturaData.tipo||'';
       var num = document.getElementById('fac-num').value.trim();
       var nombre = document.getElementById('fac-nombre').value.trim();
@@ -5763,6 +5793,11 @@ function llenarFormCliente(cl){
 window.openFacturaModal = function(ventaRef){
   facturaData = {};
   facturaVentaRef = ventaRef||null;
+  window._facModoSri = null;
+  var _fg=document.getElementById('fac-guardar'); if(_fg){ _fg.textContent='Guardar pendiente →'; _fg.style.background='#1a3f8b'; }
+  var _fd=document.getElementById('fac-dir-div'); if(_fd) _fd.style.display='none';
+  var _fdi=document.getElementById('fac-dir'); if(_fdi) _fdi.value='';
+  var _fe=document.getElementById('fac-sri-err'); if(_fe) _fe.textContent='';
   ['fac-num','fac-nombre','fac-email','fac-tel','fac-buscar'].forEach(function(id){
     var el=document.getElementById(id); if(el) el.value='';
   });
@@ -5775,6 +5810,417 @@ window.openFacturaModal = function(ventaRef){
   if(modal) modal.style.display='flex';
   setTimeout(function(){ var b=document.getElementById('fac-buscar'); if(b)b.focus(); },100);
 };
+// ═══════════════════════════════════════════════════════════════════════
+//  FACTURACION ELECTRONICA SRI — modulo del POS (se inserta en index.html)
+// ═══════════════════════════════════════════════════════════════════════
+//  El navegador NO firma ni habla con el SRI. Solo:
+//   1) cobra como siempre (confirmarCobro: pago, inventario, consignacion),
+//   2) pide la factura al servicio privado (Apps Script) enviando el id de
+//      la venta, los datos del comprador y el token de la sesion,
+//   3) muestra el estado, permite consultar/reintentar y descargar XML/PDF.
+//  La firma, la contrasena y cualquier credencial viven SOLO en el servicio.
+//  Si la facturacion falla, la venta sigue cobrada: nunca se cobra dos
+//  veces ni se descuenta inventario de nuevo al reintentar.
+// ═══════════════════════════════════════════════════════════════════════
+const SRI_ETQ = {
+  PENDIENTE:['Pendiente','amb'], FIRMADA:['Firmada, sin enviar','amb'], ENVIADA_SIN_CONFIRMAR:['Enviada — verificando','amb'],
+  RECIBIDA:['Recibida — esperando autorización','blu'], DEVUELTA:['Devuelta por el SRI','red'], AUTORIZADA:['Autorizada','grn'],
+  NO_AUTORIZADA:['No autorizada','red']
+};
+const SRI_CORREO = { NO_APLICA:['Sin correo','gris'], PENDIENTE:['Correo pendiente','amb'], ENVIADO:['Correo enviado','grn'], FALLIDO:['Correo falló','red'], DESHABILITADO:['Correo desactivado','gris'] };
+const SRI_EN_CURSO = ['PENDIENTE','FIRMADA','ENVIADA_SIN_CONFIRMAR','RECIBIDA'];
+let SRI_F = [], sriCargado = false, sriCargando = false, sriInfo = null, sriOcupado = false, sriVerHist = null;
+
+function sriChip(txt, tono){
+  const c = {grn:'#e7f5ec|#1f6b45', red:'#fde8e8|#8b1a1a', amb:'#fff4dc|#7a5200', blu:'#e3f0ff|#1a3f8b', gris:'#f0ede6|#666'}[tono]||'#f0ede6|#666';
+  const [bg,tx] = c.split('|');
+  return `<span style="display:inline-block;padding:2px 7px;border-radius:999px;font-size:10px;font-weight:700;background:${bg};color:${tx};white-space:nowrap">${esc(txt)}</span>`;
+}
+function sriConfigurado(){ return !!(typeof SRI_SERVICIO_URL==='string' && /^https:\/\//.test(SRI_SERVICIO_URL)); }
+
+// ── Llamada al servicio privado ─────────────────────────────────────────
+async function sriLlamar(accion, datos){
+  if(!sriConfigurado()) return {ok:false, codigo:'NO_CONFIGURADO', mensaje:'La facturación electrónica aún no está configurada (falta la URL del servicio).'};
+  let idToken='';
+  try{ idToken = await auth.currentUser.getIdToken(); }
+  catch(e){ return {ok:false, codigo:'NO_AUTENTICADO', mensaje:'Tu sesión expiró. Cierra sesión y vuelve a entrar.'}; }
+  const ctl = new AbortController(); const t = setTimeout(()=>ctl.abort(), 90000);
+  try{
+    // text/plain evita la verificacion previa CORS; el cuerpo es JSON igual.
+    const r = await fetch(SRI_SERVICIO_URL, {method:'POST', body:JSON.stringify(Object.assign({accion, idToken}, datos||{})),
+      headers:{'Content-Type':'text/plain;charset=utf-8'}, signal:ctl.signal, redirect:'follow'});
+    const j = await r.json();
+    return j;
+  }catch(e){
+    return {ok:false, codigo:'RED', mensaje:'Sin conexión con el servicio de facturación. La venta YA está cobrada; la factura se puede reintentar sin riesgo desde la pestaña Facturas.'};
+  }finally{ clearTimeout(t); }
+}
+async function sriEstadoServicio(forzar){
+  if(sriInfo && !forzar) return sriInfo;
+  const r = await sriLlamar('estado');
+  if(r.ok){ sriInfo = r; try{ localStorage.setItem('sri_info', JSON.stringify({ambiente:r.ambiente, limite:r.limiteConsumidorFinal})); }catch(e){} }
+  return r.ok ? r : null;
+}
+function sriAmbienteLocal(){
+  if(sriInfo) return sriInfo.ambiente;
+  try{ const i = JSON.parse(localStorage.getItem('sri_info')||'null'); if(i) return i.ambiente; }catch(e){}
+  return null;
+}
+function sriLimiteCF(){
+  if(sriInfo) return sriInfo.limiteConsumidorFinal||50;
+  try{ const i = JSON.parse(localStorage.getItem('sri_info')||'null'); if(i&&i.limite) return i.limite; }catch(e){}
+  return 50;
+}
+
+// ── Cola local: pedidos que no llegaron al servicio (sin internet) ──────
+function sriCola(){ try{ return JSON.parse(localStorage.getItem('sri_cola')||'[]'); }catch(e){ return []; } }
+function sriGuardarCola(c){ try{ localStorage.setItem('sri_cola', JSON.stringify(c)); }catch(e){} }
+function sriEncolar(item){ const c = sriCola().filter(x=>x.ventaId!==item.ventaId); c.push(item); sriGuardarCola(c); }
+function sriQuitarCola(ventaId){ sriGuardarCola(sriCola().filter(x=>x.ventaId!==ventaId)); }
+const SRI_REINTENTABLES = ['RED','VENTA_NO_ENCONTRADA','BASE_DATOS','INTERNO'];
+
+// ── Validacion local del comprador (la definitiva la hace el servidor) ──
+function sriCedulaValida(c){
+  if(!/^\d{10}$/.test(c)) return false;
+  const p=+c.slice(0,2); if(!((p>=1&&p<=24)||p===30)||+c[2]>5) return false;
+  let s=0; for(let i=0;i<9;i++){ let v=+c[i]*(i%2===0?2:1); s+= v>9?v-9:v; }
+  return (10-(s%10))%10===+c[9];
+}
+function sriValidarComprador(c, total){
+  if(!c.tipo) return 'Selecciona el tipo de identificación.';
+  if(c.tipo==='Consumidor Final'){
+    if(total > sriLimiteCF()) return 'Las facturas de más de $'+sriLimiteCF()+' deben llevar los datos del comprador.';
+    return '';
+  }
+  const id=(c.identificacion||'').replace(/\s+/g,'').toUpperCase();
+  if(!c.nombre) return 'Ingresa el nombre o razón social.';
+  if(c.tipo==='Cédula' && !sriCedulaValida(id)) return 'La cédula no es válida (revisa los 10 dígitos).';
+  if(c.tipo==='RUC'){
+    if(!/^\d{13}$/.test(id) || id.slice(10)==='000') return 'El RUC debe tener 13 dígitos y terminar en 001.';
+    if(+id[2]<6 && !sriCedulaValida(id.slice(0,10))) return 'El RUC de persona natural no corresponde a una cédula válida.';
+  }
+  if(c.tipo==='Pasaporte' && !/^[A-Z0-9-]{3,20}$/.test(id)) return 'Pasaporte inválido (3 a 20 letras o números).';
+  if(c.email && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(c.email)) return 'El correo no es válido.';
+  return '';
+}
+function sriLeerModal(){
+  return { tipo: facturaData.tipo||'', identificacion: (document.getElementById('fac-num').value||'').trim(),
+    nombre: (document.getElementById('fac-nombre').value||'').trim(), email: (document.getElementById('fac-email').value||'').trim(),
+    telefono: (document.getElementById('fac-tel').value||'').trim(), direccion: (document.getElementById('fac-dir')?.value||'').trim() };
+}
+async function sriRecordarCliente(c){
+  if(c.tipo==='Consumidor Final' || !c.identificacion || !c.nombre) return;
+  const i = CL.findIndex(x=>x.identificacion===c.identificacion);
+  const d = {id:'cl'+(i>=0?CL[i].id:''+Date.now()), tipo:c.tipo, identificacion:c.identificacion, nombre:c.nombre, email:c.email, telefono:c.telefono, direccion:c.direccion||'', ultimaVisita:localISO()};
+  if(i>=0) CL[i]=Object.assign({},CL[i],d); else CL.push(d);
+  try{ await sCL(); }catch(e){}
+}
+
+// ── Panel de progreso (no bloquea la caja como un alert) ─────────────────
+function sriPanel(html, tono){
+  let p = document.getElementById('sri-panel');
+  if(!p){
+    p = document.createElement('div'); p.id='sri-panel';
+    p.setAttribute('role','status'); p.setAttribute('aria-live','polite');
+    p.style.cssText='position:fixed;left:14px;bottom:14px;z-index:11000;max-width:380px;width:calc(100% - 28px);background:#fff;border-radius:12px;box-shadow:0 6px 28px rgba(0,0,0,.25);padding:14px 16px;font-size:12.5px;line-height:1.45;border-left:5px solid #1a3f8b';
+    document.body.appendChild(p);
+  }
+  p.style.borderLeftColor = {grn:'#1f6b45', red:'#8b1a1a', amb:'#c98a00', blu:'#1a3f8b'}[tono]||'#1a3f8b';
+  p.innerHTML = html + `<button id="sri-panel-x" aria-label="Cerrar" style="position:absolute;top:6px;right:8px;border:none;background:none;font-size:15px;cursor:pointer;color:#888">✕</button>`;
+  p.style.position='fixed';
+  document.getElementById('sri-panel-x').onclick=()=>p.remove();
+  return p;
+}
+function sriMensajeFactura(f){
+  const [etq,tono] = SRI_ETQ[f.estado]||[f.estado,'gris'];
+  let h = `<div style="font-weight:700;font-size:13.5px;margin-bottom:4px">🧾 Factura ${esc(f.numero||'')} ${f.ambiente==='1'?sriChip('PRUEBAS','amb'):''}</div>`;
+  h += `<div style="margin-bottom:6px">${sriChip(etq,tono)} ${f.estadoCorreo?sriChip((SRI_CORREO[f.estadoCorreo]||[f.estadoCorreo])[0],(SRI_CORREO[f.estadoCorreo]||[0,'gris'])[1]):''}</div>`;
+  if(f.estado==='RECIBIDA') h += `<div style="color:#1a3f8b">El SRI la recibió pero <b>todavía no está autorizada</b>. Se volverá a consultar sola; también puedes pulsar «Consultar».</div>`;
+  if(f.estado==='ENVIADA_SIN_CONFIRMAR') h += `<div style="color:#7a5200">Se envió y se cortó la conexión. <b>No se reenviará a ciegas</b>: primero se consulta al SRI.</div>`;
+  (f.mensajes||[]).filter(m=>m.tipo!=='INFORMATIVO').forEach(m=>{ h += `<div style="color:#8b1a1a;margin-top:4px"><b>${esc(m.identificador)}</b> ${esc(m.explicacion||m.mensaje)}${m.informacionAdicional?`<div style="color:#666;font-size:11px">${esc(m.informacionAdicional)}</div>`:''}</div>`; });
+  if(f.ultimoError) h += `<div style="color:#8b1a1a;margin-top:4px">${esc(f.ultimoError.mensaje)}</div>`;
+  if(f.estado==='AUTORIZADA') h += `<div style="font-size:11px;color:#555;margin-top:4px">Autorización ${esc(f.numeroAutorizacion)}</div>`;
+  h += `<div style="display:flex;gap:6px;margin-top:9px;flex-wrap:wrap">`;
+  if(SRI_EN_CURSO.includes(f.estado)) h += `<button class="btn btn-b btn-sm" data-sri-consultar="${esc(f.id)}">Consultar estado</button>`;
+  if(f.estado==='AUTORIZADA') h += `<button class="btn btn-g btn-sm" data-sri-doc="pdf" data-sri-id="${esc(f.id)}">⬇ PDF (RIDE)</button><button class="btn btn-g btn-sm" data-sri-doc="xml" data-sri-id="${esc(f.id)}">⬇ XML</button>`;
+  h += `</div>`;
+  return h;
+}
+function sriEnlazarAcciones(raiz){
+  raiz.querySelectorAll('[data-sri-consultar]').forEach(b=>b.onclick=()=>sriConsultar(b.dataset.sriConsultar));
+  raiz.querySelectorAll('[data-sri-doc]').forEach(b=>b.onclick=()=>sriDescargar(b.dataset.sriId, b.dataset.sriDoc));
+}
+function sriMostrarResultado(f){
+  const [,tono] = SRI_ETQ[f.estado]||['','blu'];
+  const p = sriPanel(sriMensajeFactura(f), tono);
+  sriEnlazarAcciones(p);
+  // Una factura autorizada no necesita atencion: el aviso se retira solo
+  if(f.estado==='AUTORIZADA'){ clearTimeout(window._sriPanelT); window._sriPanelT=setTimeout(()=>{ const x=document.getElementById('sri-panel'); if(x && x.textContent.includes(f.numero||'~')) x.remove(); }, 20000); }
+  const i = SRI_F.findIndex(x=>x.id===f.id);
+  if(i>=0) SRI_F[i]=Object.assign({},SRI_F[i],f); else SRI_F.unshift(f);
+  if(view==='facturas') render();
+}
+
+// ── Emitir / consultar / reintentar ──────────────────────────────────────
+async function sriEmitir(ventaId, comprador, opciones){
+  opciones = opciones||{};
+  const solicitudId = (crypto.randomUUID ? crypto.randomUUID() : 's'+Date.now()+Math.random().toString(36).slice(2));
+  sriPanel(`<div style="font-weight:700">🧾 Emitiendo factura…</div><div style="color:#666">Firmando y enviando al SRI. La venta ya está cobrada; puedes seguir atendiendo.</div>`,'blu');
+  const r = await sriLlamar('emitir', {ventaId, comprador, solicitudId, aceptarDiferenciasPrecio: !!opciones.aceptarDiferenciasPrecio});
+  if(r.ok){
+    sriQuitarCola(ventaId);
+    try{ bitacora('factura_electronica',{accion:'Solicito factura '+(r.factura.numero||''), ventaId:String(ventaId), estado:r.factura.estado}); }catch(e){}
+    sriMostrarResultado(r.factura);
+    if(r.enProceso || SRI_EN_CURSO.includes(r.factura.estado)) sriSeguir(r.factura.id);
+    return r;
+  }
+  if(SRI_REINTENTABLES.includes(r.codigo)){
+    sriEncolar({ventaId, comprador, fecha:localISO(), error:r.mensaje, codigo:r.codigo});
+    sriPanel(`<div style="font-weight:700">🧾 Factura pendiente de envío</div><div>${esc(r.mensaje)}</div><div style="color:#666;margin-top:4px">Quedó en la cola de este equipo y se reintentará automáticamente.</div>`,'amb');
+  } else {
+    if(r.codigo==='PRECIO_DIFERENTE' || r.codigo==='COMPRADOR_INVALIDO' || r.codigo==='SIN_CLASE_IVA')
+      sriEncolar({ventaId, comprador, fecha:localISO(), error:r.mensaje, codigo:r.codigo, requiereRevision:true});
+    sriPanel(`<div style="font-weight:700;color:#8b1a1a">🧾 No se emitió la factura</div><div>${esc(r.mensaje)}</div><div style="color:#666;margin-top:4px">La venta sigue cobrada. Corrige y reintenta desde la pestaña Facturas.</div>`,'red');
+  }
+  if(view==='facturas') render();
+  return r;
+}
+let _sriSeguimiento = {};
+function sriSeguir(id, n){
+  n = n||0;
+  if(n>=4 || _sriSeguimiento[id]) return;
+  _sriSeguimiento[id]=true;
+  setTimeout(async ()=>{
+    delete _sriSeguimiento[id];
+    const r = await sriLlamar('consultar',{facturaId:id});
+    if(r.ok){ sriMostrarResultado(r.factura); if(SRI_EN_CURSO.includes(r.factura.estado)) sriSeguir(id, n+1); }
+  }, 6000*(n+1));
+}
+async function sriConsultar(id){
+  sriPanel(`<div>Consultando al SRI…</div>`,'blu');
+  const r = await sriLlamar('consultar',{facturaId:id});
+  if(r.ok) sriMostrarResultado(r.factura);
+  else sriPanel(`<div style="color:#8b1a1a">${esc(r.mensaje)}</div>`,'red');
+}
+async function sriDescargar(id, tipo){
+  const r = await sriLlamar('documento',{facturaId:id, tipo});
+  if(!r.ok){ sriPanel(`<div style="color:#8b1a1a">${esc(r.mensaje)}</div>`,'red'); return; }
+  const bin = atob(r.base64), u8 = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([u8],{type:r.mime}));
+  const a = document.createElement('a'); a.href=url; a.download=r.nombre; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+}
+async function sriProcesarCola(){
+  const cola = sriCola().filter(x=>!x.requiereRevision);
+  for(const it of cola){
+    const r = await sriLlamar('emitir',{ventaId:it.ventaId, comprador:it.comprador, solicitudId:'cola-'+it.ventaId});
+    if(r.ok){ sriQuitarCola(it.ventaId); sriMostrarResultado(r.factura); }
+    else if(!SRI_REINTENTABLES.includes(r.codigo)){ const c=sriCola(); const x=c.find(y=>y.ventaId===it.ventaId); if(x){x.error=r.mensaje;x.codigo=r.codigo;x.requiereRevision=true;sriGuardarCola(c);} }
+  }
+  if(view==='facturas') render();
+}
+window.addEventListener('online', ()=>{ if(sriCola().length) sriProcesarCola(); });
+setInterval(()=>{ if(navigator.onLine && sriCola().some(x=>!x.requiereRevision)) sriProcesarCola(); }, 120000);
+
+// ── "Cobrar y emitir factura" ─────────────────────────────────────────────
+// Abre el formulario del comprador ANTES de cobrar: si los datos estan mal,
+// no se cobra. Recien con datos validos se cobra (flujo normal del POS) y
+// luego se pide la factura por el id de la venta ya guardada.
+function sriCobrarYFacturar(total){
+  if(sriOcupado || cobrando) return;
+  if(!sriConfigurado()){ alert('La facturación electrónica aún no está configurada.\nCobra normalmente y registra la factura como antes.'); return; }
+  abrirModalSri({ titulo:'Cobrar '+fmt(total)+' y emitir factura', total, alConfirmar: async (comprador)=>{
+    sriOcupado = true;
+    try{
+      const venta = await confirmarCobro();
+      if(!venta){ sriPanel(`<div style="color:#8b1a1a">No se completó el cobro, así que no se emitió factura.</div>`,'red'); return; }
+      await sriRecordarCliente(comprador);
+      await sriEmitir(venta.id, comprador);
+    } finally { sriOcupado = false; }
+  }});
+}
+// Factura de una venta YA cobrada (desde la pestaña Facturas)
+function sriFacturarVentaExistente(ventaId){
+  const v = S.find(s=>String(s.id)===String(ventaId));
+  if(!v) return;
+  abrirModalSri({ titulo:'Emitir factura de '+fmt(v.total)+' ('+(v.tableName||'venta')+')', total:+v.total||0, alConfirmar: async (comprador)=>{
+    await sriRecordarCliente(comprador);
+    await sriEmitir(String(v.id), comprador);
+  }});
+}
+// Corregir datos del comprador y reemitir (DEVUELTA / NO AUTORIZADA)
+function sriReemitir(f){
+  if(f.estado==='NO_AUTORIZADA' && MI_ROL!=='admin'){ alert('Reemitir una factura NO AUTORIZADA requiere una cuenta de administración.'); return; }
+  const ref = { tipo: ({'04':'RUC','05':'Cédula','06':'Pasaporte','07':'Consumidor Final'})[f.comprador?.tipoIdentificacion]||'', identificacion: f.comprador?.tipoIdentificacion==='07'?'':f.comprador?.identificacion, nombre: f.comprador?.tipoIdentificacion==='07'?'':f.comprador?.razonSocial, email:f.comprador?.email||'' };
+  abrirModalSri({ titulo:'Corregir y reemitir '+f.numero, total:+f.importeTotal||0, prellenar:ref, textoBoton:'Reemitir factura', alConfirmar: async (comprador)=>{
+    sriPanel(`<div>Reemitiendo…</div>`,'blu');
+    const r = await sriLlamar('reemitir',{facturaId:f.id, comprador});
+    if(r.ok){ sriMostrarResultado(r.factura); if(SRI_EN_CURSO.includes(r.factura.estado)) sriSeguir(r.factura.id); }
+    else sriPanel(`<div style="color:#8b1a1a">${esc(r.mensaje)}</div>`,'red');
+  }});
+}
+
+function abrirModalSri(o){
+  window.openFacturaModal(null);
+  const m = document.getElementById('factura-modal');
+  window._facModoSri = o;
+  document.getElementById('fac-dir-div').style.display='block';
+  const info = document.getElementById('fac-venta-info');
+  info.innerHTML = esc(o.titulo) + (sriAmbienteLocal()==='1' ? ' · <b style="color:#a86b00">AMBIENTE DE PRUEBAS</b>' : '');
+  const b = document.getElementById('fac-guardar');
+  b.textContent = o.textoBoton || ('✓ ' + o.titulo);
+  b.style.background = '#1f6b45';
+  document.getElementById('fac-sri-err').textContent='';
+  if(o.prellenar) llenarFormCliente(o.prellenar);
+  m.style.display='flex';
+}
+async function sriConfirmarModal(){
+  const o = window._facModoSri; if(!o) return;
+  const c = sriLeerModal();
+  const e = sriValidarComprador(c, o.total);
+  if(e){ document.getElementById('fac-sri-err').textContent = e; return; }
+  if(c.tipo!=='Consumidor Final') c.identificacion = c.identificacion.replace(/\s+/g,'').toUpperCase();
+  document.getElementById('factura-modal').style.display='none';
+  window._facModoSri = null;
+  await o.alConfirmar(c);
+}
+window._sriConfirmarModal = sriConfirmarModal;
+
+// ── Proteccion de ventas facturadas ──────────────────────────────────────
+// Una venta con factura autorizada (o en tramite) no se anula en silencio:
+// hay que emitir primero la nota de credito o pedir la anulacion en el SRI.
+async function sriFacturaDeVenta(ventaId){
+  for(const amb of ['2','1']){
+    try{ const s = await getDoc(doc(db,'sri_facturas','F'+amb+'_'+ventaId)); if(s.exists()) return s.data(); }catch(e){}
+  }
+  return null;
+}
+async function sriControlAnulacion(venta){
+  const f = await sriFacturaDeVenta(String(venta.id));
+  if(!f || f.estado==='DEVUELTA') return {ok:true};
+  if(f.ambiente==='1') return {ok:true, nota:'Tenía una factura de PRUEBAS ('+f.numero+'), sin validez tributaria.'};
+  if(f.estado==='NO_AUTORIZADA') return {ok:true, nota:'Su factura '+f.numero+' fue NO AUTORIZADA por el SRI.'};
+  const msg = 'Esta venta tiene la factura electrónica '+f.numero+' en estado '+((SRI_ETQ[f.estado]||[f.estado])[0])+'.\n\n'+
+    'Una factura autorizada NO se borra ni se modifica. Antes de anular la venta debes:\n'+
+    ' • emitir una NOTA DE CRÉDITO (desde el Facturador del SRI u otro sistema autorizado), o\n'+
+    ' • solicitar la anulación en SRI en línea (hasta el día 7 del mes siguiente; las de consumidor final no se pueden anular).\n\n'+
+    'Escribe el número de la nota de crédito o de la solicitud de anulación para continuar:';
+  const ref = prompt(msg);
+  if(!ref || !ref.trim()) return {ok:false};
+  return {ok:true, referencia:ref.trim(), factura:f.numero};
+}
+
+// ── Pestaña Facturas: seccion electronica ────────────────────────────────
+async function sriCargarFacturas(){
+  if(sriCargando) return;
+  sriCargando = true;
+  try{
+    const d = new Date(); d.setDate(d.getDate()-45);
+    const snap = await getDocs(query(collection(db,'sri_facturas'), where('creadaEn','>=', d.toISOString())));
+    SRI_F = snap.docs.map(x=>x.data()).sort((a,b)=>(b.creadaEn||'').localeCompare(a.creadaEn||''));
+    sriCargado = true;
+    sriEstadoServicio().then(()=>{ if(view==='facturas') render(); });
+  }catch(e){
+    console.error('sri_facturas', e);
+    avisoError(msgError(e,'leer las facturas electrónicas'));
+  }finally{ sriCargando=false; if(view==='facturas') render(); }
+}
+function rFacturasSri(){
+  if(!sriConfigurado()) return `<div class="card" style="margin-bottom:14px;background:#fffaf0;border:1px dashed #e0c48a"><b>Facturación electrónica:</b> pendiente de configurar (URL del servicio). Mientras tanto, sigue usando las solicitudes manuales de abajo.</div>`;
+  if(!sriCargado && !sriCargando) setTimeout(sriCargarFacturas, 0);
+  const amb = sriAmbienteLocal();
+  const cola = sriCola();
+  const idsFacturados = new Set(SRI_F.map(f=>String(f.ventaId)));
+  const desde = new Date(); desde.setDate(desde.getDate()-2);
+  const desdeTxt = localISO(desde).slice(0,10);
+  const sinFactura = S.filter(s=>isVenta(s) && (s.date||'')>=desdeTxt && !idsFacturados.has(String(s.id)) && !cola.some(c=>c.ventaId===String(s.id)))
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,25);
+  const ventaDe = id => S.find(s=>String(s.id)===String(id));
+  const filas = SRI_F.slice(0,60).map(f=>{
+    const v = ventaDe(f.ventaId);
+    const pago = v ? (v.anulada ? sriChip('Venta anulada','red') : sriChip('Cobrada','grn')) : sriChip('Pago: ver Caja','gris');
+    const [etq,tono] = SRI_ETQ[f.estado]||[f.estado,'gris'];
+    const corr = SRI_CORREO[f.estadoCorreo]||[f.estadoCorreo||'—','gris'];
+    const msgs = (f.mensajes||[]).filter(m=>m.tipo!=='INFORMATIVO');
+    const abierto = sriVerHist===f.id;
+    return `<div class="card" style="margin-bottom:8px;padding:10px 12px;border-left:3px solid ${tono==='grn'?'#1f6b45':tono==='red'?'#8b1a1a':'#c98a00'}">
+      <div class="rb" style="gap:8px;align-items:flex-start">
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:13px">${esc(f.numero)} ${f.ambiente==='1'?sriChip('PRUEBAS','amb'):''}</div>
+          <div style="font-size:11px;color:var(--text3)">${esc(f.comprador?.razonSocial||'')} · ${esc(f.comprador?.identificacion||'')} · ${esc(f.fechaEmision||'')}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;font-weight:700;color:var(--acc)">$${esc(f.importeTotal||'')}</div>
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0">${pago} ${sriChip(etq,tono)} ${sriChip(corr[0],corr[1])}</div>
+      ${msgs.map(m=>`<div style="font-size:11.5px;color:#8b1a1a"><b>${esc(m.identificador)}</b> ${esc(m.explicacion||m.mensaje)} ${m.informacionAdicional?'<span style="color:#666">('+esc(m.informacionAdicional.slice(0,160))+')</span>':''}</div>`).join('')}
+      ${f.ultimoError?`<div style="font-size:11.5px;color:#8b1a1a">${esc(f.ultimoError.mensaje)}</div>`:''}
+      ${f.estadoCorreo==='FALLIDO'&&f.correoError?`<div style="font-size:11px;color:#8b1a1a">Correo: ${esc(f.correoError)}</div>`:''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        ${SRI_EN_CURSO.includes(f.estado)?`<button class="btn btn-b btn-sm" data-sri-consultar="${esc(f.id)}">Consultar / reintentar</button>`:''}
+        ${(f.estado==='DEVUELTA'||(f.estado==='NO_AUTORIZADA'&&MI_ROL==='admin'))?`<button class="btn btn-w btn-sm" data-sri-reemitir="${esc(f.id)}">Corregir y reemitir</button>`:''}
+        ${f.estado==='AUTORIZADA'?`<button class="btn btn-g btn-sm" data-sri-doc="pdf" data-sri-id="${esc(f.id)}">⬇ PDF</button><button class="btn btn-g btn-sm" data-sri-doc="xml" data-sri-id="${esc(f.id)}">⬇ XML</button><button class="btn btn-g btn-sm" data-sri-correo="${esc(f.id)}">✉ ${f.estadoCorreo==='ENVIADO'?'Reenviar':'Enviar'} correo</button>`:''}
+        <button class="btn btn-g btn-sm" data-sri-hist="${esc(f.id)}">${abierto?'Ocultar':'Historial'}</button>
+      </div>
+      ${abierto?`<div style="margin-top:8px;background:var(--bg3);border-radius:var(--rs);padding:7px 9px;font-size:11px;line-height:1.5">
+        <div><b>Clave de acceso:</b> <span style="word-break:break-all">${esc(f.claveAcceso||'')}</span></div>
+        ${f.numeroAutorizacion?`<div><b>Autorización:</b> ${esc(f.numeroAutorizacion)} · ${esc(f.fechaAutorizacion||'')}</div>`:''}
+        <div><b>Venta:</b> ${esc(f.ventaId)}${v?' · '+esc(v.tableName||'')+' · '+esc((v.items||[]).map(i=>i.qty+'× '+i.name).join(', ')):''}</div>
+        ${(f.anteriores||[]).length?`<div><b>Comprobantes anteriores:</b> ${f.anteriores.map(a=>esc(a.numero+' ('+a.estado+')')).join(' · ')}</div>`:''}
+        ${(f.advertencias||[]).map(a=>`<div style="color:#7a5200">⚠ ${esc(a)}</div>`).join('')}
+        <div style="margin-top:4px">${(f.historial||[]).slice().reverse().map(h=>`<div>${esc(h.fecha?new Date(h.fecha).toLocaleString('es-EC',{dateStyle:'short',timeStyle:'medium'}):'')} · <b>${esc(h.evento)}</b> · ${esc(h.detalle||'')} · <span style="color:#888">${esc(h.usuario||'')}</span></div>`).join('')}</div>
+      </div>`:''}
+    </div>`;
+  }).join('');
+  return `<div style="margin-bottom:18px">
+    <div class="rb" style="margin-bottom:10px">
+      <span class="stitle" style="margin:0">Facturación electrónica SRI ${amb==='1'?sriChip('AMBIENTE DE PRUEBAS — sin validez tributaria','amb'):amb==='2'?sriChip('PRODUCCIÓN','grn'):''}</span>
+      <button class="btn btn-g btn-sm" id="sri-recargar">↻ Actualizar</button>
+    </div>
+    ${cola.length?`<div class="card" style="margin-bottom:10px;background:#fff7e0;border:1px solid #e8c96a">
+      <div style="font-weight:700;margin-bottom:5px">Pendientes de enviar desde este equipo (${cola.length})</div>
+      ${cola.map(c=>`<div class="rb" style="font-size:11.5px;margin-bottom:4px;gap:6px">
+        <span>${esc(c.comprador?.nombre||c.comprador?.tipo||'')} · venta ${esc(c.ventaId)} · <span style="color:#8b1a1a">${esc(c.error||'')}</span></span>
+        <span style="display:flex;gap:4px;flex-shrink:0">${c.requiereRevision?`<button class="btn btn-w btn-sm" data-sri-corregir-cola="${esc(c.ventaId)}">Corregir</button>`:''}<button class="btn btn-g btn-sm" data-sri-quitar-cola="${esc(c.ventaId)}">Quitar</button></span>
+      </div>`).join('')}
+      <button class="btn btn-b btn-sm" id="sri-reintentar-cola" style="margin-top:4px">Reintentar ahora</button>
+    </div>`:''}
+    ${sriCargando&&!sriCargado?'<div style="color:var(--text3);font-size:12px">Cargando facturas…</div>':''}
+    ${sriCargado&&!SRI_F.length?'<div style="color:var(--text3);font-size:12px;margin-bottom:8px">Aún no hay facturas electrónicas en los últimos 45 días.</div>':''}
+    ${filas}
+    ${sinFactura.length?`<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;font-weight:700">Ventas recientes sin factura electrónica (${sinFactura.length})</summary>
+      ${sinFactura.map(s=>`<div class="mrow" style="margin-top:5px"><div style="min-width:0;flex:1;font-size:12px">${esc(s.tableName||'')} · ${esc((s.date||'').replace('T',' ').slice(0,16))} · ${esc((s.items||[]).map(i=>i.qty+'× '+i.name).join(', ').slice(0,80))}</div>
+        <span style="font-weight:700;font-size:12px">${fmt(s.total)}</span><button class="btn btn-b btn-sm" data-sri-facturar="${esc(s.id)}" style="margin-left:6px">Emitir factura</button></div>`).join('')}
+    </details>`:''}
+  </div>
+  <div style="font-size:12px;font-weight:700;color:var(--text2);margin:6px 0 10px">Solicitudes manuales (sistema anterior)</div>`;
+}
+function attachFacturasSri(){
+  const mc=document.getElementById('mc'); if(!mc) return;
+  sriEnlazarAcciones(mc);
+  mc.querySelector('#sri-recargar')?.addEventListener('click',()=>{ sriCargado=false; sriCargarFacturas(); });
+  mc.querySelector('#sri-reintentar-cola')?.addEventListener('click',()=>sriProcesarCola());
+  mc.querySelectorAll('[data-sri-quitar-cola]').forEach(b=>b.addEventListener('click',()=>{
+    if(confirm('¿Quitar este pedido de la cola? La venta NO se anula; solo deja de intentarse la factura desde este equipo.')){ sriQuitarCola(b.dataset.sriQuitarCola); render(); }
+  }));
+  mc.querySelectorAll('[data-sri-corregir-cola]').forEach(b=>b.addEventListener('click',()=>{
+    const it = sriCola().find(x=>x.ventaId===b.dataset.sriCorregirCola); if(!it) return;
+    const v = S.find(s=>String(s.id)===it.ventaId);
+    abrirModalSri({ titulo:'Corregir datos y emitir', total:v?+v.total:0, prellenar:it.comprador, alConfirmar: async c=>{ sriQuitarCola(it.ventaId); await sriEmitir(it.ventaId, c); }});
+  }));
+  mc.querySelectorAll('[data-sri-reemitir]').forEach(b=>b.addEventListener('click',()=>{ const f=SRI_F.find(x=>x.id===b.dataset.sriReemitir); if(f) sriReemitir(f); }));
+  mc.querySelectorAll('[data-sri-facturar]').forEach(b=>b.addEventListener('click',()=>sriFacturarVentaExistente(b.dataset.sriFacturar)));
+  mc.querySelectorAll('[data-sri-hist]').forEach(b=>b.addEventListener('click',()=>{ sriVerHist = sriVerHist===b.dataset.sriHist?null:b.dataset.sriHist; render(); }));
+  mc.querySelectorAll('[data-sri-correo]').forEach(b=>b.addEventListener('click',async()=>{
+    const f=SRI_F.find(x=>x.id===b.dataset.sriCorreo); if(!f) return;
+    const email = prompt('Correo del comprador para enviar el XML y el PDF:', f.comprador?.email||'');
+    if(!email) return;
+    sriPanel('<div>Enviando correo…</div>','blu');
+    const r = await sriLlamar('correo',{facturaId:f.id, email:email.trim()});
+    if(r.ok) sriMostrarResultado(r.factura); else sriPanel(`<div style="color:#8b1a1a">${esc(r.mensaje)}</div>`,'red');
+  }));
+}
+
 // ── Barcode Scanner ──────────────────────────────────────────
 let scanStream = null;
 let scanInterval = null;
