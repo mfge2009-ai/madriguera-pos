@@ -1244,7 +1244,16 @@ const openS=()=>S.filter(s=>isVenta(s)&&s.date.startsWith(today())&&!s.closed);
 // ══ FASE 2: ventas como coleccion (un documento por venta) ══════════════
 const VENTAS_COL='ventas';
 // Ventana "en vivo": desde el 1ro del mes anterior. Lo anterior se carga bajo demanda.
-const VENTAS_DESDE=(()=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);return localISO(d).slice(0,10);})();
+/* Ventana de ventas EN VIVO: el mes corriente, con un piso de 7 dias hacia atras.
+   Antes arrancaba el 1ro del mes ANTERIOR y eso costaba ~336 lecturas extra en
+   CADA apertura del POS. Los meses anteriores se cargan solos cuando los pides
+   desde informes, historial o reconstruccion (ver cargarMes / cargarMeses).
+   El piso de 7 dias evita quedarte sin las ventas de ayer los dias 1, 2 y 3 del mes. */
+const VENTAS_DESDE=(()=>{
+  const p=new Date();p.setDate(1);                      // 1ro del mes corriente
+  const s=new Date();s.setDate(s.getDate()-7);          // hace 7 dias
+  return localISO(p<s?p:s).slice(0,10);                 // la fecha mas antigua de las dos
+})();
 let S_live=[];                 // ventana en vivo (snapshot de Firestore)
 const S_old=new Map();         // meses antiguos cargados bajo demanda (id -> registro)
 const S_pending=new Map();     // escrituras locales aun no confirmadas (p.ej. sin internet)
