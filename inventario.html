@@ -105,7 +105,7 @@ tr.tot td{font-weight:700;border-top:1.5px solid var(--b2);background:var(--bg3)
     <div class="logo">🥬 Insumos &amp; Recetas</div>
     <div id="hinfo"><span class="dot" id="cdot"></span><span id="cuser"></span>
       <button class="b sec sm" id="btn-ref">↻ Ventas</button>
-      <button class="b sec sm" id="btn-cat" title="Vuelve a leer el catálogo de productos desde la base. Úsalo si creaste o editaste productos en el POS.">🔄 Actualizar catálogo</button>
+      <button class="b sec sm" id="btn-cat" title="Trae del POS los productos creados o modificados desde la última sincronización (pocas lecturas).">🔄 Actualizar catálogo</button>
       <button class="b sec sm" id="btn-pos">POS</button>
       <button class="b sec sm" id="btn-out">Salir</button>
     </div>
@@ -118,7 +118,7 @@ tr.tot td{font-weight:700;border-top:1.5px solid var(--b2);background:var(--bg3)
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, writeBatch, Timestamp, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -277,34 +277,94 @@ function errCarga(qué,e){
   '<br><br>Si dice <b>permission-denied</b>, falta publicar las reglas de Firestore para las colecciones <code>inv_*</code>. Está explicado en la guía que acompaña a este archivo.</div>';
 }
 
-/* Catalogo de productos con copia local.
-   Antes se leian los ~1.788 productos de Firestore CADA vez que se abria esta
-   ventana. Ahora la copia se guarda en el navegador y solo se vuelve a pedir
-   si tiene mas de 6 horas (o si pulsas "Actualizar catalogo"). */
-const CAT_CACHE_KEY='madu_cat_cache', CAT_CACHE_MS=6*60*60*1000;
-async function cargarProductos(forzar){
-  if(!forzar){
+/* ══ CATALOGO LOCAL COMPARTIDO CON EL POS (23-sep-2026) ══════════════════
+   Misma copia en disco (IndexedDB "madu_catalogo") que usa el POS: mismo sitio,
+   misma base local. Al abrir Insumos solo se piden los productos modificados
+   desde la ultima sincronizacion (campo updatedAt, que el POS escribe en cada
+   guardado) y se compara el total con el servidor (~2 lecturas) para detectar
+   productos borrados. Relectura completa si la copia tiene mas de 7 dias.
+   Reemplaza la copia de 6 horas en localStorage (madu_cat_cache). */
+const CAT_DB='madu_catalogo', CAT_VER=1, CAT_FULL_MS=7*24*60*60*1000;
+try{ localStorage.removeItem('madu_cat_cache'); }catch(e){}   // copia antigua: libera espacio
+function _catIdb(){
+  return new Promise((res,rej)=>{
     try{
-      const c=JSON.parse(localStorage.getItem(CAT_CACHE_KEY)||'null');
-      if(c && Array.isArray(c.d) && c.d.length && (Date.now()-c.t)<CAT_CACHE_MS){
-        PROD=c.d;
-        console.log('Catalogo desde copia local:',PROD.length,'productos (0 lecturas)');
+      const r=indexedDB.open(CAT_DB,1);
+      r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+      r.onsuccess=()=>res(r.result);
+      r.onerror=()=>rej(r.error);
+      r.onblocked=()=>rej(new Error('IndexedDB bloqueada'));
+    }catch(e){ rej(e); }
+  });
+}
+async function catLeer(){
+  try{
+    const d=await _catIdb();
+    return await new Promise(res=>{
+      const tx=d.transaction('kv','readonly'), st=tx.objectStore('kv');
+      const a=st.get('meta'), b=st.get('productos');
+      tx.oncomplete=()=>{ d.close(); const m=a.result, p=b.result;
+        res(m&&Array.isArray(p)&&p.length&&Array.isArray(p[0])&&m.v===CAT_VER&&m.proyecto===firebaseConfig.projectId?{meta:m,productos:p}:null); };
+      tx.onerror=tx.onabort=()=>{ d.close(); res(null); };
+    });
+  }catch(e){ console.warn('Catalogo local no disponible:',e); return null; }
+}
+async function catGuardar(productos,meta){
+  try{
+    const d=await _catIdb();
+    return await new Promise(res=>{
+      const tx=d.transaction('kv','readwrite'), st=tx.objectStore('kv');
+      st.put(productos,'productos');
+      st.put({lastSync:meta.lastSync||0,lastFull:meta.lastFull||0,v:CAT_VER,proyecto:firebaseConfig.projectId},'meta');
+      tx.oncomplete=()=>{ d.close(); res(true); };
+      tx.onerror=tx.onabort=()=>{ d.close(); res(false); };
+    });
+  }catch(e){ console.warn('No se pudo guardar el catalogo local:',e); return false; }
+}
+function catNormalizar(data){
+  if(!data)return null;
+  const p={...data}, u=p.updatedAt;
+  if(u&&typeof u.toMillis==='function') p.updatedAt=u.toMillis();
+  else if(typeof u!=='number') delete p.updatedAt;
+  return p;
+}
+function catMaxSync(arr){ let m=0; arr.forEach(p=>{ if(p&&typeof p.updatedAt==='number'&&p.updatedAt>m)m=p.updatedAt; }); return m; }
+
+async function cargarProductos(forzarCompleto){
+  const c=forzarCompleto?null:await catLeer();
+  if(c && (Date.now()-(c.meta.lastFull||0))<CAT_FULL_MS){
+    const map=new Map(c.productos);   // pares [idDocumento, producto]
+    try{
+      let max=c.meta.lastSync||0;
+      const qs=await getDocs(query(collection(db,PRODUCTOS_COL),where('updatedAt','>',Timestamp.fromMillis(max))));
+      qs.forEach(d=>{ const p=catNormalizar(d.data()); if(p){ map.set(d.id,p); if(typeof p.updatedAt==='number'&&p.updatedAt>max)max=p.updatedAt; } });
+      const total=(await getCountFromServer(collection(db,PRODUCTOS_COL))).data().count;
+      if(total===map.size){
+        PROD=[...map.values()];
+        if(qs.size) await catGuardar([...map.entries()],{lastSync:max,lastFull:c.meta.lastFull});
+        console.log('Catalogo: '+PROD.length+' productos desde la copia local; '+qs.size+' actualizados del servidor');
         return;
       }
-    }catch(e){}
+      console.warn('Catalogo: servidor',total,'productos, copia local',map.size,'-> relectura completa');
+    }catch(e){
+      console.warn('Catalogo: sin servidor, se usa la copia local:',e);
+      PROD=[...map.values()];
+      return;
+    }
   }
   try{
     const s=await getDocs(collection(db,PRODUCTOS_COL));
-    PROD=s.docs.map(d=>d.data());
-    try{ localStorage.setItem(CAT_CACHE_KEY,JSON.stringify({t:Date.now(),d:PROD})); }
-    catch(e){ console.warn('No se pudo guardar la copia local del catalogo:',e.message); }
+    const pares=s.docs.map(d=>[d.id,catNormalizar(d.data())]).filter(x=>x[1]);
+    PROD=pares.map(x=>x[1]);
+    await catGuardar(pares,{lastSync:catMaxSync(PROD),lastFull:Date.now()});
+    console.log('Catalogo: lectura COMPLETA,',PROD.length,'productos');
   }
-  catch(e){ console.error('productos',e); PROD=[]; }
+  catch(e){ console.error('productos',e); PROD=c?c.productos.map(x=>x[1]):[]; }
 }
 /* Fuerza releer el catalogo: usar tras crear o editar productos en el POS. */
 async function refrescarCatalogo(btn){
   if(btn){ btn.disabled=true; btn.textContent='Actualizando…'; }
-  await cargarProductos(true);
+  await cargarProductos(false);
   if(btn){ btn.disabled=false; btn.textContent='🔄 Actualizar catálogo'; }
   toast('Catálogo actualizado: '+PROD.length+' productos');
   render();

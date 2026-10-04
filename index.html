@@ -363,7 +363,7 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
@@ -995,7 +995,7 @@ async function _retryBackups(){
   try{
     const pendP=JSON.parse(localStorage.getItem('madu_bk_prod')||'{}');
     for(const id of Object.keys(pendP)){
-      await setDoc(doc(db,PRODUCTOS_COL,id),pendP[id]);
+      await setDoc(doc(db,PRODUCTOS_COL,id),_marca(pendP[id]));
       _lastPSync.set(id,JSON.stringify(pendP[id]));
       delete pendP[id]; recovered++;
       localStorage.setItem('madu_bk_prod',JSON.stringify(pendP));
@@ -1019,6 +1019,7 @@ async function _retryBackups(){
             if(cur>=999)return;
             p.stock=Math.max(0,cur+op.delta);
           }
+          p.updatedAt=serverTimestamp();
           tx.set(ref,p);
         });
         recovered++;
@@ -1050,6 +1051,10 @@ async function _appendSale(sale){ return saveVenta(sale); }
 // - Permite ajustes de stock ATOMICOS via runTransaction: dos cajas pueden
 //   vender a la vez sin pisarse el inventario (Falencia 2).
 const PRODUCTOS_COL='productos';
+// SYNC INCREMENTAL (23-sep-2026): todo guardado de producto lleva updatedAt con
+// la hora del SERVIDOR (no la del equipo, que puede estar adelantada/atrasada).
+// Asi los demas navegadores piden solo lo que cambio desde su ultima sincronizacion.
+const _marca=p=>({...p,updatedAt:serverTimestamp()});
 let _lastPSync=new Map(); // id -> JSON del ultimo estado confirmado por Firestore
 
 function _backupProd(p){
@@ -1077,7 +1082,7 @@ async function saveProductos(list){
   try{
     for(let i=0;i<reales.length;i+=400){
       const batch=writeBatch(db);
-      reales.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),p));
+      reales.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),_marca(p)));
       await conLimite(batch.commit());
     }
     reales.forEach(p=>_lastPSync.set(String(p.id),JSON.stringify(p)));
@@ -1102,7 +1107,7 @@ async function sP(){
     if(prev===undefined){ dirty.push({...p}); return; } // producto nuevo: va completo
     let prevObj; try{ prevObj=JSON.parse(prev); }catch(e){ prevObj=null; }
     if(!prevObj){ dirty.push({...p}); return; }
-    const a=JSON.stringify({...p,stock:0}), b=JSON.stringify({...prevObj,stock:0});
+    const a=JSON.stringify({...p,stock:0,updatedAt:0}), b=JSON.stringify({...prevObj,stock:0,updatedAt:0});
     if(a!==b) dirty.push({...p,stock:prevObj.stock}); // conserva stock del servidor
   });
   if(dirty.length>0)await saveProductos(dirty);
@@ -1128,6 +1133,7 @@ async function ajustarStock(productId,delta){
       const cur=(typeof p.stock==='number')?p.stock:0;
       if(cur>=999)return; // 999 = sin control de stock
       p.stock=Math.max(0,cur+delta);
+      p.updatedAt=serverTimestamp();
       tx.set(ref,p);
     });
   }catch(e){
@@ -1150,7 +1156,7 @@ async function fijarStock(productId,valor){
       const ref=doc(db,PRODUCTOS_COL,String(productId));
       const s=await tx.get(ref);
       if(!s.exists())return;
-      const p=s.data(); p.stock=valor;
+      const p=s.data(); p.stock=valor; p.updatedAt=serverTimestamp();
       tx.set(ref,p);
     });
   }catch(e){
@@ -1179,7 +1185,7 @@ async function migrarProductos(){
   const arr=base.filter(p=>p&&p.id&&!p.esConsignado);
   for(let i=0;i<arr.length;i+=400){
     const batch=writeBatch(db);
-    arr.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),p));
+    arr.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),_marca(p)));
     await batch.commit();
   }
   await setDoc(doc(db,'madu','migracion_productos'),{done:true,total:arr.length,fecha:localISO()});
@@ -1389,6 +1395,168 @@ function showApp(){
 window.addEventListener('online', ()=>{ online=true; _retryBackups(); updateHdr(); });
 window.addEventListener('offline', ()=>{ online=false; updateHdr(); });
 
+// ══ CATALOGO LOCAL CON SINCRONIZACION INCREMENTAL (23-sep-2026) ═══════════
+// Antes: cada apertura en frio leia los ~1.788 productos (~1.788 lecturas).
+// Ahora: el catalogo se guarda en el disco del navegador (IndexedDB) y al abrir
+// solo se piden los productos con updatedAt posterior a la ultima sincronizacion.
+// La misma copia la usa Insumos (inventario.html): mismo sitio, misma base local.
+//  - Borrados desde otro equipo: al abrir se compara el TOTAL de productos del
+//    servidor con la copia (consulta de conteo: ~2 lecturas). Si no coincide,
+//    se relee todo. Ademas, resincronizacion completa cada 7 dias.
+//  - "removed" en la consulta incremental NO es un borrado: pasa cuando una
+//    escritura local espera su hora de servidor. Se ignora a proposito.
+// PARA REVERTIR sin tocar nada mas: poner CATALOGO_INCREMENTAL=false.
+const CATALOGO_INCREMENTAL=true;
+const CAT_DB='madu_catalogo', CAT_VER=1, CAT_FULL_MS=7*24*60*60*1000;
+function _catIdb(){
+  return new Promise((res,rej)=>{
+    try{
+      const r=indexedDB.open(CAT_DB,1);
+      r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+      r.onsuccess=()=>res(r.result);
+      r.onerror=()=>rej(r.error);
+      r.onblocked=()=>rej(new Error('IndexedDB bloqueada'));
+    }catch(e){ rej(e); }
+  });
+}
+async function catLeer(){
+  try{
+    const d=await _catIdb();
+    return await new Promise(res=>{
+      const tx=d.transaction('kv','readonly'), st=tx.objectStore('kv');
+      const a=st.get('meta'), b=st.get('productos');
+      tx.oncomplete=()=>{ d.close(); const m=a.result, p=b.result;
+        res(m&&Array.isArray(p)&&p.length&&Array.isArray(p[0])&&m.v===CAT_VER&&m.proyecto===firebaseConfig.projectId?{meta:m,productos:p}:null); };
+      tx.onerror=tx.onabort=()=>{ d.close(); res(null); };
+    });
+  }catch(e){ console.warn('Catalogo local no disponible:',e); return null; }
+}
+async function catGuardar(productos,meta){
+  try{
+    const d=await _catIdb();
+    return await new Promise(res=>{
+      const tx=d.transaction('kv','readwrite'), st=tx.objectStore('kv');
+      st.put(productos,'productos');
+      st.put({lastSync:meta.lastSync||0,lastFull:meta.lastFull||0,v:CAT_VER,proyecto:firebaseConfig.projectId},'meta');
+      tx.oncomplete=()=>{ d.close(); res(true); };
+      tx.onerror=tx.onabort=()=>{ d.close(); res(false); };
+    });
+  }catch(e){ console.warn('No se pudo guardar el catalogo local:',e); return false; }
+}
+// Timestamp de Firestore -> milisegundos (numero), para poder guardarlo en disco
+function catNormalizar(data){
+  if(!data)return null;
+  const p={...data}, u=p.updatedAt;
+  if(u&&typeof u.toMillis==='function') p.updatedAt=u.toMillis();
+  else if(typeof u!=='number') delete p.updatedAt;
+  return p;
+}
+// La copia en disco se guarda como pares [idDocumento, producto].
+function catMaxSync(arr){ let m=0; arr.forEach(p=>{ if(p&&typeof p.updatedAt==='number'&&p.updatedAt>m)m=p.updatedAt; }); return m; }
+
+let _catMap=new Map(), _catMeta={lastSync:0,lastFull:0}, _catGuardarT=null, _catOnCambio=null;
+const _catStats={modo:'',lecturasProductos:0};
+window._catStats=_catStats; // diagnostico: escribir _catStats en la consola
+function _catProgramarGuardado(){
+  if(_catGuardarT)clearTimeout(_catGuardarT);
+  _catGuardarT=setTimeout(()=>{ catGuardar([..._catMap.entries()],_catMeta); },1500);
+}
+// Vuelca _catMap en P. completo=true reemplaza todo (refleja borrados);
+// si no, conserva los productos recien creados en este equipo que aun no
+// vuelven confirmados del servidor.
+function _catAplicar(completo){
+  const arr=[..._catMap.values()].map(p=>({...p}));
+  if(!completo){
+    const ids=new Set(arr.filter(p=>p&&p.id).map(p=>String(p.id)));
+    P.forEach(p=>{ if(p&&p.id&&!p.esConsignado&&!ids.has(String(p.id))) arr.push(p); });
+  }
+  P=arr;
+  injectConsignaProducts();
+  setTimeout(patchProducts,3000);
+  if(_catOnCambio)_catOnCambio();
+}
+async function _catCompleto(){
+  const qs=await getDocs(collection(db,PRODUCTOS_COL));
+  const map=new Map();
+  qs.forEach(d=>{ const p=catNormalizar(d.data()); if(p) map.set(d.id,p); });  // clave = ID del documento
+  _catStats.lecturasProductos+=qs.size;
+  _catMap=map;
+  _catMeta={lastSync:catMaxSync([...map.values()]),lastFull:Date.now()};
+  _lastPSync=new Map([...map.values()].filter(p=>p.id).map(p=>[String(p.id),JSON.stringify(p)]));
+  _catAplicar(true);
+  await catGuardar([...map.entries()],_catMeta);
+  console.log('Catalogo: lectura COMPLETA,',map.size,'productos ('+qs.size+' lecturas)');
+}
+async function _catVerificarConteo(){
+  try{
+    const c=await getCountFromServer(collection(db,PRODUCTOS_COL));
+    const srv=c.data().count, loc=_catMap.size;
+    if(srv!==loc){
+      console.warn('Catalogo: servidor tiene',srv,'productos y la copia local',loc,'-> relectura completa');
+      _catStats.modo+=' +relectura por conteo';
+      await _catCompleto();
+    } else console.log('Catalogo: conteo OK ('+srv+' productos)');
+  }catch(e){ console.warn('Catalogo: no se pudo verificar el conteo:',e); }
+}
+function _catSuscribir(){
+  const desde=Timestamp.fromMillis(_catMeta.lastSync||0);
+  let primeraDelServidor=true;
+  onSnapshot(query(collection(db,PRODUCTOS_COL),where('updatedAt','>',desde)),snap=>{
+    let n=0, max=_catMeta.lastSync||0;
+    snap.docChanges().forEach(ch=>{
+      if(ch.type==='removed')return;
+      if(ch.doc.metadata.hasPendingWrites)return;
+      const p=catNormalizar(ch.doc.data());
+      if(!p)return;
+      _catMap.set(ch.doc.id,p);
+      if(p.id)_lastPSync.set(String(p.id),JSON.stringify(p));
+      if(typeof p.updatedAt==='number'&&p.updatedAt>max)max=p.updatedAt;
+      n++;
+    });
+    if(!snap.metadata.fromCache)_catStats.lecturasProductos+=n;
+    if(n>0){
+      _catMeta.lastSync=max;
+      _catAplicar(false);
+      _catProgramarGuardado();
+      console.log('Catalogo: '+n+' producto(s) actualizados desde el servidor');
+    }
+    if(primeraDelServidor&&!snap.metadata.fromCache){
+      primeraDelServidor=false;
+      if(!_catStats.recienCompleto) _catVerificarConteo();
+    }
+  },()=>{online=false;showErr();});
+}
+// Devuelve true si el catalogo quedo a cargo de este modulo; false = usar el metodo clasico.
+async function iniciarCatalogo(onCambio){
+  if(!CATALOGO_INCREMENTAL||typeof indexedDB==='undefined')return false;
+  _catOnCambio=onCambio;
+  const c=await catLeer();
+  if(c){
+    _catMap=new Map(c.productos);   // pares [idDocumento, producto]
+    _catMeta={lastSync:c.meta.lastSync||0,lastFull:c.meta.lastFull||0};
+    _lastPSync=new Map([..._catMap.values()].filter(p=>p&&p.id).map(p=>[String(p.id),JSON.stringify(p)]));
+    _catAplicar(true);
+    console.log('Catalogo: '+_catMap.size+' productos desde la copia local (0 lecturas)');
+  }
+  const vencido=!c||(Date.now()-(c.meta.lastFull||0))>CAT_FULL_MS;
+  _catStats.modo=c?(vencido?'copia local vencida -> completa':'incremental'):'primera vez -> completa';
+  if(vencido){
+    try{ await _catCompleto(); _catStats.recienCompleto=true; }
+    catch(e){
+      console.warn('Catalogo: no se pudo leer completo:',e);
+      if(!c)return false;            // sin copia y sin servidor: metodo clasico
+    }
+  }
+  _catSuscribir();
+  return true;
+}
+// Boton "Resincronizar" en Productos: relectura completa manual (~1.800 lecturas).
+window.resincronizarCatalogo=async function(){
+  if(!confirm('Releer el catalogo completo desde la nube?\nCuesta unas '+(_catMap.size||1800)+' lecturas. Solo es necesario si sospechas que falta o sobra algun producto.'))return;
+  try{ await _catCompleto(); alert('Catalogo resincronizado: '+_catMap.size+' productos.'); }
+  catch(e){ alert('No se pudo resincronizar: '+(e.code||e.message)); }
+};
+
 function subRT(){
   let _loaded={};
   // On startup, try to flush any pending backups
@@ -1412,14 +1580,23 @@ function subRT(){
 
   // FASE 3 - Productos: coleccion con un documento por producto. Evita el
   // limite de 1MB del documento unico y habilita transacciones de stock.
-  onSnapshot(collection(db,PRODUCTOS_COL),snap=>{
-    P=snap.docs.map(d=>d.data());
-    _lastPSync=new Map(P.filter(p=>p&&p.id).map(p=>[String(p.id),JSON.stringify(p)]));
-    injectConsignaProducts();
-    setTimeout(patchProducts,3000);
+  // 23-sep-2026: primero intenta el catalogo local + sync incremental; si no se
+  // puede (sin IndexedDB, o sin copia y sin servidor) usa el metodo clasico.
+  iniciarCatalogo(()=>{
     _loaded['products']=true;
     if(_appShown&&!_writing) debouncedRender();
-  },()=>{online=false;showErr();});
+  }).then(ok=>{
+    if(ok)return;
+    _catStats.modo='clasico';
+    onSnapshot(collection(db,PRODUCTOS_COL),snap=>{
+      P=snap.docs.map(d=>d.data());
+      _lastPSync=new Map(P.filter(p=>p&&p.id).map(p=>[String(p.id),JSON.stringify(p)]));
+      injectConsignaProducts();
+      setTimeout(patchProducts,3000);
+      _loaded['products']=true;
+      if(_appShown&&!_writing) debouncedRender();
+    },()=>{online=false;showErr();});
+  });
 
   ['tables','clientes','consigna','nomina','gastos_fijos'].forEach(k=>{
     onSnapshot(doc(db,'madu',k),snap=>{
@@ -2511,6 +2688,7 @@ function rProductos(){
     <div class="rb" style="margin-bottom:10px">
       <span class="stitle" style="margin:0">Catálogo (${P.length})</span>
       <div style="display:flex;gap:7px">
+        <button class="btn btn-g" onclick="resincronizarCatalogo()" style="font-size:11px" title="Relee el catalogo completo desde la nube (unas 1.800 lecturas). Normalmente no hace falta: se sincroniza solo.">🔄 Resincronizar</button>
         <button class="btn btn-g" id="bpexportcat" style="font-size:11px">↓ Exportar</button>
         <button class="btn btn-g" id="bpimport" style="font-size:11px">↑ Importar CSV</button>
         <button class="btn btn-acc" id="bpn">+ Agregar</button>
