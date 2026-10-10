@@ -6382,6 +6382,7 @@ function rFacturasSri(){
       <span class="stitle" style="margin:0">Facturación electrónica SRI ${amb==='1'?sriChip('AMBIENTE DE PRUEBAS — sin validez tributaria','amb'):amb==='2'?sriChip('PRODUCCIÓN','grn'):''}</span>
       <button class="btn btn-g btn-sm" id="sri-recargar">↻ Actualizar</button>
     </div>
+    ${MI_ROL==='admin'?sriPanelEstadoHTML():''}
     ${cola.length?`<div class="card" style="margin-bottom:10px;background:#fff7e0;border:1px solid #e8c96a">
       <div style="font-weight:700;margin-bottom:5px">Pendientes de enviar desde este equipo (${cola.length})</div>
       ${cola.map(c=>`<div class="rb" style="font-size:11.5px;margin-bottom:4px;gap:6px">
@@ -6404,6 +6405,7 @@ function attachFacturasSri(){
   const mc=document.getElementById('mc'); if(!mc) return;
   sriEnlazarAcciones(mc);
   mc.querySelector('#sri-recargar')?.addEventListener('click',()=>{ sriCargado=false; sriCargarFacturas(); });
+  sriEnlazarPanelEstado(mc);
   mc.querySelector('#sri-reintentar-cola')?.addEventListener('click',()=>sriProcesarCola());
   mc.querySelectorAll('[data-sri-quitar-cola]').forEach(b=>b.addEventListener('click',()=>{
     if(confirm('¿Quitar este pedido de la cola? La venta NO se anula; solo deja de intentarse la factura desde este equipo.')){ sriQuitarCola(b.dataset.sriQuitarCola); render(); }
@@ -6570,6 +6572,88 @@ async function sriAbrirNC(f){
     }
     sriCargado=false; sriCargarFacturas();
   };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PANEL DE ESTADO (solo administracion): ambiente, serie, proximos numeros,
+//  firma, ruta de envio, reintentos, correo y prueba de conexion con el SRI.
+//  Solo lectura: no numera, no firma, no envia comprobantes.
+// ═══════════════════════════════════════════════════════════════════════
+let sriEst = null, sriEstCargando = false, sriEstError = '', sriPrueba = null, sriProbando = false, sriEstAbierto = null;
+function sriEstAbiertoGuardado(){ if(sriEstAbierto===null){ try{ sriEstAbierto = localStorage.getItem('sri_panel_abierto')==='1'; }catch(e){ sriEstAbierto=false; } } return sriEstAbierto; }
+async function sriCargarEstado(){
+  if(sriEstCargando) return;
+  sriEstCargando = true; sriEstError='';
+  if(view==='facturas') render();
+  const r = await sriLlamar('estadoDetallado');
+  sriEstCargando = false;
+  if(r.ok) sriEst = r; else sriEstError = r.mensaje||'No se pudo leer el estado.';
+  if(view==='facturas') render();
+}
+async function sriProbarConexion(){
+  if(sriProbando) return;
+  sriProbando = true; sriPrueba = null;
+  if(view==='facturas') render();
+  const r = await sriLlamar('probarConexion');
+  sriProbando = false;
+  sriPrueba = r.ok ? r : {ok:false, conclusion: r.mensaje||'No se pudo probar la conexión.', pruebas:[], fecha:new Date().toISOString()};
+  try{ bitacora('sri_prueba_conexion',{accion:'Probo la conexion con el SRI: '+(sriPrueba.ok?'OK':'FALLA'), detalle:sriPrueba.conclusion}); }catch(e){}
+  if(view==='facturas') render();
+}
+function sriPanelEstadoHTML(){
+  if(!sriEst && !sriEstCargando && !sriEstError) setTimeout(sriCargarEstado, 0);   // una vez por sesion: avisa firma por vencer
+  const e = sriEst, abierto = sriEstAbiertoGuardado();
+  const rojas = e ? (e.alertas||[]).filter(a=>a.nivel==='red').length : 0, ambar = e ? (e.alertas||[]).filter(a=>a.nivel!=='red').length : 0;
+  const fila = (k,v,sub)=>`<div style="padding:7px 9px;background:var(--bg3);border-radius:8px;min-width:0"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.03em">${k}</div><div style="font-weight:700;font-size:13px;word-break:break-word">${v}</div>${sub?`<div style="font-size:10.5px;color:var(--text2)">${sub}</div>`:''}</div>`;
+  const si = b => b ? '<span style="color:#1f6b45">Sí</span>' : '<span style="color:#8b1a1a">No</span>';
+  let cuerpo = '';
+  if(sriEstCargando && !e) cuerpo = '<div style="font-size:12px;color:var(--text3)">Leyendo el estado del servicio…</div>';
+  else if(sriEstError && !e) cuerpo = `<div style="font-size:12px;color:#8b1a1a">${esc(sriEstError)}</div>`;
+  else if(e){
+    const f = e.firma||{}, dias = f.diasRestantes;
+    const tonoFirma = !f.ok ? '#8b1a1a' : dias<=15 ? '#8b1a1a' : dias<=45 ? '#a86b00' : '#1f6b45';
+    cuerpo = `${(e.alertas||[]).map(a=>`<div style="font-size:12px;margin-bottom:6px;padding:7px 9px;border-radius:8px;background:${a.nivel==='red'?'#fde8e8':'#fff4dc'};color:${a.nivel==='red'?'#8b1a1a':'#7a5200'}">${a.nivel==='red'?'⛔':'⚠'} ${esc(a.texto)}</div>`).join('')}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:7px">
+        ${fila('Ambiente', e.ambiente==='2'?'<span style="color:#1f6b45">PRODUCCIÓN</span>':'<span style="color:#a86b00">'+esc(e.ambienteNombre)+'</span>', e.ambiente==='2'?'Comprobantes con validez tributaria':'Sin validez tributaria')}
+        ${fila('Emisor', esc(e.emisor?.ruc||''), esc(e.emisor?.razonSocial||''))}
+        ${fila('Serie', esc(e.serie||''), 'Establecimiento-punto de emisión')}
+        ${fila('Próxima factura', esc(e.factura?.proximo||'—'), e.factura?.ultimo?'Última emitida: '+esc(e.factura.ultimo):'Aún no hay facturas en este ambiente')}
+        ${fila('Próxima nota de crédito', esc(e.notaCredito?.proximo||'—'), e.notaCredito?.ultimo?'Última emitida: '+esc(e.notaCredito.ultimo):'Aún no hay notas de crédito')}
+        ${fila('Firma electrónica', `<span style="color:${tonoFirma}">${f.ok?'Vigente · '+dias+' días':'Con problemas'}</span>`, f.ok?esc(f.titular||'')+' · vence '+esc(f.validoHasta||''):esc(f.error||''))}
+        ${fila('Envío al SRI', e.envio?.puente?'Por la Mac del local':'Directo desde Google', e.envio?.puente?(e.envio.respaldoDirecto?'Con respaldo directo':'Sin respaldo directo'):'Puente desactivado')}
+        ${fila('Reintentos automáticos', e.activadores?si(e.activadores.reintentos):'—', e.activadores?'Respaldo mensual en Drive: '+(e.activadores.respaldoMensual?'sí':'no'):'')}
+        ${fila('Correo al cliente', e.correo?.habilitado?'Activo':'Desactivado', e.correo?.cuotaRestante!==undefined?'Quedan '+e.correo.cuotaRestante+' envíos hoy':esc(e.correo?.proveedor||''))}
+        ${fila('En trámite', e.enTramite?String(e.enTramite.length):'—', e.enTramite&&e.enTramite.length?esc(e.enTramite.slice(0,3).map(x=>x.numero).join(', ')):'Ninguno sin autorizar')}
+      </div>
+      <div style="font-size:10.5px;color:var(--text3);margin-top:6px">Servicio v${esc(e.version||'')} · leído ${esc(new Date(e.generado).toLocaleString('es-EC',{dateStyle:'short',timeStyle:'short'}))} · NC a consumidor final: ${e.reglas?.ncConsumidorFinal?'permitidas':'bloqueadas'} · Consumidor final hasta $${esc(String(e.reglas?.limiteConsumidorFinal||''))}</div>`;
+  }
+  let prueba = '';
+  if(sriProbando) prueba = '<div style="font-size:12px;color:#1a3f8b;margin-top:8px">Probando la conexión con el SRI…</div>';
+  else if(sriPrueba) prueba = `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:${sriPrueba.ok?'#e7f5ec':'#fde8e8'};font-size:12px">
+      <div style="font-weight:700;color:${sriPrueba.ok?'#1f6b45':'#8b1a1a'}">${sriPrueba.ok?'✔':'✘'} ${esc(sriPrueba.conclusion||'')}</div>
+      ${(sriPrueba.pruebas||[]).map(p=>`<div>${p.ok?'✔':'✘'} ${esc(p.nombre)} · ${p.ms} ms${p.detalle?' · <span style="color:#555">'+esc(p.detalle)+'</span>':''}</div>`).join('')}
+      <div style="font-size:10.5px;color:#666">${esc(sriPrueba.ambienteNombre||'')} · ${esc(new Date(sriPrueba.fecha).toLocaleString('es-EC',{dateStyle:'short',timeStyle:'medium'}))} · no se envió ningún comprobante</div></div>`;
+  return `<details id="sri-panel-estado" class="card" style="margin-bottom:12px;padding:10px 12px" ${abierto?'open':''}>
+    <summary style="cursor:pointer;font-weight:700;font-size:13px;list-style:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ⚙ Estado de la facturación electrónica
+      ${e?(e.ambiente==='2'?sriChip('PRODUCCIÓN','grn'):sriChip(e.ambienteNombre,'amb')):''}
+      ${e&&e.factura?sriChip('Próx. factura '+e.factura.proximo.slice(-9).replace(/^0+/,''),'gris'):''}
+      ${rojas?sriChip(rojas+' alerta'+(rojas>1?'s':''),'red'):ambar?sriChip(ambar+' aviso'+(ambar>1?'s':''),'amb'):e?sriChip('Todo en orden','grn'):''}
+    </summary>
+    <div style="margin-top:10px">${cuerpo}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+        <button class="btn btn-b btn-sm" id="sri-probar" ${sriProbando?'disabled':''}>🔌 Probar conexión con el SRI</button>
+        <button class="btn btn-g btn-sm" id="sri-estado-act" ${sriEstCargando?'disabled':''}>↻ Actualizar estado</button>
+      </div>${prueba}
+    </div>
+  </details>`;
+}
+function sriEnlazarPanelEstado(mc){
+  const d = mc.querySelector('#sri-panel-estado'); if(!d) return;
+  d.addEventListener('toggle',()=>{ sriEstAbierto = d.open; try{ localStorage.setItem('sri_panel_abierto', d.open?'1':'0'); }catch(e){} });
+  mc.querySelector('#sri-probar')?.addEventListener('click',()=>sriProbarConexion());
+  mc.querySelector('#sri-estado-act')?.addEventListener('click',()=>sriCargarEstado());
 }
 
 // ── Barcode Scanner ──────────────────────────────────────────
