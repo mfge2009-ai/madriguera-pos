@@ -6120,7 +6120,9 @@ function sriPanel(html, tono){
 }
 function sriMensajeFactura(f){
   const [etq,tono] = SRI_ETQ[f.estado]||[f.estado,'gris'];
-  let h = `<div style="font-weight:700;font-size:13.5px;margin-bottom:4px">🧾 Factura ${esc(f.numero||'')} ${f.ambiente==='1'?sriChip('PRUEBAS','amb'):''}</div>`;
+  const esNC = f.tipoDoc==='04';
+  let h = `<div style="font-weight:700;font-size:13.5px;margin-bottom:4px">${esNC?'↩️ Nota de crédito':'🧾 Factura'} ${esc(f.numero||'')} ${f.ambiente==='1'?sriChip('PRUEBAS','amb'):''}</div>`;
+  if(esNC) h += `<div style="font-size:11.5px;color:#555;margin-bottom:4px">Modifica la factura ${esc(f.facturaNumero||'')} · USD ${esc(f.importeTotal||'')} · ${esc(f.motivo||'')}</div>`;
   h += `<div style="margin-bottom:6px">${sriChip(etq,tono)} ${f.estadoCorreo?sriChip((SRI_CORREO[f.estadoCorreo]||[f.estadoCorreo])[0],(SRI_CORREO[f.estadoCorreo]||[0,'gris'])[1]):''}</div>`;
   if(f.estado==='RECIBIDA') h += `<div style="color:#1a3f8b">El SRI la recibió pero <b>todavía no está autorizada</b>. Se volverá a consultar sola; también puedes pulsar «Consultar».</div>`;
   if(f.estado==='ENVIADA_SIN_CONFIRMAR') h += `<div style="color:#7a5200">Se envió y se cortó la conexión. <b>No se reenviará a ciegas</b>: primero se consulta al SRI.</div>`;
@@ -6288,9 +6290,19 @@ async function sriControlAnulacion(venta){
   if(!f || f.estado==='DEVUELTA') return {ok:true};
   if(f.ambiente==='1') return {ok:true, nota:'Tenía una factura de PRUEBAS ('+f.numero+'), sin validez tributaria.'};
   if(f.estado==='NO_AUTORIZADA') return {ok:true, nota:'Su factura '+f.numero+' fue NO AUTORIZADA por el SRI.'};
-  const msg = 'Esta venta tiene la factura electrónica '+f.numero+' en estado '+((SRI_ETQ[f.estado]||[f.estado])[0])+'.\n\n'+
+  // ¿Tiene notas de credito AUTORIZADAS por el valor total? → referencia automatica
+  const ncs = await sriNCDeFactura(f);
+  const ncAut = ncs.filter(n=>n.estado==='AUTORIZADA');
+  const acreditado = ncAut.reduce((a,n)=>a+Math.round(+n.importeTotal*100),0);
+  if(f.estado==='AUTORIZADA' && ncAut.length && acreditado>=Math.round(+f.importeTotal*100)){
+    const ref = ncAut.map(n=>'NC '+n.numero).join(', ');
+    if(!confirm('La factura '+f.numero+' ya tiene nota(s) de crédito autorizada(s) por su valor total:\n'+ref+'\n\n¿Anular la venta con esa referencia?')) return {ok:false};
+    return {ok:true, referencia:ref, factura:f.numero};
+  }
+  const msg = 'Esta venta tiene la factura electrónica '+f.numero+' en estado '+((SRI_ETQ[f.estado]||[f.estado])[0])+'.\n'+
+    (ncAut.length?'Notas de crédito autorizadas: '+ncAut.map(n=>n.numero+' ($'+n.importeTotal+')').join(', ')+' — no cubren el total.\n':'')+'\n'+
     'Una factura autorizada NO se borra ni se modifica. Antes de anular la venta debes:\n'+
-    ' • emitir una NOTA DE CRÉDITO (desde el Facturador del SRI u otro sistema autorizado), o\n'+
+    ' • emitir una NOTA DE CRÉDITO total (pestaña Facturas → «Nota de crédito»), o\n'+
     ' • solicitar la anulación en SRI en línea (hasta el día 7 del mes siguiente; las de consumidor final no se pueden anular).\n\n'+
     'Escribe el número de la nota de crédito o de la solicitud de anulación para continuar:';
   const ref = prompt(msg);
@@ -6325,7 +6337,11 @@ function rFacturasSri(){
     .sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,25);
   const ventaDe = id => S.find(s=>String(s.id)===String(id));
   const filas = SRI_F.slice(0,60).map(f=>{
+    if(f.tipoDoc==='04') return sriTarjetaNC(f);
     const v = ventaDe(f.ventaId);
+    const ncsF = sriNCLocales(f), ncVig = ncsF.filter(n=>!SRI_NC_NO_VIGENTES.includes(n.estado));
+    const acred = ncVig.reduce((a,n)=>a+Math.round(+(n.importeTotal||n.valor||0)*100),0);
+    const saldoNC = Math.round(+f.importeTotal*100) - acred;
     const pago = v ? (v.anulada ? sriChip('Venta anulada','red') : sriChip('Cobrada','grn')) : sriChip('Pago: ver Caja','gris');
     const [etq,tono] = SRI_ETQ[f.estado]||[f.estado,'gris'];
     const corr = SRI_CORREO[f.estadoCorreo]||[f.estadoCorreo||'—','gris'];
@@ -6339,7 +6355,8 @@ function rFacturasSri(){
         </div>
         <div style="text-align:right;flex-shrink:0;font-weight:700;color:var(--acc)">$${esc(f.importeTotal||'')}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0">${pago} ${sriChip(etq,tono)} ${sriChip(corr[0],corr[1])}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0">${pago} ${sriChip(etq,tono)} ${sriChip(corr[0],corr[1])} ${ncVig.length?sriChip(saldoNC<=0?'Acreditada totalmente':'NC parcial · saldo $'+(saldoNC/100).toFixed(2), saldoNC<=0?'red':'amb'):''}</div>
+      ${ncsF.length?`<div style="font-size:11px;color:var(--text2);margin-bottom:4px">${ncsF.map(n=>'↩️ NC '+esc(n.numero)+' · $'+esc(n.importeTotal||n.valor||'')+' · '+esc((SRI_ETQ[n.estado]||[n.estado||'—'])[0])).join('<br>')}</div>`:''}
       ${msgs.map(m=>`<div style="font-size:11.5px;color:#8b1a1a"><b>${esc(m.identificador)}</b> ${esc(m.explicacion||m.mensaje)} ${m.informacionAdicional?'<span style="color:#666">('+esc(m.informacionAdicional.slice(0,160))+')</span>':''}</div>`).join('')}
       ${f.ultimoError?`<div style="font-size:11.5px;color:#8b1a1a">${esc(f.ultimoError.mensaje)}</div>`:''}
       ${f.estadoCorreo==='FALLIDO'&&f.correoError?`<div style="font-size:11px;color:#8b1a1a">Correo: ${esc(f.correoError)}</div>`:''}
@@ -6347,6 +6364,7 @@ function rFacturasSri(){
         ${SRI_EN_CURSO.includes(f.estado)?`<button class="btn btn-b btn-sm" data-sri-consultar="${esc(f.id)}">Consultar / reintentar</button>`:''}
         ${(f.estado==='DEVUELTA'||(f.estado==='NO_AUTORIZADA'&&MI_ROL==='admin'))?`<button class="btn btn-w btn-sm" data-sri-reemitir="${esc(f.id)}">Corregir y reemitir</button>`:''}
         ${f.estado==='AUTORIZADA'?`<button class="btn btn-g btn-sm" data-sri-doc="pdf" data-sri-id="${esc(f.id)}">⬇ PDF</button><button class="btn btn-g btn-sm" data-sri-doc="xml" data-sri-id="${esc(f.id)}">⬇ XML</button><button class="btn btn-g btn-sm" data-sri-correo="${esc(f.id)}">✉ ${f.estadoCorreo==='ENVIADO'?'Reenviar':'Enviar'} correo</button>`:''}
+        ${f.estado==='AUTORIZADA'&&MI_ROL==='admin'&&saldoNC>0?`<button class="btn btn-w btn-sm" data-sri-nc="${esc(f.id)}">↩️ Nota de crédito</button>`:''}
         <button class="btn btn-g btn-sm" data-sri-hist="${esc(f.id)}">${abierto?'Ocultar':'Historial'}</button>
       </div>
       ${abierto?`<div style="margin-top:8px;background:var(--bg3);border-radius:var(--rs);padding:7px 9px;font-size:11px;line-height:1.5">
@@ -6397,6 +6415,7 @@ function attachFacturasSri(){
   }));
   mc.querySelectorAll('[data-sri-reemitir]').forEach(b=>b.addEventListener('click',()=>{ const f=SRI_F.find(x=>x.id===b.dataset.sriReemitir); if(f) sriReemitir(f); }));
   mc.querySelectorAll('[data-sri-facturar]').forEach(b=>b.addEventListener('click',()=>sriFacturarVentaExistente(b.dataset.sriFacturar)));
+  mc.querySelectorAll('[data-sri-nc]').forEach(b=>b.addEventListener('click',()=>{ const f=SRI_F.find(x=>x.id===b.dataset.sriNc); if(f) sriAbrirNC(f); }));
   mc.querySelectorAll('[data-sri-hist]').forEach(b=>b.addEventListener('click',()=>{ sriVerHist = sriVerHist===b.dataset.sriHist?null:b.dataset.sriHist; render(); }));
   mc.querySelectorAll('[data-sri-correo]').forEach(b=>b.addEventListener('click',async()=>{
     const f=SRI_F.find(x=>x.id===b.dataset.sriCorreo); if(!f) return;
@@ -6406,6 +6425,151 @@ function attachFacturasSri(){
     const r = await sriLlamar('correo',{facturaId:f.id, email:email.trim()});
     if(r.ok) sriMostrarResultado(r.factura); else sriPanel(`<div style="color:#8b1a1a">${esc(r.mensaje)}</div>`,'red');
   }));
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  NOTAS DE CREDITO (codDoc 04) — solo administracion
+// ═══════════════════════════════════════════════════════════════════════
+//  El navegador solo elige QUE se acredita (total o productos/cantidades)
+//  y el motivo. El servicio recalcula todo desde la factura autorizada,
+//  controla el saldo en una transaccion, numera, firma y envia al SRI.
+//  La nota de credito NO mueve caja ni inventario: si hubo devolucion de
+//  dinero o de productos, se registra aparte (o se anula la venta).
+const SRI_NC_NO_VIGENTES = ['DEVUELTA','NO_AUTORIZADA'];
+function sriNCLocales(f){
+  return (f.notasCredito||[]).map(s=>SRI_F.find(x=>x.id===s.id) || Object.assign({estado:'', importeTotal:s.valor}, s));
+}
+async function sriNCDeFactura(f){
+  const res = [];
+  for(const s of (f.notasCredito||[])){
+    let d = SRI_F.find(x=>x.id===s.id);
+    if(!d){ try{ const x = await getDoc(doc(db,'sri_facturas',s.id)); if(x.exists()) d = x.data(); }catch(e){} }
+    if(d) res.push(d);
+  }
+  return res;
+}
+function sriTarjetaNC(f){
+  const [etq,tono] = SRI_ETQ[f.estado]||[f.estado,'gris'];
+  const corr = SRI_CORREO[f.estadoCorreo]||[f.estadoCorreo||'—','gris'];
+  const msgs = (f.mensajes||[]).filter(m=>m.tipo!=='INFORMATIVO');
+  const abierto = sriVerHist===f.id;
+  const rech = SRI_NC_NO_VIGENTES.includes(f.estado);
+  return `<div class="card" style="margin-bottom:8px;padding:10px 12px;border-left:3px solid #7a3fa0;background:#fcf9ff">
+    <div class="rb" style="gap:8px;align-items:flex-start">
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:13px">↩️ Nota de crédito ${esc(f.numero)} ${f.ambiente==='1'?sriChip('PRUEBAS','amb'):''}</div>
+        <div style="font-size:11px;color:var(--text3)">Modifica la factura <b>${esc(f.facturaNumero||'')}</b> · ${esc(f.comprador?.razonSocial||'')} · ${esc(f.fechaEmision||'')}</div>
+        <div style="font-size:11px;color:var(--text2)">${f.tipoNC==='parcial'?'Parcial':'Total'} · Motivo: ${esc(f.motivo||'')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;font-weight:700;color:#7a3fa0">−$${esc(f.importeTotal||'')}</div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0">${sriChip(etq,tono)} ${sriChip(corr[0],corr[1])}</div>
+    ${msgs.map(m=>`<div style="font-size:11.5px;color:#8b1a1a"><b>${esc(m.identificador)}</b> ${esc(m.explicacion||m.mensaje)} ${m.informacionAdicional?'<span style="color:#666">('+esc(m.informacionAdicional.slice(0,160))+')</span>':''}</div>`).join('')}
+    ${f.ultimoError?`<div style="font-size:11.5px;color:#8b1a1a">${esc(f.ultimoError.mensaje)}</div>`:''}
+    ${rech?`<div style="font-size:11.5px;color:#8b1a1a">Esta nota de crédito fue rechazada y no cuenta. Si corresponde, emite una nueva desde la factura.</div>`:''}
+    ${(f.advertencias||[]).map(a=>`<div style="font-size:11px;color:#7a5200">⚠ ${esc(a)}</div>`).join('')}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+      ${SRI_EN_CURSO.includes(f.estado)?`<button class="btn btn-b btn-sm" data-sri-consultar="${esc(f.id)}">Consultar / reintentar</button>`:''}
+      ${f.estado==='AUTORIZADA'?`<button class="btn btn-g btn-sm" data-sri-doc="pdf" data-sri-id="${esc(f.id)}">⬇ PDF</button><button class="btn btn-g btn-sm" data-sri-doc="xml" data-sri-id="${esc(f.id)}">⬇ XML</button><button class="btn btn-g btn-sm" data-sri-correo="${esc(f.id)}">✉ ${f.estadoCorreo==='ENVIADO'?'Reenviar':'Enviar'} correo</button>`:''}
+      <button class="btn btn-g btn-sm" data-sri-hist="${esc(f.id)}">${abierto?'Ocultar':'Historial'}</button>
+    </div>
+    ${abierto?`<div style="margin-top:8px;background:var(--bg3);border-radius:var(--rs);padding:7px 9px;font-size:11px;line-height:1.5">
+      <div><b>Clave de acceso:</b> <span style="word-break:break-all">${esc(f.claveAcceso||'')}</span></div>
+      ${f.numeroAutorizacion?`<div><b>Autorización:</b> ${esc(f.numeroAutorizacion)} · ${esc(f.fechaAutorizacion||'')}</div>`:''}
+      <div><b>Detalle:</b> ${esc(((f.contenido&&f.contenido.calculo&&f.contenido.calculo.lineas)||[]).map(l=>(+l.cantidad)+'× '+l.descripcion+' ($'+l.pvpLinea+')').join(' · '))}</div>
+      <div style="margin-top:4px">${(f.historial||[]).slice().reverse().map(h=>`<div>${esc(h.fecha?new Date(h.fecha).toLocaleString('es-EC',{dateStyle:'short',timeStyle:'medium'}):'')} · <b>${esc(h.evento)}</b> · ${esc(h.detalle||'')} · <span style="color:#888">${esc(h.usuario||'')}</span></div>`).join('')}</div>
+    </div>`:''}
+  </div>`;
+}
+
+async function sriAbrirNC(f){
+  if(MI_ROL!=='admin'){ alert('Las notas de crédito solo las emite una cuenta de administración.'); return; }
+  if(f.comprador && f.comprador.tipoIdentificacion==='07'){
+    alert('La factura '+f.numero+' es a CONSUMIDOR FINAL.\n\nLas notas de crédito requieren identificar al comprador, por eso el sistema no las emite para estas facturas. Consulta con tu contador cómo proceder (p. ej., anulación en SRI en línea dentro del plazo, cuando aplique).');
+    return;
+  }
+  const lineas = (f.contenido&&f.contenido.calculo&&f.contenido.calculo.lineas)||[];
+  if(!lineas.length){ alert('No se encontró el detalle de la factura.'); return; }
+  const ncs = (await sriNCDeFactura(f)).filter(n=>!SRI_NC_NO_VIGENTES.includes(n.estado));
+  const acreditadoQ = lineas.map((l,i)=>ncs.reduce((a,n)=>a+((n.registro&&n.registro.lineas)||[]).filter(x=>x.idx===i).reduce((s,x)=>s+(+x.q6||0),0),0)/1e6);
+  const acreditado = ncs.reduce((a,n)=>a+Math.round(+n.importeTotal*100),0);
+  const saldo = Math.round(+f.importeTotal*100) - acreditado;
+  if(saldo<=0){ alert('Esta factura ya está acreditada por su valor total.'); return; }
+  const solicitudId = (crypto.randomUUID ? crypto.randomUUID() : 'nc'+Date.now()+Math.random().toString(36).slice(2)).replace(/[^\w-]/g,'');
+  const MOTIVOS = ['Devolución de productos','Anulación de la venta','Error en el precio o la cantidad facturada','Descuento otorgado después de facturar','Error en los datos de la factura'];
+  const disp = lineas.map((l,i)=>Math.max(0, Math.round((+l.cantidad - acreditadoQ[i])*1e6)/1e6));
+  const pvpU = lineas.map(l=>(+l.pvpLinea)/(+l.cantidad));
+  let ov = document.getElementById('sri-nc-modal'); if(ov) ov.remove();
+  ov = document.createElement('div'); ov.id='sri-nc-modal';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10500;display:flex;align-items:center;justify-content:center;padding:14px';
+  ov.innerHTML = `<div role="dialog" aria-modal="true" aria-labelledby="nc-tit" style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:92vh;overflow:auto;padding:18px 18px 14px;font-size:13px">
+    <div id="nc-tit" style="font-weight:800;font-size:16px;margin-bottom:2px">↩️ Nota de crédito</div>
+    <div style="color:#555;font-size:12px;margin-bottom:10px">Factura <b>${esc(f.numero)}</b> ${f.ambiente==='1'?sriChip('PRUEBAS — sin validez tributaria','amb'):''} · ${esc(f.comprador?.razonSocial||'')} · ${esc(f.fechaEmision||'')}<br>
+      Total facturado <b>$${esc(f.importeTotal)}</b>${acreditado?` · ya acreditado $${(acreditado/100).toFixed(2)}`:''} · <b>saldo $${(saldo/100).toFixed(2)}</b></div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <label style="flex:1;border:1.5px solid var(--b2);border-radius:10px;padding:8px 10px;cursor:pointer"><input type="radio" name="nc-tipo" value="total" checked> <b>Total</b><div style="font-size:11px;color:#666">Acredita todo el saldo: $${(saldo/100).toFixed(2)}</div></label>
+      <label style="flex:1;border:1.5px solid var(--b2);border-radius:10px;padding:8px 10px;cursor:pointer"><input type="radio" name="nc-tipo" value="parcial"> <b>Parcial</b><div style="font-size:11px;color:#666">Solo algunos productos o cantidades</div></label>
+    </div>
+    <div id="nc-lineas" style="display:none;margin-bottom:10px;border:1px solid var(--b2);border-radius:10px;padding:6px 8px">
+      ${lineas.map((l,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:.5px solid #eee">
+        <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px">${esc(l.descripcion)}</div>
+          <div style="font-size:10.5px;color:#777">Facturado ${+l.cantidad} · disponible ${disp[i]} · $${pvpU[i].toFixed(2)} c/u (IVA ${esc(String(+l.tarifa))}%)</div></div>
+        <input type="number" inputmode="decimal" min="0" max="${disp[i]}" step="${Number.isInteger(disp[i])&&Number.isInteger(+l.cantidad)?1:'any'}" value="0" data-nc-idx="${i}" ${disp[i]<=0?'disabled':''}
+          aria-label="Cantidad a acreditar de ${esc(l.descripcion)}" style="width:70px;padding:6px;border:1.5px solid var(--b2);border-radius:8px;text-align:right">
+      </div>`).join('')}
+      <div id="nc-estim" style="font-size:12px;text-align:right;margin-top:6px;color:#555">Estimado: $0.00</div>
+    </div>
+    <label style="font-size:12px;font-weight:700">Motivo (sale impreso en la nota de crédito)</label>
+    <select id="nc-motivo-sel" style="width:100%;padding:8px;border:1.5px solid var(--b2);border-radius:8px;margin:4px 0 6px">
+      ${MOTIVOS.map(m=>`<option>${esc(m)}</option>`).join('')}<option value="__otro">Otro…</option></select>
+    <input id="nc-motivo-otro" maxlength="300" placeholder="Escribe el motivo" style="display:none;width:100%;padding:8px;border:1.5px solid var(--b2);border-radius:8px;margin-bottom:6px">
+    ${f.comprador?.email?`<label style="display:flex;gap:6px;align-items:center;font-size:12px;margin:4px 0"><input type="checkbox" id="nc-correo" ${f.ambiente==='2'?'checked':''}> Enviar por correo a ${esc(f.comprador.email)}</label>`:''}
+    <div style="background:#fff7e0;border:1px solid #e8c96a;border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.45;margin:6px 0 10px">
+      Se envía al SRI de inmediato y, una vez autorizada, <b>no se puede borrar ni modificar</b>.<br>
+      La nota de crédito <b>no devuelve dinero ni stock</b> por sí sola: registra la devolución en Caja, o anula la venta en Reportes si se acreditó todo.</div>
+    <div id="nc-err" role="alert" style="color:#8b1a1a;font-size:12px;min-height:16px;margin-bottom:6px"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-g" id="nc-cancelar" style="flex:1;padding:10px">Cancelar</button>
+      <button class="btn" id="nc-emitir" style="flex:2;padding:10px;background:#7a3fa0;color:#fff;border:none;font-weight:700">Emitir nota de crédito</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  const $ = s=>ov.querySelector(s);
+  const tipo = ()=>ov.querySelector('input[name="nc-tipo"]:checked').value;
+  const leerSel = ()=>[...ov.querySelectorAll('[data-nc-idx]')].map(x=>({idx:+x.dataset.ncIdx, cantidad:+x.value||0})).filter(x=>x.cantidad>0);
+  const estimar = ()=>{ const s = leerSel().reduce((a,x)=>a+pvpU[x.idx]*x.cantidad,0); $('#nc-estim').textContent='Estimado: $'+s.toFixed(2)+' (el valor exacto lo calcula el sistema)'; };
+  ov.querySelectorAll('input[name="nc-tipo"]').forEach(r=>r.onchange=()=>{ $('#nc-lineas').style.display = tipo()==='parcial'?'block':'none'; });
+  ov.querySelectorAll('[data-nc-idx]').forEach(x=>x.oninput=estimar);
+  $('#nc-motivo-sel').onchange=()=>{ $('#nc-motivo-otro').style.display = $('#nc-motivo-sel').value==='__otro'?'block':'none'; };
+  $('#nc-cancelar').onclick=()=>ov.remove();
+  ov.addEventListener('keydown',e=>{ if(e.key==='Escape') ov.remove(); });
+  $('#nc-emitir').onclick = async ()=>{
+    const err = $('#nc-err'); err.textContent='';
+    const t = tipo();
+    const sel = leerSel();
+    if(t==='parcial'){
+      if(!sel.length){ err.textContent='Indica al menos una cantidad mayor que cero.'; return; }
+      const mal = sel.find(x=>x.cantidad>disp[x.idx]+1e-9);
+      if(mal){ err.textContent='En "'+lineas[mal.idx].descripcion+'" solo quedan '+disp[mal.idx]+' por acreditar.'; return; }
+    }
+    const motivo = ($('#nc-motivo-sel').value==='__otro' ? $('#nc-motivo-otro').value : $('#nc-motivo-sel').value).trim();
+    if(motivo.length<3){ err.textContent='Escribe el motivo.'; return; }
+    const resumen = t==='total' ? 'TOTAL por $'+(saldo/100).toFixed(2) : 'PARCIAL: '+sel.map(x=>x.cantidad+'× '+lineas[x.idx].descripcion).join(', ');
+    if(!confirm('¿Emitir nota de crédito '+resumen+'\nsobre la factura '+f.numero+'?\nMotivo: '+motivo+(f.ambiente==='2'?'\n\nEs un comprobante tributario REAL (producción).':''))) return;
+    const b = $('#nc-emitir'); b.disabled=true; b.textContent='Emitiendo…';
+    const r = await sriLlamar('notaCredito', {facturaId:f.id, tipo:t, lineas: t==='parcial'?sel:undefined, motivo, solicitudId, noEnviarCorreo: !($('#nc-correo')?.checked)});
+    if(!r.ok){ b.disabled=false; b.textContent='Emitir nota de crédito'; err.textContent = r.mensaje||'No se pudo emitir.'; return; }
+    ov.remove();
+    try{ bitacora('nota_credito',{accion:'Emitio nota de credito '+(r.factura.numero||'')+' ('+t+') a la factura '+f.numero, facturaId:f.id, estado:r.factura.estado, monto:+r.factura.importeTotal||0, motivo}); }catch(e){}
+    sriMostrarResultado(r.factura);
+    if(r.enProceso || SRI_EN_CURSO.includes(r.factura.estado)) sriSeguir(r.factura.id);
+    if(r.factura.estado==='AUTORIZADA' && t==='total'){
+      const p = document.getElementById('sri-panel');
+      if(p) p.insertAdjacentHTML('beforeend', `<div style="margin-top:8px;font-size:12px;color:#1a3f8b">Si la venta se anula por completo, ve a <b>Reportes</b> → 🗑 en la venta: el POS tomará esta nota de crédito como referencia.</div>`);
+    }
+    sriCargado=false; sriCargarFacturas();
+  };
 }
 
 // ── Barcode Scanner ──────────────────────────────────────────
