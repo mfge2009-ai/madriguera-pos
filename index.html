@@ -777,7 +777,10 @@ const BIT_ETIQUETAS={
   inicio_sesion:'Inicio de sesion',
   autorizacion_concedida:'Autorizacion concedida',
   autorizacion_reutilizada:'Accion autorizada (dentro de los 10 min)',
-  autorizacion_rechazada:'INTENTO RECHAZADO'
+  autorizacion_rechazada:'INTENTO RECHAZADO',
+  apertura_caja:'Apertura de caja',
+  cierre_caja:'Cierre de caja',
+  cierre_caja_sin_conteo:'CIERRE DE CAJA SIN CONTEO'
 };
 
 async function bitacora(evento, datos){
@@ -1216,7 +1219,8 @@ function ultimoCierreFecha(){
 // Devuelve true si la fecha es valida para registrar movimiento de caja.
 function fechaPermitida(fechaISO,queEs){
   const uc=ultimoCierreFecha();
-  if(uc && fechaISO<=uc){
+  // El mismo dia del ultimo cierre se permite si hay una caja abierta hoy (nuevo turno)
+  if(uc && (fechaISO<uc || (fechaISO===uc && !(uc===today() && estadoCaja().e==='abierta')))){
     alert('No puedes registrar '+(queEs||'este movimiento')+' con fecha '+fechaISO+
       ':\nla caja del '+uc+' ya esta cerrada y cambiarian los numeros de un dia cuadrado.\n\n'+
       'Usa una fecha posterior al '+uc+', o anula primero ese cierre.');
@@ -1245,7 +1249,9 @@ async function registrarCambioPrecio(prod,info,tipo){
   S.push(rec);
   await saveVenta(rec);
 }
-const openS=()=>S.filter(s=>isVenta(s)&&s.date.startsWith(today())&&!s.closed);
+// Ventas de hoy. Antes excluia las marcadas 'closed' por el cierre, y tras cerrar
+// la caja el resumen y la barra mostraban $0 aunque Reportes si las tenia.
+const openS=()=>S.filter(s=>isVenta(s)&&s.date.startsWith(today()));
 
 // ══ FASE 2: ventas como coleccion (un documento por venta) ══════════════
 const VENTAS_COL='ventas';
@@ -1389,6 +1395,8 @@ function showApp(){
   if(app)app.style.display='flex';
   if(cdot)cdot.classList.add('on');
   render();
+  // Sin caja abierta no se trabaja: se lleva directo a abrir/cerrar
+  setTimeout(()=>{ try{ if(estadoCaja().e!=='abierta') irACaja(); }catch(e){} },1500);
 }
 
 // Detect connection restore and retry pending writes
@@ -1568,6 +1576,8 @@ function subRT(){
     if(_renderTimer) clearTimeout(_renderTimer);
     _renderTimer=setTimeout(function(){
       if(view==='dashboard'||view==='monitor'||view==='caja'){
+        const ae=document.activeElement;
+        if(view==='caja'&&ae&&ae.tagName==='INPUT'&&document.getElementById('mc')?.contains(ae)) return; // no borrar lo que se esta escribiendo
         render();
       } else if(view==='pos'){
         // For POS, only update order panel if no user is actively interacting
@@ -1667,8 +1677,13 @@ function updateHdr(){
   avisoPendientes();
   const ts=openS(),tot=ts.reduce((a,x)=>a+x.total,0);
   const ocp=T.filter(t=>t.status!=='libre').length;
-  document.getElementById('tbar').textContent=
-    `${now.toLocaleDateString('es-EC',{weekday:'short',day:'numeric',month:'short'})}  |  Hoy: ${ts.length} pedidos · ${fmt(tot)}  |  ${ocp}/${T.length} mesas activas`;
+  const _est=estadoCaja(), _tb=document.getElementById('tbar');
+  _tb.textContent=
+    `${now.toLocaleDateString('es-EC',{weekday:'short',day:'numeric',month:'short'})}  |  Caja: ${_est.e==='abierta'?'ABIERTA':_est.e==='pendiente'?'SIN CERRAR (del '+_est.dia+') — no se puede cobrar':'CERRADA — ábrela para cobrar'}  |  Hoy: ${ts.length} pedidos · ${fmt(tot)}  |  ${ocp}/${T.length} mesas activas`;
+  _tb.style.background=_est.e==='abierta'?'':'var(--rbg)';
+  _tb.style.color=_est.e==='abierta'?'':'var(--red)';
+  _tb.style.cursor=_est.e==='abierta'?'':'pointer';
+  _tb.onclick=_est.e==='abierta'?null:irACaja;
 }
 
 function render(){
@@ -2022,7 +2037,7 @@ function attachPOS(){
   mc.querySelector('#bcomanda')?.addEventListener('click',()=>{enviarComanda();});
 
   // Cobro
-  mc.querySelector('#bcobrar')?.addEventListener('click',()=>{cobConf=true;modoParcial=false;pagosParciales=[];itemSel=null;render();});
+  mc.querySelector('#bcobrar')?.addEventListener('click',()=>{if(!cajaPuedeCobrar())return;cobConf=true;modoParcial=false;pagosParciales=[];itemSel=null;render();});
   mc.querySelector('#bscan')?.addEventListener('click',()=>openScanner());
   mc.querySelector('#bfactura')?.addEventListener('click',()=>{
     const t=T.find(x=>x.id===selT);
@@ -2129,6 +2144,7 @@ function attachPOS(){
   // Confirm split cobro
   mc.querySelector('#bconfsplit')?.addEventListener('click',async e=>{
     if(e.currentTarget.dataset.disabled==='1') return;
+    if(!cajaPuedeCobrar()) return;
     const t=T.find(x=>x.id===selT); if(!t)return;
     // Build split order
     const splitOrder=[];
@@ -2387,6 +2403,7 @@ window.anularVenta=anularVenta;
 
 async function confirmarCobro(){
   if(cobrando)return;
+  if(!cajaPuedeCobrar())return null;
   const t=T.find(x=>x.id===selT);if(!t||t.order.length===0)return;
   const subtotal=t.order.reduce((a,i)=>a+i.price*i.qty,0);
   const descMonto=descuentoTipo==='porcentaje'?(subtotal*descuento/100):descuento;
@@ -3069,7 +3086,7 @@ function rCaja(){
 
   const cierresAnteriores=S.filter(s=>s.esCierre&&s.date).sort((a,b)=>b.date.localeCompare(a.date));
   const tabs=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto;scrollbar-width:none">
-    ${['resumen','gastos','contabilidad','cierre','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?'Cuadre':t==='historial'?('Historial ('+cierresAnteriores.length+')'):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
+    ${['resumen','gastos','contabilidad','cierre','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?(estadoCaja().e==='abierta'?'\uD83D\uDFE2 Cerrar caja':'\uD83D\uDD34 Abrir / cerrar caja'):t==='historial'?('Historial ('+cierresAnteriores.length+')'):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
   </div>`;
 
   let body='';
@@ -3288,43 +3305,7 @@ function rCaja(){
       <div style="text-align:center;font-size:11px;color:var(--text3);padding:6px">Registra tus gastos en la pestaña "Gastos" con su categoría para que aparezcan aquí</div>
     `;
   }
-  else if(cajaTab==='cierre'){
-    const yaHayCierre=!!todayCierre;
-    const diffColor=Math.abs(diferencia)<0.5?'var(--grn)':diferencia>0?'var(--blu)':'var(--red)';
-    const diffBg=Math.abs(diferencia)<0.5?`background:var(--gbg);border-color:var(--gbrd)`:diferencia>0?`background:var(--bbg);border-color:var(--bbrd)`:`background:var(--rbg);border-color:var(--rbrd)`;
-    body=`
-      <div class="card">
-        <div style="font-weight:700;font-size:13px;margin-bottom:14px">Cuadre de caja · ${new Date().toLocaleDateString('es-EC',{day:'numeric',month:'long'})}</div>
-        <div class="fgrid">
-          <div class="fg"><label>Inicio de caja ($)</label><input id="cinicio" type="number" step="0.01" value="${inicioCaja||''}" placeholder="0.00"${yaHayCierre?' readonly':''}></div>
-          <div class="fg"><label>Sueltos ($)</label><input id="csueltos" type="number" step="0.01" value="${sueltos||''}" placeholder="0.00"${yaHayCierre?' readonly':''}></div>
-        </div>
-        <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:13px">
-          <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.3px;margin-bottom:9px">Cálculo automático</div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>Inicio de caja</span><span>${fmt(inicioCaja)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>+ Sueltos</span><span>${fmt(sueltos)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>+ Ventas en efectivo</span><span>${fmt(efectivoVentas)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)"><span>− Gastos en efectivo</span><span style="color:var(--red)">−${fmt(gastosEfectivo)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;padding-top:8px"><span>Debería haber</span><span>${fmt(deberia)}</span></div>
-        </div>
-        <div class="fg" style="margin-bottom:${conteoVal>0?'10px':'13px'}"><label>Conteo físico del efectivo ($)</label>
-          <input id="cconteo" type="number" step="0.01" value="${conteoVal||''}" placeholder="Cuenta el dinero y escribe aquí"${yaHayCierre?' readonly':''}></div>
-        ${conteoVal>0?`<div style="display:flex;justify-content:space-between;padding:10px 13px;border-radius:var(--rs);${diffBg};border:1px solid;font-weight:700;font-size:13px;margin-bottom:13px">
-          <span>Diferencia</span><span style="color:${diffColor}">${diferencia>=0?'+':''}${fmt(diferencia)}</span>
-        </div>`:''}
-        <div class="fg" style="margin-bottom:10px"><label>Responsable</label>
-          <input id="cresp" value="${todayCierre?.responsable||turnoUser}"${yaHayCierre?' readonly':''}></div>
-        <div class="fg" style="margin-bottom:13px"><label>Observaciones</label>
-          <input id="cobs" placeholder="Notas del cierre..." value="${esc(todayCierre?.obs||'')}"${yaHayCierre?' readonly':''}></div>
-        ${!yaHayCierre?`<div style="display:flex;flex-direction:column;gap:7px">
-          <div style="display:flex;gap:7px">
-            <button class="btn btn-b" style="flex:1;font-size:12px" id="bguardar-inicio">💾 Guardar inicio</button>
-            <button class="btn btn-g" id="bcalcular" style="flex:1">Actualizar</button>
-          </div>
-          <button class="btn btn-w" style="padding:10px" id="bcerrar">Cerrar caja del día</button>
-        </div>`:`<div style="background:var(--gbg);border:1px solid var(--gbrd);border-radius:var(--rs);padding:10px 13px;font-size:12px;color:var(--grn);font-weight:600">✓ Caja cerrada · ${new Date(todayCierre.date).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})} · ${todayCierre.responsable}</div>`}
-      </div>`;
-  }
+  else if(cajaTab==='cierre'){ body=rCuadre(); }
 
   if(cajaTab==='reconstruccion'){ body=rReconstruccion(); }
 
@@ -3334,32 +3315,41 @@ function rCaja(){
       ${cierresAnteriores.length===0?'<div style="text-align:center;padding:40px;color:var(--text3)">Sin cierres registrados</div>':
         cierresAnteriores.map(cr=>{
           const dia=cr.date.slice(0,10);
+          let totalVentas,totalGastos,dif;
+          if(cr.v===2){
+            totalVentas=+cr.ventasTotal||0; totalGastos=+cr.gastosEfectivo||0; dif=cr.diferencia;
+          } else {
           const ventasDia=S.filter(s=>isVenta(s)&&s.date.startsWith(dia));
           const gastosDia=S.filter(s=>s.esGasto&&!s.anulada&&s.date&&s.date.startsWith(dia));
-          const totalVentas=ventasDia.reduce((a,x)=>a+x.total,0);
-          const totalGastos=gastosDia.reduce((a,x)=>a+x.total,0);
-          // Diferencia: usar la guardada en el propio cierre; para cierres antiguos
-          // sin ese campo, recalcular SOLO con efectivo (antes mezclaba todos los metodos)
-          let dif;
+          totalVentas=ventasDia.reduce((a,x)=>a+x.total,0);
+          totalGastos=gastosDia.reduce((a,x)=>a+x.total,0);
           if(typeof cr.diferencia==='number'){ dif=cr.diferencia; }
           else {
-            let efectivoDia=0;
-            ventasDia.forEach(s=>{ if(s.pagosParciales&&s.pagosParciales.length>0){ s.pagosParciales.forEach(p=>{ if(p.metodo==='Efectivo')efectivoDia+=p.monto; }); } else if(s.paymentMethod==='Efectivo'){ efectivoDia+=s.total; } });
-            const gastosEfDia=gastosDia.filter(g=>g.paymentMethod==='Efectivo').reduce((a,g)=>a+g.total,0);
+            const efectivoDia=ventasDia.reduce((a,s)=>a+efectivoDe(s),0);
+            const gastosEfDia=gastosDia.filter(g=>metodoPago(g.paymentMethod)==='Efectivo').reduce((a,g)=>a+g.total,0);
             dif=(cr.conteo||0)-((cr.inicio||0)+(cr.sueltos||0)+efectivoDia-gastosEfDia);
+          }
+          }
+          if(cr.sinConteo){
+            return `<div class="card" style="margin-bottom:10px;border-color:var(--rbrd)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="font-weight:700;font-size:13px">${_cjFecha(cr.desde||cr.date)}</span>
+                <span class="badge br">SIN CONTEO</span></div>
+              <div style="font-size:11.5px;color:var(--text2)">Cerrada ${new Date(cr.date).toLocaleString('es-EC',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} · autorizó ${esc(cr.autorizadoPor||'')} · ventas ${fmt(cr.ventasTotal||0)}<br>Motivo: ${esc(cr.motivoSinConteo||'')}</div></div>`;
           }
           const difColor=Math.abs(dif)<0.5?'var(--grn)':dif>0?'var(--blu)':'var(--red)';
           return `<div class="card" style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <span style="font-weight:700;font-size:13px">${new Date(cr.date).toLocaleDateString('es-EC',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</span>
-              <span style="font-size:11px;color:var(--text3)">${new Date(cr.date).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})} · ${cr.responsable}</span>
+              <span style="font-weight:700;font-size:13px">${new Date((cr.v===2&&cr.desde&&cr.desde.slice(0,10)!==dia?cr.desde.slice(0,10)+'T12:00:00':cr.date)).toLocaleDateString('es-EC',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</span>
+              <span style="font-size:11px;color:var(--text3)">${cr.v===2&&cr.desde&&cr.desde.slice(0,10)!==dia?'cerrada el '+new Date(cr.date).toLocaleDateString('es-EC',{day:'numeric',month:'short'})+' ':''}${new Date(cr.date).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})} · ${esc(cr.responsable||'')}</span>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;font-size:12px">
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Ventas</div><div style="font-weight:700">${fmt(totalVentas)}</div></div>
-              <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Gastos</div><div style="font-weight:700;color:var(--red)">${fmt(totalGastos)}</div></div>
+              <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">${cr.v===2?'Gastos ef.':'Gastos'}</div><div style="font-weight:700;color:var(--red)">${fmt(totalGastos)}</div></div>
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Conteo</div><div style="font-weight:700">${fmt(cr.conteo||0)}</div></div>
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Diferencia</div><div style="font-weight:700;color:${difColor}">${dif>=0?'+':''}${fmt(dif)}</div></div>
             </div>
+            ${cr.v===2?`<div style="font-size:11px;color:var(--text3);margin-top:8px">Fondo ${fmt(cr.inicio||0)} · esperado ${fmt(cr.esperadoEnCaja||0)} · retiro ${fmt(cr.retiro||0)} · quedó ${fmt(cr.fondoSiguiente||0)}${cr.conteoInicial!=null?' · <b style="color:var(--amb)">recontado (primer conteo '+fmt(cr.conteoInicial)+')</b>':''}</div>`:''}
             ${cr.obs?`<div style="font-size:11px;color:var(--text3);margin-top:8px;padding-top:8px;border-top:.5px solid var(--border)">📝 ${esc(cr.obs)}</div>`:''}
           </div>`;
         }).join('')}
@@ -3394,11 +3384,9 @@ function rCaja(){
 //  no que dia se descuadro. En auditoria es el procedimiento estandar
 //  cuando faltan los cortes intermedios.
 // ═══════════════════════════════════════════════════════════════
-function efectivoDeVenta(s){
-  if(s.pagosParciales&&s.pagosParciales.length>0)
-    return s.pagosParciales.filter(p=>p.metodo==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
-  return s.paymentMethod==='Efectivo' ? (+s.total||0) : 0;
-}
+// Misma formula que la Caja (antes comparaba el texto exacto 'Efectivo' y
+// perdia los pagos guardados como 'efectivo', 'cash', etc.)
+function efectivoDeVenta(s){ return efectivoDe(s); }
 function _recGet(k,d){ try{ const v=localStorage.getItem('madu_rec_'+k); return v===null?d:v; }catch(e){ return d; } }
 function _recSet(k,v){ try{ localStorage.setItem('madu_rec_'+k,v); }catch(e){} }
 
@@ -3411,10 +3399,10 @@ function filasReconstruccion(desde,hasta){
     if(d<desde||d>hasta) return;
     if(isVenta(x)){ const f=tocar(d); f.ventas+=+x.total||0; f.efectivo+=efectivoDeVenta(x); f.pedidos++; f.descuentos+=+x.descuento||0; }
     else if(x.anulada&&x.items){ const f=tocar(d); f.anuladas++; f.montoAnulado+=+x.total||0; }
-    else if(x.esGasto&&!x.anulada){ const f=tocar(d); f.gastosTot+=+x.total||0; if(x.paymentMethod==='Efectivo') f.gastosEf+=+x.total||0; }
+    else if(x.esGasto&&!x.anulada){ const f=tocar(d); f.gastosTot+=+x.total||0; if(metodoPago(x.paymentMethod)==='Efectivo') f.gastosEf+=+x.total||0; }
   });
   const cierres={};
-  S.forEach(x=>{ if(x&&x.esCierre&&x.date) cierres[x.date.slice(0,10)]=x; });
+  S.forEach(x=>{ if(x&&x.esCierre&&x.date) cjDiasDe(x).forEach(d=>cierres[d]=x); });
   const filas=Object.values(porDia).sort((a,b)=>a.dia.localeCompare(b.dia));
   let acum=0;
   filas.forEach(f=>{ f.neto=f.efectivo-f.gastosEf; acum+=f.neto; f.acumulado=acum; f.cierre=cierres[f.dia]||null; });
@@ -3561,7 +3549,7 @@ function attachReconstruccion(){
 function diasSinCierre(){
   const conVentas=new Set();
   S.forEach(x=>{ if(isVenta(x)&&x.date) conVentas.add(x.date.slice(0,10)); });
-  const cerrados=new Set(S.filter(x=>x.esCierre&&x.date).map(x=>x.date.slice(0,10)));
+  const cerrados=new Set(); S.filter(x=>x.esCierre&&x.date).forEach(c=>cjDiasDe(c).forEach(d=>cerrados.add(d)));
   const hoy=today();
   return [...conVentas].filter(d=>d<hoy&&!cerrados.has(d)).sort().reverse();
 }
@@ -3576,8 +3564,316 @@ function avisoSinCierre(){
   </div>`;
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+//  CAJA POR TURNOS (12-oct-2026)
+//  Regla unica: SIN CAJA ABIERTA NO SE COBRA.
+//    Abrir caja  -> se cuenta el fondo inicial.
+//    Cerrar caja -> se cuenta el efectivo A CIEGAS (sin ver cuanto
+//                   "deberia haber"); el sistema calcula la diferencia.
+//  Cada cierre guarda la lista de registros que cuadro (ids). Lo que no
+//  este en ningun cierre entra en el siguiente: ninguna venta o gasto
+//  queda fuera del cuadre, aunque se registre con fecha atrasada.
+//  Una sola formula de efectivo (efectivoDe + metodoPago) para la
+//  pantalla, el cierre, el historial y la reconstruccion.
+// ═══════════════════════════════════════════════════════════════
+const CJ_TOL=1.00;   // diferencia (USD) a partir de la cual la explicacion es obligatoria
+let cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false};
+const _r2=n=>Math.round((+n||0)*100)/100;
+const _cjNum=v=>{ const s=String(v??'').trim().replace(',','.'); if(s==='') return NaN; const n=parseFloat(s); return isFinite(n)?_r2(n):NaN; };
+function cjAperturas(){ return S.filter(x=>x&&x.esApertura&&x.v===2&&x.date).sort((a,b)=>a.date.localeCompare(b.date)); }
+function cjCierres(){ return S.filter(x=>x&&x.esCierre&&x.date).sort((a,b)=>a.date.localeCompare(b.date)); }
+function cjAbierta(){
+  const cerr=new Set(cjCierres().map(c=>c.aperturaId).filter(Boolean));
+  const ab=cjAperturas().filter(a=>!cerr.has(a.id));
+  return ab.length?ab[ab.length-1]:null;
+}
+function cjUltimoCierre(){ const c=cjCierres().filter(c=>c.v===2); return c.length?c[c.length-1]:null; }
+// Dias que cubre un cierre (un cierre de un dia pendiente puede cubrir varios)
+function cjDiasDe(c){
+  if(!c) return [];
+  if(c.v!==2||!c.desde) return [c.date.slice(0,10)];
+  const fin=(c.hasta||c.date).slice(0,10), out=[];
+  const d=new Date(c.desde.slice(0,10)+'T12:00:00');
+  for(let i=0;i<62;i++){ const s=localISO(d).slice(0,10); out.push(s); if(s>=fin) break; d.setDate(d.getDate()+1); }
+  return out;
+}
+// Ultimo dia con ventas (antes de hoy) que quedo sin cierre
+function cjDiaPendiente(){
+  const hoy=today(); let ult='';
+  S.forEach(x=>{ if(isVenta(x)){ const d=x.date.slice(0,10); if(d<hoy&&d>ult) ult=d; } });
+  if(!ult) return '';
+  return cjCierres().some(c=>cjDiasDe(c).includes(ult)) ? '' : ult;
+}
+function estadoCaja(){
+  const ab=cjAbierta();
+  if(ab) return ab.date.slice(0,10)===today() ? {e:'abierta',ap:ab} : {e:'pendiente',ap:ab,dia:ab.date.slice(0,10)};
+  const d=cjDiaPendiente();
+  if(d) return {e:'pendiente',ap:null,dia:d};
+  return {e:'cerrada'};
+}
+function cjCubiertos(){ const s=new Set(); cjCierres().forEach(c=>(c.ids||[]).forEach(id=>s.add(String(id)))); return s; }
+// Piso desde el que se buscan movimientos sin cuadrar
+function cjPiso(est){
+  if(est.ap){
+    const desdes=cjAperturas().map(a=>a.desde||a.date);
+    return desdes.reduce((m,x)=>x<m?x:m, est.ap.desde||est.ap.date);
+  }
+  return (est.dia||today())+'T00:00:00';
+}
+function cjCalcular(est){
+  const piso=cjPiso(est), cub=cjCubiertos();
+  // Cierres del sistema anterior: lo registrado antes de ellos, en su dia, ya se cuadro
+  const antiguos=cjCierres().filter(c=>c.v!==2);
+  const ventas=[], gastos=[];
+  S.forEach(x=>{
+    if(!x||!x.date||x.date<piso||cub.has(String(x.id))) return;
+    const dia=x.date.slice(0,10);
+    if(antiguos.some(c=>c.date.slice(0,10)===dia&&x.date<=c.date)) return;
+    if(isVenta(x)) ventas.push(x);
+    else if(x.esGasto&&!x.anulada&&metodoPago(x.paymentMethod)==='Efectivo') gastos.push(x);
+  });
+  const porMetodo={}; let efV=0, tot=0;
+  ventas.forEach(v=>{
+    tot+=+v.total||0; efV+=efectivoDe(v);
+    if(v.pagosParciales&&v.pagosParciales.length){
+      v.pagosParciales.forEach(p=>{ const m=metodoPago(p.metodo)||'Otros'; porMetodo[m]=(porMetodo[m]||0)+(+p.monto||0); });
+    } else { const m=metodoPago(v.paymentMethod)||'Otros'; porMetodo[m]=(porMetodo[m]||0)+(+v.total||0); }
+  });
+  const efG=gastos.reduce((a,g)=>a+(+g.total||0),0);
+  // Ventas en efectivo YA cuadradas en un turno anterior y anuladas durante este:
+  // si se devolvio el dinero, salio de esta caja. Se avisa; no se resta solo.
+  const desdeAp=est.ap?est.ap.date:piso;
+  const anulPrevias=S.filter(x=>x&&x.anulada&&cub.has(String(x.id))&&(x.fechaAnulacion||'')>=desdeAp&&efectivoDe(x)>0);
+  ventas.sort((a,b)=>a.date.localeCompare(b.date)); gastos.sort((a,b)=>a.date.localeCompare(b.date));
+  return {piso,ventas,gastos,efV:_r2(efV),efG:_r2(efG),tot:_r2(tot),porMetodo,anulPrevias,
+          ids:[...ventas,...gastos].map(x=>String(x.id))};
+}
+// Fondo que quedo en el ultimo cierre (lo que deberia encontrarse al abrir)
+function cjFondoEsperado(){
+  const uc=cjUltimoCierre();
+  if(uc&&typeof uc.fondoSiguiente==='number') return uc.fondoSiguiente;
+  return null;
+}
+// Fondo de un dia del sistema anterior (registro "apertura" viejo, si existe)
+function cjFondoAntiguo(dia){
+  const a=S.find(x=>x&&x.esApertura&&x.v!==2&&x.date&&x.date.startsWith(dia));
+  return a?_r2((+a.inicio||0)+(+a.sueltos||0)):null;
+}
+// ¿Se puede cobrar? Si no, explica por que y lleva a Caja.
+function cajaPuedeCobrar(){
+  const est=estadoCaja();
+  if(est.e==='abierta') return true;
+  const fechaTxt=est.dia?new Date(est.dia+'T12:00:00').toLocaleDateString('es-EC',{weekday:'long',day:'numeric',month:'long'}):'';
+  alert(est.e==='pendiente'
+    ? 'No se puede cobrar: la caja del '+fechaTxt+' no se cerró.\n\nVe a Caja → Abrir / cerrar, cuenta el efectivo y ciérrala. Después abre la caja de hoy.'
+    : 'No se puede cobrar: la caja está cerrada.\n\nVe a Caja → Abrir / cerrar y abre la caja contando el fondo inicial.');
+  irACaja();
+  return false;
+}
+function irACaja(){
+  cajaTab='cierre';
+  const b=document.querySelector('nav button[data-v="caja"]');
+  if(b) b.click(); else { view='caja'; render(); }
+}
+function cjFila(lbl,val,extra){ return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:.5px solid var(--border)${extra||''}"><span>${lbl}</span><span>${val}</span></div>`; }
+const _cjHora=iso=>new Date(iso).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'});
+const _cjFecha=d=>new Date(d.slice(0,10)+'T12:00:00').toLocaleDateString('es-EC',{weekday:'long',day:'numeric',month:'long'});
+
+function rCuadre(){
+  const est=estadoCaja();
+  if(est.e==='cerrada') return rCjApertura();
+  const c=cjCalcular(est);
+  const pend=est.e==='pendiente';
+  const cab = pend
+    ? `<div style="background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);padding:11px 13px;border-radius:var(--rs);font-size:12px;line-height:1.5;margin-bottom:12px">
+        <b>La caja del ${_cjFecha(est.dia)} no se cerró.</b> Hay que cerrarla antes de cobrar hoy.
+        <div style="margin-top:4px;color:var(--text2)">Cuenta el efectivo que hay <b>ahora</b> en la caja. Ese dinero es el de ese día más lo que se haya cobrado después sin cerrar: el sistema lo suma todo en este mismo cierre.</div></div>`
+    : `<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Caja abierta a las <b>${_cjHora(est.ap.date)}</b> por <b>${esc(est.ap.user||'')}</b> · fondo inicial <b>${fmt(est.ap.fondo)}</b></div>`;
+  // Fondo: el de la apertura; si es un dia del sistema anterior, se pregunta
+  let fondoHTML='', fondo=est.ap?(+est.ap.fondo||0):null;
+  if(!est.ap){
+    if(cjD.fondoDia===null){ const fa=cjFondoAntiguo(est.dia); cjD.fondoDia=fa!==null?String(fa):''; }
+    fondo=_cjNum(cjD.fondoDia);
+    fondoHTML=`<div class="fg" style="margin-bottom:12px"><label>Fondo con el que se abrió la caja ese día ($)</label>
+      <input id="cj-fondodia" type="number" step="0.01" min="0" value="${esc(cjD.fondoDia)}" placeholder="0.00"${cjD.fase==='resultado'?' readonly':''}></div>`;
+  }
+  const nV=c.ventas.length, nG=c.gastos.length;
+  let body='';
+  if(cjD.fase!=='resultado'){
+    body=`${fondoHTML}
+      <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px;font-size:12px;line-height:1.55">
+        <b>1.</b> Cuenta <b>todo</b> el efectivo de la caja: billetes, monedas y el fondo.<br>
+        <b>2.</b> Escribe el total. No verás cuánto "debería haber" hasta guardar tu conteo.<br>
+        <span style="color:var(--text3)">${nV} venta(s) y ${nG} gasto(s) en efectivo entran en este cierre.</span>
+      </div>
+      <div class="fg" style="margin-bottom:12px"><label>Efectivo contado ($)</label>
+        <input id="cj-conteo" type="number" step="0.01" min="0" value="${esc(cjD.conteo)}" placeholder="Total contado" style="font-size:16px;font-weight:700"></div>
+      <button class="btn btn-acc btn-full" style="padding:10px" id="cj-ver">Ver resultado →</button>
+      ${pend&&MI_ROL==='admin'?`<button class="btn btn-g btn-full btn-sm" style="margin-top:10px" id="cj-sinconteo">Cerrar sin conteo (solo administración, queda en la bitácora)</button>`:''}`;
+  } else {
+    const conteo=_cjNum(cjD.conteo);
+    const esperado=_r2((fondo||0)+c.efV-c.efG);
+    const dif=_r2(conteo-esperado);
+    const ok=Math.abs(dif)<0.005, peq=Math.abs(dif)<=CJ_TOL;
+    const col=ok?'var(--grn)':dif>0?'var(--blu)':'var(--red)';
+    const bg=ok?'background:var(--gbg);border-color:var(--gbrd)':dif>0?'background:var(--bbg);border-color:var(--bbrd)':'background:var(--rbg);border-color:var(--rbrd)';
+    const retiro=_cjNum(cjD.retiro); const ret=isNaN(retiro)?0:retiro;
+    const queda=_r2(conteo-ret);
+    const otros=Object.entries(c.porMetodo).filter(([m])=>m!=='Efectivo');
+    const det=cjD.verDetalle?`<div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:var(--rs);margin-top:6px">
+        ${c.ventas.filter(v=>efectivoDe(v)>0).map(v=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;border-bottom:.5px solid var(--border)"><span>${_cjHora(v.date)} · ${esc(v.tableName||'venta')}${v.pagosParciales&&v.pagosParciales.length?' (parte en efectivo)':''}</span><span>+${fmt(efectivoDe(v))}</span></div>`).join('')}
+        ${c.gastos.map(g=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;border-bottom:.5px solid var(--border);color:var(--red)"><span>${_cjHora(g.date)} · ${esc(g.desc||'gasto')}</span><span>−${fmt(g.total)}</span></div>`).join('')}
+      </div>`:'';
+    body=`${fondoHTML}
+      <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px">
+        ${cjFila('Fondo inicial',fmt(fondo||0))}
+        ${cjFila('+ Ventas en efectivo ('+c.ventas.filter(v=>efectivoDe(v)>0).length+')',fmt(c.efV))}
+        ${cjFila('− Gastos en efectivo ('+nG+')','<span style="color:var(--red)">−'+fmt(c.efG)+'</span>')}
+        ${cjFila('<b>Debería haber</b>','<b>'+fmt(esperado)+'</b>')}
+        ${cjFila('Contaste','<b>'+fmt(conteo)+'</b>',';border-bottom:none')}
+        <div style="font-size:11px;margin-top:6px"><a href="#" id="cj-det" style="color:var(--acc)">${cjD.verDetalle?'Ocultar':'Ver'} el detalle de cada movimiento</a></div>
+        ${det}
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:11px 13px;border-radius:var(--rs);${bg};border:1px solid;font-weight:700;font-size:14px;margin-bottom:12px">
+        <span>${ok?'Cuadra':dif>0?'Sobrante':'Faltante'}</span><span style="color:${col}">${dif>0?'+':''}${fmt(dif)}</span></div>
+      ${c.anulPrevias.length?`<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:12px">Durante este turno se anularon ventas en efectivo de turnos ya cerrados por ${fmt(c.anulPrevias.reduce((a,x)=>a+efectivoDe(x),0))}. Si devolviste ese dinero de la caja, explica la diferencia con eso.</div>`:''}
+      ${otros.length?`<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Otros cobros del turno (para cuadrar con el datáfono y el banco): ${otros.map(([m,t])=>esc(m)+' '+fmt(t)).join(' · ')}</div>`:''}
+      ${cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo?`<div style="font-size:11px;color:var(--amb);margin-bottom:10px">Primer conteo: ${fmt(cjD.conteoInicial)} (queda registrado).</div>`:''}
+      <div class="fgrid">
+        <div class="fg"><label>Retiro / depósito ($)</label><input id="cj-retiro" type="number" step="0.01" min="0" value="${esc(cjD.retiro)}" placeholder="0.00"></div>
+        <div class="fg"><label>Queda en caja para el próximo turno</label><input value="${fmt(queda)}" readonly style="font-weight:700"></div>
+      </div>
+      <div class="fg" style="margin-bottom:12px"><label>Observación${peq?'':' <b style="color:var(--red)">(obligatoria: explica la diferencia)</b>'}</label>
+        <input id="cj-obs" value="${esc(cjD.obs)}" placeholder="${peq?'Opcional':'¿Por qué no cuadra?'}"></div>
+      <div style="display:flex;gap:7px">
+        <button class="btn btn-g" style="flex:1" id="cj-recontar">Volver a contar</button>
+        <button class="btn btn-w" style="flex:2;padding:10px" id="cj-cerrar">Confirmar cierre</button>
+      </div>`;
+  }
+  return `${avisoSinCierre()}<div class="card"><div style="font-weight:700;font-size:13px;margin-bottom:12px">Cerrar caja</div>${cab}${body}</div>`;
+}
+
+function rCjApertura(){
+  const fe=cjFondoEsperado();
+  if(cjD.fondo===null) cjD.fondo=fe!==null?String(fe):'';
+  const f=_cjNum(cjD.fondo);
+  const distinto=fe!==null&&!isNaN(f)&&Math.abs(f-fe)>0.005;
+  const est={e:'cerrada'};
+  const previos=cjCalcular(Object.assign(est,{dia:today()})).ventas.length;
+  const uc=cjUltimoCierre();
+  return `<div class="card">
+    <div style="font-weight:700;font-size:13px;margin-bottom:6px">Abrir caja</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:12px">La caja está <b>cerrada</b>. Para cobrar, abre la caja contando el efectivo con el que empiezas.</div>
+    ${uc?`<div style="font-size:11.5px;color:var(--text3);margin-bottom:10px">Último cierre: ${_cjFecha(uc.date)} ${_cjHora(uc.date)} · ${esc(uc.responsable||'')} · dejó ${fmt(uc.fondoSiguiente||0)} en caja</div>`:''}
+    <div class="fg" style="margin-bottom:10px"><label>Fondo inicial contado ($)</label>
+      <input id="cj-fondo" type="number" step="0.01" min="0" value="${esc(cjD.fondo)}" placeholder="0.00" style="font-size:16px;font-weight:700"></div>
+    ${distinto?`<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:10px">El último cierre dejó ${fmt(fe)} y estás abriendo con ${fmt(f)} (${f-fe>0?'+':''}${fmt(f-fe)}). Explica la diferencia.</div>
+      <div class="fg" style="margin-bottom:10px"><label>Observación (obligatoria)</label><input id="cj-obs-ap" value="${esc(cjD.obs)}" placeholder="¿Por qué no coincide?"></div>`:''}
+    ${previos?`<div style="font-size:11.5px;color:var(--text3);margin-bottom:10px">Hay ${previos} venta(s) de hoy registradas antes de abrir: entran en este turno.</div>`:''}
+    <button class="btn btn-ok btn-full" style="padding:10px" id="cj-abrir">Abrir caja</button>
+  </div>`;
+}
+
+function attachCuadre(mc){
+  const bind=(id,k)=>mc.querySelector(id)?.addEventListener('input',e=>{cjD[k]=e.target.value;});
+  bind('#cj-conteo','conteo'); bind('#cj-retiro','retiro'); bind('#cj-obs','obs'); bind('#cj-obs-ap','obs');
+  bind('#cj-fondodia','fondoDia');
+  // Campos que cambian otros numeros en pantalla: se redibuja al salir del campo
+  mc.querySelector('#cj-retiro')?.addEventListener('change',()=>render());
+  mc.querySelector('#cj-fondo')?.addEventListener('input',e=>{cjD.fondo=e.target.value;});
+  mc.querySelector('#cj-fondo')?.addEventListener('change',()=>render());
+  mc.querySelector('#cj-det')?.addEventListener('click',e=>{e.preventDefault();cjD.verDetalle=!cjD.verDetalle;render();});
+  mc.querySelector('#cj-ver')?.addEventListener('click',()=>{
+    const est=estadoCaja();
+    if(!est.ap&&isNaN(_cjNum(cjD.fondoDia))){ alert('Escribe el fondo con el que se abrió la caja ese día (0 si no hubo).'); return; }
+    const n=_cjNum(cjD.conteo);
+    if(isNaN(n)||n<0){ alert('Escribe el total del efectivo que contaste (0 si la caja está vacía).'); return; }
+    if(cjD.conteoInicial===null) cjD.conteoInicial=n;
+    cjD.fase='resultado'; render();
+  });
+  mc.querySelector('#cj-recontar')?.addEventListener('click',()=>{cjD.fase='contar';render();});
+  mc.querySelector('#cj-cerrar')?.addEventListener('click',()=>cjCerrar(false));
+  mc.querySelector('#cj-sinconteo')?.addEventListener('click',()=>cjCerrar(true));
+  mc.querySelector('#cj-abrir')?.addEventListener('click',cjAbrir);
+}
+
+let _cjOcupado=false;
+async function cjAbrir(){
+  if(_cjOcupado) return;
+  if(estadoCaja().e!=='cerrada'){ render(); return; }
+  const f=_cjNum(cjD.fondo);
+  if(isNaN(f)||f<0){ alert('Escribe el fondo inicial que contaste (0 si la caja empieza vacía).'); return; }
+  const fe=cjFondoEsperado();
+  const dif=fe!==null?_r2(f-fe):0;
+  if(Math.abs(dif)>0.005&&!(cjD.obs||'').trim()){ alert('El fondo no coincide con lo que dejó el último cierre. Escribe la observación.'); return; }
+  _cjOcupado=true;
+  try{
+    const uc=cjUltimoCierre();
+    const ap={id:'ap'+Date.now(),esApertura:true,v:2,fondo:f,inicio:f,sueltos:0,
+      fondoEsperado:fe,difApertura:dif,obs:(cjD.obs||'').trim(),
+      desde:uc&&uc.hasta?uc.hasta:today()+'T00:00:00',
+      date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
+    await saveVenta(ap);
+    bitacora('apertura_caja',{accion:'Abrio la caja con '+fmt(f)+(Math.abs(dif)>0.005?' (difiere '+fmt(dif)+' del ultimo cierre)':''),monto:f,diferencia:dif,obs:ap.obs});
+    cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false};
+    render();
+  } finally { _cjOcupado=false; }
+}
+
+async function cjCerrar(sinConteo){
+  if(_cjOcupado) return;
+  const est=estadoCaja();
+  if(est.e==='cerrada'){ render(); return; }
+  const c=cjCalcular(est);
+  let fondo=est.ap?(+est.ap.fondo||0):_cjNum(cjD.fondoDia);
+  if(isNaN(fondo)) fondo=0;
+  const esperado=_r2(fondo+c.efV-c.efG);
+  let conteo=null, dif=null, retiro=0, obs=(cjD.obs||'').trim(), autor=null, motivo='';
+  if(sinConteo){
+    autor=await pedirAutorizacionAdmin('Cerrar la caja del '+est.dia+' sin conteo');
+    if(!autor) return;
+    motivo=(prompt('Motivo para cerrar sin contar el efectivo (obligatorio):')||'').trim();
+    if(motivo.length<4){ alert('Debes indicar el motivo.'); return; }
+  } else {
+    conteo=_cjNum(cjD.conteo);
+    if(isNaN(conteo)){ cjD.fase='contar'; render(); return; }
+    dif=_r2(conteo-esperado);
+    const r=_cjNum(cjD.retiro); retiro=isNaN(r)?0:r;
+    if(retiro>conteo+0.005){ alert('El retiro no puede ser mayor que el efectivo contado.'); return; }
+    if(Math.abs(dif)>CJ_TOL&&obs.length<4){ alert('Hay una diferencia de '+fmt(dif)+'. Escribe en la observación por qué no cuadra.'); return; }
+    if(!confirm('¿Confirmar el cierre?\n\nDebería haber: '+fmt(esperado)+'\nContado: '+fmt(conteo)+'\nDiferencia: '+(dif>0?'+':'')+fmt(dif)+'\nRetiro: '+fmt(retiro)+'\nQueda en caja: '+fmt(conteo-retiro))) return;
+  }
+  _cjOcupado=true;
+  try{
+    let ap=est.ap;
+    if(!ap){
+      // Dia del sistema anterior sin apertura: se registra su apertura retroactiva
+      ap={id:'ap'+Date.now(),esApertura:true,v:2,fondo,inicio:fondo,sueltos:0,retroactiva:true,
+        desde:est.dia+'T00:00:00',date:est.dia+'T00:00:00.000',user:turnoUser,userAuth:authUser(),total:0,closed:false};
+      await saveVenta(ap);
+    }
+    const ahora=localISO();
+    const rec={id:'cierre'+Date.now(),esCierre:true,v:2,aperturaId:ap.id,desde:ap.desde||ap.date,hasta:ahora,date:ahora,
+      inicio:fondo,sueltos:0,conteo,conteoInicial:(cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo)?cjD.conteoInicial:null,
+      efectivoEsperado:c.efV,gastosEfectivo:c.efG,esperadoEnCaja:esperado,diferencia:dif,
+      retiro,fondoSiguiente:sinConteo?null:_r2(conteo-retiro),
+      porMetodo:Object.fromEntries(Object.entries(c.porMetodo).map(([k,v])=>[k,_r2(v)])),
+      ventasTotal:c.tot,nVentas:c.ventas.length,nGastosEf:c.gastos.length,ids:c.ids,
+      sinConteo:!!sinConteo,autorizadoPor:autor?autor.email:null,motivoSinConteo:motivo||null,
+      abiertaPor:ap.user||'',responsable:turnoUser,userAuth:authUser(),obs,total:0,closed:false};
+    await saveVenta(rec);
+    bitacora(sinConteo?'cierre_caja_sin_conteo':'cierre_caja',{accion:sinConteo?('Cerro la caja del '+est.dia+' SIN conteo: '+motivo):('Cerro la caja: esperado '+fmt(esperado)+', contado '+fmt(conteo)+', diferencia '+fmt(dif)),
+      esperado,conteo,diferencia:dif,retiro,obs});
+    cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false};
+    render();
+    if(!sinConteo) alert('✓ Caja cerrada. Diferencia: '+(dif>0?'+':'')+fmt(dif)+'\nQueda en caja: '+fmt(conteo-retiro));
+  } finally { _cjOcupado=false; }
+}
+
 function attachCaja(){
   const mc=document.getElementById('mc');
+  attachCuadre(mc);
   mc.querySelector('#bctcambio')?.addEventListener('click',()=>cerrarSesionPOS('cambio de turno'));
   if(cajaTab==='reconstruccion') attachReconstruccion();
   mc.querySelector('#bhistmes')?.addEventListener('click',async()=>{
@@ -3685,70 +3981,6 @@ function attachCaja(){
   mc.querySelector('#gf-generar-quick')?.addEventListener('click',doGenerar);
 
   mc.querySelector('#bcalcular')?.addEventListener('click',()=>{render();});
-  mc.querySelector('#bguardar-inicio')?.addEventListener('click',async()=>{
-    const inicio=parseFloat(document.getElementById('cinicio')?.value)||0;
-    const sueltos=parseFloat(document.getElementById('csueltos')?.value)||0;
-    // Save as a special 'apertura' record so it persists across renders
-    const existing=S.findIndex(s=>s.esApertura&&s.date&&s.date.startsWith(today()));
-    let apRec;
-    if(existing>=0){
-      S[existing].inicio=inicio;S[existing].sueltos=sueltos;apRec=S[existing];
-    } else {
-      apRec={id:'ap'+Date.now(),esApertura:true,inicio,sueltos,date:localISO(),user:turnoUser,total:0,closed:false};
-      S.push(apRec);
-    }
-    saveVenta(apRec);
-    alert('✓ Inicio de caja guardado: $'+inicio.toFixed(2)+(sueltos?' + sueltos $'+sueltos.toFixed(2):''));
-  });
-  mc.querySelector('#bcerrar')?.addEventListener('click',async()=>{
-    const inicio=parseFloat(document.getElementById('cinicio')?.value)||0;
-    const sueltos2=parseFloat(document.getElementById('csueltos')?.value)||0;
-    const conteo2=parseFloat(document.getElementById('cconteo')?.value)||0;
-    const resp=document.getElementById('cresp')?.value||turnoUser;
-    const obs=document.getElementById('cobs')?.value||'';
-    // Calculate expected cash
-    const ventasHoy=S.filter(s=>isVenta(s)&&s.date.startsWith(today())&&!s.closed);
-    let efectivoEsperado=0;
-    ventasHoy.forEach(s=>{
-      if(s.pagosParciales&&s.pagosParciales.length>0){
-        s.pagosParciales.forEach(p=>{if(p.metodo==='Efectivo')efectivoEsperado+=p.monto;});
-      } else if(s.paymentMethod==='Efectivo'){ efectivoEsperado+=s.total; }
-    });
-    const gastosHoy=S.filter(s=>s.esGasto&&!s.anulada&&s.date.startsWith(today())&&s.paymentMethod==='Efectivo').reduce((a,g)=>a+g.total,0);
-    const esperadoEnCaja=inicio+sueltos2+efectivoEsperado-gastosHoy;
-    const diferencia=conteo2-esperadoEnCaja;
-    // Show summary and require confirmation
-    let msg='RESUMEN DE CIERRE\n\n';
-    msg+='Inicio de caja: $'+inicio.toFixed(2)+'\n';
-    msg+='Sueltos: $'+sueltos2.toFixed(2)+'\n';
-    msg+='Ventas efectivo: $'+efectivoEsperado.toFixed(2)+'\n';
-    msg+='Gastos efectivo: -$'+gastosHoy.toFixed(2)+'\n';
-    msg+='─────────────\n';
-    msg+='Esperado en caja: $'+esperadoEnCaja.toFixed(2)+'\n';
-    msg+='Conteo real: $'+conteo2.toFixed(2)+'\n';
-    msg+='DIFERENCIA: '+(diferencia>=0?'+':'')+'$'+diferencia.toFixed(2)+'\n\n';
-    if(Math.abs(diferencia)>0.5){ msg+='⚠ Hay una diferencia de $'+Math.abs(diferencia).toFixed(2)+'\n\n'; }
-    msg+='\u00bfConfirmar cierre de caja?';
-    // Sin conteo fisico no hay control de faltantes: cerrar con el conteo en
-    // cero produce una "diferencia" que no significa nada. Se exige contar.
-    if(!(conteo2>0)){
-      alert('Falta el CONTEO del efectivo que hay en la caja.\n\nCerrar sin contar no permite detectar un faltante: la diferencia se calcularia contra cero.\n\nCuenta el efectivo, escribe el monto y vuelve a cerrar.');
-      return;
-    }
-    if(!confirm(msg))return;
-    // Require PIN de administrador to close
-    if(!await pedirAutorizacionAdmin('Cerrar la caja del día'))return;
-    const cierreRec={id:`cierre${Date.now()}`,esCierre:true,inicio,sueltos:sueltos2,conteo:conteo2,
-      efectivoEsperado,gastosEfectivo:gastosHoy,esperadoEnCaja,diferencia,
-      responsable:resp,obs,date:localISO(),total:0,closed:false,userAuth:authUser()};
-    S.push(cierreRec);
-    // Only close actual ventas, not other records
-    const cerradas=[];
-    S.forEach(s=>{if(isVenta(s)&&s.date.startsWith(today())){s.closed=true;cerradas.push(s);}});
-    render();
-    saveVenta(cierreRec); saveVentas(cerradas);
-    alert('✓ Caja cerrada. Diferencia: '+(diferencia>=0?'+':'')+'$'+diferencia.toFixed(2));
-  });
 }
 // ── INVENTARIO ────────────────────────────────────────────────
 function rInv(){
