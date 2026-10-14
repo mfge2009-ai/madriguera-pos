@@ -3742,7 +3742,7 @@ function rCuadre(){
       ${cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo?`<div style="font-size:11px;color:var(--amb);margin-bottom:10px">Primer conteo: ${fmt(cjD.conteoInicial)} (queda registrado).</div>`:''}
       <div class="fgrid">
         <div class="fg"><label>Retiro / depósito ($)</label><input id="cj-retiro" type="number" step="0.01" min="0" value="${esc(cjD.retiro)}" placeholder="0.00"></div>
-        <div class="fg"><label>Queda en caja para el próximo turno</label><input value="${fmt(queda)}" readonly style="font-weight:700"></div>
+        <div class="fg"><label>Queda en caja para el próximo turno</label><input id="cj-queda" value="${fmt(queda)}" readonly style="font-weight:700"></div>
       </div>
       <div class="fg" style="margin-bottom:12px"><label>Observación${peq?'':' <b style="color:var(--red)">(obligatoria: explica la diferencia)</b>'}</label>
         <input id="cj-obs" value="${esc(cjD.obs)}" placeholder="${peq?'Opcional':'¿Por qué no cuadra?'}"></div>
@@ -3780,9 +3780,19 @@ function attachCuadre(mc){
   bind('#cj-conteo','conteo'); bind('#cj-retiro','retiro'); bind('#cj-obs','obs'); bind('#cj-obs-ap','obs');
   bind('#cj-fondodia','fondoDia');
   // Campos que cambian otros numeros en pantalla: se redibuja al salir del campo
-  mc.querySelector('#cj-retiro')?.addEventListener('change',()=>render());
+  // Retiro: se actualiza «queda en caja» sin redibujar (redibujar al salir del campo se comia el clic en «Confirmar cierre»)
+  mc.querySelector('#cj-retiro')?.addEventListener('input',e=>{
+    const q=mc.querySelector('#cj-queda'); if(!q) return;
+    const n=_cjNum(cjD.conteo), r=_cjNum(e.target.value);
+    if(!isNaN(n)) q.value=fmt(_r2(n-(isNaN(r)?0:r)));
+  });
   mc.querySelector('#cj-fondo')?.addEventListener('input',e=>{cjD.fondo=e.target.value;});
-  mc.querySelector('#cj-fondo')?.addEventListener('change',()=>render());
+  // Fondo: solo se redibuja si cambia la necesidad de observacion (asi no se pierde el clic en «Abrir caja»)
+  mc.querySelector('#cj-fondo')?.addEventListener('change',()=>{
+    const fe=cjFondoEsperado(), f=_cjNum(cjD.fondo);
+    const distinto=fe!==null&&!isNaN(f)&&Math.abs(f-fe)>0.005;
+    if(distinto!==!!mc.querySelector('#cj-obs-ap')) render();
+  });
   mc.querySelector('#cj-det')?.addEventListener('click',e=>{e.preventDefault();cjD.verDetalle=!cjD.verDetalle;render();});
   mc.querySelector('#cj-ver')?.addEventListener('click',()=>{
     const est=estadoCaja();
@@ -3802,6 +3812,7 @@ let _cjOcupado=false;
 async function cjAbrir(){
   if(_cjOcupado) return;
   if(estadoCaja().e!=='cerrada'){ render(); return; }
+  const inF=document.getElementById('cj-fondo'); if(inF) cjD.fondo=inF.value;
   const f=_cjNum(cjD.fondo);
   if(isNaN(f)||f<0){ alert('Escribe el fondo inicial que contaste (0 si la caja empieza vacía).'); return; }
   const fe=cjFondoEsperado();
@@ -6615,6 +6626,7 @@ function rFacturasSri(){
       <button class="btn btn-g btn-sm" id="sri-recargar">↻ Actualizar</button>
     </div>
     ${MI_ROL==='admin'?sriPanelEstadoHTML():''}
+    ${MI_ROL==='admin'?ivaPanelHTML():''}
     ${cola.length?`<div class="card" style="margin-bottom:10px;background:#fff7e0;border:1px solid #e8c96a">
       <div style="font-weight:700;margin-bottom:5px">Pendientes de enviar desde este equipo (${cola.length})</div>
       ${cola.map(c=>`<div class="rb" style="font-size:11.5px;margin-bottom:4px;gap:6px">
@@ -6638,6 +6650,7 @@ function attachFacturasSri(){
   sriEnlazarAcciones(mc);
   mc.querySelector('#sri-recargar')?.addEventListener('click',()=>{ sriCargado=false; sriCargarFacturas(); });
   sriEnlazarPanelEstado(mc);
+  ivaEnlazar(mc);
   mc.querySelector('#sri-reintentar-cola')?.addEventListener('click',()=>sriProcesarCola());
   mc.querySelectorAll('[data-sri-quitar-cola]').forEach(b=>b.addEventListener('click',()=>{
     if(confirm('¿Quitar este pedido de la cola? La venta NO se anula; solo deja de intentarse la factura desde este equipo.')){ sriQuitarCola(b.dataset.sriQuitarCola); render(); }
@@ -6886,6 +6899,416 @@ function sriEnlazarPanelEstado(mc){
   d.addEventListener('toggle',()=>{ sriEstAbierto = d.open; try{ localStorage.setItem('sri_panel_abierto', d.open?'1':'0'); }catch(e){} });
   mc.querySelector('#sri-probar')?.addEventListener('click',()=>sriProbarConexion());
   mc.querySelector('#sri-estado-act')?.addEventListener('click',()=>sriCargarEstado());
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CONTROL DE IVA DEL MES (solo administracion) — herramienta de control,
+//  NO reemplaza la declaracion (formulario 104) ni el criterio del contador.
+//   1) IVA cobrado: facturas AUTORIZADAS de PRODUCCION del mes (por fecha de
+//      emision) menos notas de credito autorizadas del mes.
+//   2) Brecha: ventas del POS del mes que no tienen factura autorizada.
+//      Su IVA se ESTIMA con la tarifa del producto o de su categoria.
+//   5) Resultado preliminar (sin compras ni retenciones, aun no cargadas) y
+//      dias para el vencimiento.
+// ═══════════════════════════════════════════════════════════════════════
+const IVA_DIA_VENCIMIENTO = 26;   // 9no digito del RUC = 9 → dia 26 del mes siguiente (confirmar en el calendario del SRI)
+const IVA_TARIFA_CLASE = {IVA15:15, IVA0:0, IVA5:5, IVA8:8, NO_OBJETO:0, EXENTO:0};
+let ivaMes = null, ivaCache = {}, ivaCargando = false, ivaError = '', ivaAbierto = null, ivaVerDia = null;
+function ivaMesActual(){ return localISO(new Date()).slice(0,7); }
+function ivaAbiertoGuardado(){ if(ivaAbierto===null){ try{ ivaAbierto = localStorage.getItem('iva_panel_abierto')==='1'; }catch(e){ ivaAbierto=false; } } return ivaAbierto; }
+const ivaC = x => Math.round((+x||0)*100);
+const ivaD = c => (c<0?'-':'')+'$'+(Math.abs(c)/100).toFixed(2);
+function ivaFechaISO(ddmmyyyy){ const m=String(ddmmyyyy||'').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m?m[3]+'-'+m[2]+'-'+m[1]:''; }
+function ivaClaseItem(it){
+  const p = P.find(x=>x.id===it.productId);
+  if(p && p.claseIVA) return p.claseIVA;
+  const cat = catDeItem(it);
+  const porCat = (sriInfo && sriInfo.ivaPorCategoria) || {Libros:'IVA0', Consignados:'IVA0'};
+  return porCat[cat] || (/libro|consign/i.test(cat)?'IVA0':'IVA15');
+}
+
+async function ivaCalcular(mes){
+  if(ivaCargando) return;
+  ivaCargando = true; ivaError=''; ivaMes = mes;
+  if(view==='facturas') render();
+  try{
+    // Ventas del mes (carga el mes si no esta en memoria)
+    try{ await cargarMes(mes); }catch(e){}
+    if(!sriInfo) await sriEstadoServicio();
+    // Comprobantes del mes (margen de 1 dia por la zona horaria)
+    const a=+mes.slice(0,4), m=+mes.slice(5,7);
+    const desde = new Date(Date.UTC(a,m-1,1)-86400000).toISOString(), hasta = new Date(Date.UTC(a,m,1)+2*86400000).toISOString();
+    const snap = await getDocs(query(collection(db,'sri_facturas'), where('creadaEn','>=',desde), where('creadaEn','<',hasta)));
+    const docs = snap.docs.map(x=>x.data()).filter(f=>f.ambiente==='2' && ivaFechaISO(f.fechaEmision).slice(0,7)===mes);
+    const aut = docs.filter(f=>f.estado==='AUTORIZADA');
+    const enTramite = docs.filter(f=>SRI_EN_CURSO.includes(f.estado));
+    const rechazados = docs.filter(f=>f.estado==='DEVUELTA'||f.estado==='NO_AUTORIZADA');
+    // 1) IVA cobrado por tarifa
+    const grupos = {};   // codigoPorcentaje → {etiqueta, tarifa, baseF, ivaF, baseNC, ivaNC}
+    let nF=0, nNC=0, totF=0, totNC=0;
+    aut.forEach(f=>{
+      const esNC = f.tipoDoc==='04', k = (f.contenido&&f.contenido.calculo&&f.contenido.calculo.impuestos)||[];
+      if(esNC){ nNC++; totNC+=ivaC(f.importeTotal); } else { nF++; totF+=ivaC(f.importeTotal); }
+      k.forEach(t=>{
+        const g = grupos[t.codigoPorcentaje] || (grupos[t.codigoPorcentaje]={etiqueta:t.etiqueta||('Código '+t.codigoPorcentaje), tarifa:+t.tarifa||0, baseF:0, ivaF:0, baseNC:0, ivaNC:0});
+        if(esNC){ g.baseNC+=ivaC(t.baseImponible); g.ivaNC+=ivaC(t.valor); } else { g.baseF+=ivaC(t.baseImponible); g.ivaF+=ivaC(t.valor); }
+      });
+    });
+    const ivaCobrado = Object.values(grupos).reduce((s,g)=>s+g.ivaF-g.ivaNC,0);
+    // 2) Brecha ventas vs facturas (ventas no anuladas del mes)
+    const facturadas = new Set(aut.filter(f=>f.tipoDoc!=='04').map(f=>String(f.ventaId)));
+    const ventas = S.filter(s=>isVenta(s) && (s.date||'').slice(0,7)===mes);
+    const dias = {};
+    let vTot=0, vSin=0, ivaEstSin=0, nSin=0;
+    ventas.forEach(v=>{
+      const dia=(v.date||'').slice(0,10), tot=ivaC(v.total), fac=facturadas.has(String(v.id));
+      const d = dias[dia] || (dias[dia]={dia, ventas:0, n:0, facturado:0, sin:0, nSin:0, ivaEst:0, lista:[]});
+      d.ventas+=tot; d.n++; vTot+=tot;
+      if(fac){ d.facturado+=tot; return; }
+      // IVA estimado de la venta sin factura: por linea con la tarifa del producto/categoria,
+      // prorrateando el descuento global
+      const sub = (v.items||[]).reduce((s,i)=>s+ivaC(i.price)*(+i.qty||1),0) || tot;
+      let iva=0;
+      (v.items||[]).forEach(i=>{ const bruto=ivaC(i.price)*(+i.qty||1), neto=sub?bruto*tot/sub:0, tf=IVA_TARIFA_CLASE[ivaClaseItem(i)]??15; iva += neto - neto/(1+tf/100); });
+      iva=Math.round(iva);
+      d.sin+=tot; d.nSin++; d.ivaEst+=iva; d.lista.push({id:v.id, hora:(v.date||'').slice(11,16), mesa:v.tableName||'', total:tot, iva, items:(v.items||[]).map(i=>(i.qty||1)+'× '+i.name).join(', ')});
+      vSin+=tot; nSin++; ivaEstSin+=iva;
+    });
+    // 3-4) Compras, notas de credito y retenciones RECIBIDAS (cargadas por la administradora)
+    let compras = [];
+    try{ const sc = await getDocs(query(collection(db,'iva_compras'), where('mes','==',mes))); compras = sc.docs.map(x=>x.data()); }
+    catch(e){ console.error('iva_compras', e); ivaError = 'No se pudieron leer las compras: '+msgError(e,'leer las compras')+' (¿publicaste la regla de iva_compras?)'; }
+    // 5) Vencimiento: dia 26 del mes siguiente
+    const venc = new Date(a, m, IVA_DIA_VENCIMIENTO);      // m (1-12) como indice = mes siguiente
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    ivaCache[mes] = { mes, calculado:new Date().toISOString(), grupos, ivaCobrado, nF, nNC, totF, totNC,
+      enTramite:enTramite.map(f=>f.numero), rechazados:rechazados.map(f=>f.numero+' ('+f.estado+')'),
+      vTot, vSin, nSin, ivaEstSin, nVentas:ventas.length, dias:Object.values(dias).sort((x,y)=>x.dia.localeCompare(y.dia)),
+      vencimiento: localISO(venc).slice(0,10), diasParaVencer: Math.round((venc-hoy)/86400000), compras,
+      comprobantes: aut.map(f=>({tipo:f.tipoDoc==='04'?'NOTA DE CREDITO':'FACTURA', numero:f.numero, fecha:f.fechaEmision, id:f.comprador?.identificacion||'', comprador:f.comprador?.razonSocial||'', modifica:f.facturaNumero||'',
+        imp:(f.contenido?.calculo?.impuestos||[]).map(t=>({cp:t.codigoPorcentaje, base:t.baseImponible, iva:t.valor})), total:f.importeTotal, aut:f.numeroAutorizacion||''})) };
+  }catch(e){ console.error('iva', e); ivaError = 'No se pudo calcular el IVA del mes: '+(e.message||e); }
+  finally{ ivaCargando=false; if(view==='facturas') render(); }
+}
+
+function ivaExportarCSV(r){
+  const cps = [...new Set(r.comprobantes.flatMap(c=>c.imp.map(i=>i.cp)))].sort();
+  const nombre = cp => (r.grupos[cp]?.etiqueta||cp).replace(/\s+/g,'_');
+  const head = ['tipo','numero','fecha_emision','identificacion','comprador','factura_modificada'].concat(cps.flatMap(cp=>['base_'+nombre(cp),'iva_'+nombre(cp)])).concat(['total','numero_autorizacion']);
+  const filas = r.comprobantes.map(c=>{
+    const s = c.tipo==='NOTA DE CREDITO' ? '-' : '';
+    return [c.tipo,c.numero,c.fecha,c.id,c.comprador,c.modifica].concat(cps.flatMap(cp=>{ const i=c.imp.find(x=>x.cp===cp); return i?[s+i.base, s+i.iva]:['','']; })).concat([s+c.total, c.aut]);
+  });
+  const csv = [head].concat(filas).map(f=>f.map(v=>{ v=String(v??''); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }).join(',')).join('\n');
+  const url = URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'}));
+  const a = document.createElement('a'); a.href=url; a.download='comprobantes_'+r.mes+'_produccion.csv'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
+  try{ bitacora('iva_exportar',{accion:'Exporto comprobantes de '+r.mes, n:r.comprobantes.length}); }catch(e){}
+}
+
+function ivaPanelHTML(){
+  const mes = ivaMes || ivaMesActual(), r = ivaCache[mes], abierto = ivaAbiertoGuardado();
+  if(abierto && !r && !ivaCargando && !ivaError) setTimeout(()=>ivaCalcular(mes),0);
+  const tile = (k,v,sub,col)=>`<div style="padding:9px 11px;background:var(--bg3);border-radius:9px;min-width:0"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.03em">${k}</div><div style="font-weight:800;font-size:17px;color:${col||'inherit'}">${v}</div>${sub?`<div style="font-size:10.5px;color:var(--text2)">${sub}</div>`:''}</div>`;
+  let cuerpo='';
+  if(ivaCargando && !r) cuerpo='<div style="font-size:12px;color:var(--text3)">Calculando…</div>';
+  else if(ivaError && !r) cuerpo=`<div style="font-size:12px;color:#8b1a1a">${esc(ivaError)}</div>`;
+  else if(r){
+    const gs = Object.entries(r.grupos).sort((x,y)=>y[1].tarifa-x[1].tarifa);
+    const pct = r.vTot ? Math.round(r.vSin*1000/r.vTot)/10 : 0;
+    const rc = ivaResumenCompras(r);
+    const vencTxt = r.diasParaVencer>=0 ? 'Vence '+r.vencimiento+' · faltan '+r.diasParaVencer+' días' : 'Venció '+r.vencimiento;
+    cuerpo = `
+      ${r.enTramite.length?`<div style="font-size:12px;padding:7px 9px;border-radius:8px;background:#fff4dc;color:#7a5200;margin-bottom:6px">⚠ ${r.enTramite.length} comprobante(s) de producción aún sin autorización no se cuentan: ${esc(r.enTramite.join(', '))}</div>`:''}
+      ${r.vSin>0?`<div style="font-size:12px;padding:7px 9px;border-radius:8px;background:${pct>=5?'#fde8e8':'#fff4dc'};color:${pct>=5?'#8b1a1a':'#7a5200'};margin-bottom:6px">${pct>=5?'⛔':'⚠'} ${r.nSin} venta(s) por ${ivaD(r.vSin)} (${pct}% de lo vendido) no tienen factura autorizada. Toda venta debe tener comprobante; su IVA estimado es ${ivaD(r.ivaEstSin)}.</div>`:`<div style="font-size:12px;padding:7px 9px;border-radius:8px;background:#e7f5ec;color:#1f6b45;margin-bottom:6px">✔ Todas las ventas del mes tienen factura autorizada.</div>`}
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:7px;margin-bottom:9px">
+        ${tile('IVA cobrado (facturado)', ivaD(r.ivaCobrado), r.nF+' facturas'+(r.nNC?' · '+r.nNC+' NC restadas':''), '#1a3f8b')}
+        ${tile('IVA estimado sin factura', ivaD(r.ivaEstSin), r.nSin+' ventas · '+ivaD(r.vSin), r.ivaEstSin?'#a86b00':'inherit')}
+        ${tile('Crédito tributario (compras)', ivaD(rc.credito), rc.n+' comprobantes · factor '+(rc.factor*100).toFixed(1)+'%'+(rc.sinIva?' · '+rc.sinIva+' sin IVA':''), '#1f6b45')}
+        ${tile('Retenciones de IVA recibidas', ivaD(rc.retIva), rc.nRet+' comprobante(s)')}
+        ${tile(rc.aPagar>=0?'IVA estimado a pagar':'Crédito a favor', ivaD(Math.abs(rc.aPagar)), 'Facturado − crédito − retenciones'+(r.ivaEstSin?' · + '+ivaD(r.ivaEstSin)+' si se facturan las ventas pendientes':''), rc.aPagar>=0?'#7a3fa0':'#1f6b45')}
+        ${tile('Declaración (form. 104)', r.diasParaVencer>=0?r.diasParaVencer+' días':'Vencida', vencTxt, r.diasParaVencer<=5?'#8b1a1a':'inherit')}
+      </div>
+      <div style="font-size:12px;font-weight:700;margin:4px 0">IVA cobrado por tarifa (facturas − notas de crédito)</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg3)"><th style="text-align:left;padding:5px">Tarifa</th><th style="text-align:right;padding:5px">Base facturas</th><th style="text-align:right;padding:5px">− Base NC</th><th style="text-align:right;padding:5px">Base neta</th><th style="text-align:right;padding:5px">IVA neto</th></tr></thead>
+        <tbody>${gs.length?gs.map(([cp,g])=>`<tr style="border-bottom:.5px solid #eee"><td style="padding:5px">${esc(g.etiqueta)}</td><td style="text-align:right;padding:5px">${ivaD(g.baseF)}</td><td style="text-align:right;padding:5px">${g.baseNC?'−'+ivaD(g.baseNC):'—'}</td><td style="text-align:right;padding:5px;font-weight:700">${ivaD(g.baseF-g.baseNC)}</td><td style="text-align:right;padding:5px;font-weight:700">${ivaD(g.ivaF-g.ivaNC)}</td></tr>`).join(''):'<tr><td colspan="5" style="padding:6px;color:var(--text3)">Sin comprobantes autorizados de producción en este mes.</td></tr>'}</tbody>
+        <tfoot><tr><td style="padding:5px;font-weight:700">Total</td><td style="text-align:right;padding:5px">${ivaD(r.totF)}</td><td style="text-align:right;padding:5px">${r.totNC?'−'+ivaD(r.totNC):'—'}</td><td style="text-align:right;padding:5px;font-weight:700" colspan="2">Importe neto ${ivaD(r.totF-r.totNC)}</td></tr></tfoot>
+      </table></div>
+      <div style="font-size:12px;font-weight:700;margin:12px 0 4px">Ventas del POS vs. facturas, por día</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg3)"><th style="text-align:left;padding:5px">Día</th><th style="text-align:right;padding:5px">Ventas POS</th><th style="text-align:right;padding:5px">Facturado</th><th style="text-align:right;padding:5px">Sin factura</th><th style="text-align:right;padding:5px">IVA est.</th><th></th></tr></thead>
+        <tbody>${r.dias.map(d=>`<tr style="border-bottom:.5px solid #eee;${d.sin?'background:#fffaf0':''}"><td style="padding:5px">${esc(d.dia)}</td><td style="text-align:right;padding:5px">${ivaD(d.ventas)} <span style="color:var(--text3)">(${d.n})</span></td><td style="text-align:right;padding:5px">${ivaD(d.facturado)}</td><td style="text-align:right;padding:5px;${d.sin?'color:#a86b00;font-weight:700':''}">${d.sin?ivaD(d.sin)+' ('+d.nSin+')':'—'}</td><td style="text-align:right;padding:5px">${d.ivaEst?ivaD(d.ivaEst):'—'}</td><td style="padding:5px">${d.nSin?`<button class="btn btn-g btn-sm" data-iva-dia="${esc(d.dia)}">${ivaVerDia===d.dia?'Ocultar':'Ver'}</button>`:''}</td></tr>
+          ${ivaVerDia===d.dia?`<tr><td colspan="6" style="padding:4px 8px 8px;font-size:11px;color:var(--text2)">${d.lista.map(x=>`<div>${esc(x.hora)} · ${esc(x.mesa)} · ${ivaD(x.total)} (IVA est. ${ivaD(x.iva)}) · ${esc(x.items.slice(0,90))}</div>`).join('')}</td></tr>`:''}`).join('') || '<tr><td colspan="6" style="padding:6px;color:var(--text3)">Sin ventas en el mes.</td></tr>'}</tbody>
+        <tfoot><tr><td style="padding:5px;font-weight:700">Mes</td><td style="text-align:right;padding:5px;font-weight:700">${ivaD(r.vTot)}</td><td style="text-align:right;padding:5px">${ivaD(r.vTot-r.vSin)}</td><td style="text-align:right;padding:5px;font-weight:700">${ivaD(r.vSin)}</td><td style="text-align:right;padding:5px">${ivaD(r.ivaEstSin)}</td><td></td></tr></tfoot>
+      </table></div>
+      ${r.rechazados.length?`<div style="font-size:11px;color:#8b1a1a;margin-top:6px">Rechazados por el SRI (no cuentan): ${esc(r.rechazados.join(', '))}</div>`:''}
+      ${ivaComprasHTML(r, rc)}
+      <div style="font-size:10.5px;color:var(--text3);margin-top:8px;line-height:1.45">Solo comprobantes de PRODUCCIÓN autorizados, por fecha de emisión. Las notas de crédito restan en el mes en que se emiten. El IVA «sin factura» es una estimación con la tarifa de cada producto o de su categoría. El crédito tributario aplica el factor de proporcionalidad del mes a las compras de uso mixto; su contador puede usar otro criterio (p. ej., factor anual) o arrastrar crédito de meses anteriores. Herramienta de control: no reemplaza la declaración ni el criterio de su contador. Calculado ${esc(new Date(r.calculado).toLocaleString('es-EC',{dateStyle:'short',timeStyle:'short'}))}</div>`;
+  }
+  return `<details id="iva-panel" class="card" style="margin-bottom:12px;padding:10px 12px" ${abierto?'open':''}>
+    <summary style="cursor:pointer;font-weight:700;font-size:13px;list-style:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      📊 Control de IVA ${r?sriChip('IVA cobrado '+ivaD(r.ivaCobrado),'blu'):''} ${r&&r.vSin?sriChip('Sin factura '+ivaD(r.vSin),'amb'):''}
+    </summary>
+    <div style="margin-top:10px">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:9px">
+        <label style="font-size:12px">Mes <input type="month" id="iva-mes" value="${esc(mes)}" max="${esc(ivaMesActual())}" style="padding:5px;border:1.5px solid var(--b2);border-radius:7px"></label>
+        <button class="btn btn-b btn-sm" id="iva-calcular" ${ivaCargando?'disabled':''}>${ivaCargando?'Calculando…':'↻ Calcular'}</button>
+        ${r&&r.comprobantes.length?`<button class="btn btn-g btn-sm" id="iva-csv">⬇ CSV ventas</button>`:''}
+        ${r&&(r.compras||[]).length?`<button class="btn btn-g btn-sm" id="iva-csv-compras">⬇ CSV compras</button>`:''}
+      </div>
+      ${cuerpo}
+    </div>
+  </details>`;
+}
+function ivaEnlazar(mc){
+  const d = mc.querySelector('#iva-panel'); if(!d) return;
+  d.addEventListener('toggle',()=>{ ivaAbierto=d.open; try{ localStorage.setItem('iva_panel_abierto', d.open?'1':'0'); }catch(e){} if(d.open && !ivaCache[ivaMes||ivaMesActual()]) ivaCalcular(ivaMes||ivaMesActual()); });
+  mc.querySelector('#iva-calcular')?.addEventListener('click',()=>{ const m = mc.querySelector('#iva-mes').value || ivaMesActual(); delete ivaCache[m]; ivaVerDia=null; ivaCalcular(m); });
+  mc.querySelector('#iva-mes')?.addEventListener('change',e=>{ const m=e.target.value; if(!m) return; ivaMes=m; ivaVerDia=null; if(ivaCache[m]) render(); else ivaCalcular(m); });
+  mc.querySelector('#iva-csv')?.addEventListener('click',()=>{ const r=ivaCache[ivaMes||ivaMesActual()]; if(r) ivaExportarCSV(r); });
+  mc.querySelector('#iva-csv-compras')?.addEventListener('click',()=>{ const r=ivaCache[ivaMes||ivaMesActual()]; if(r) ivaExportarComprasCSV(r); });
+  ivaEnlazarCompras(mc);
+  mc.querySelectorAll('[data-iva-dia]').forEach(b=>b.addEventListener('click',()=>{ ivaVerDia = ivaVerDia===b.dataset.ivaDia?null:b.dataset.ivaDia; render(); }));
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FASE 2 — IVA EN COMPRAS Y RETENCIONES RECIBIDAS
+// ═══════════════════════════════════════════════════════════════════════
+//  Fuente principal: los comprobantes electronicos RECIBIDOS que lista el
+//  SRI (SRI en linea → Facturacion electronica → Comprobantes electronicos
+//  recibidos):
+//   · XML de cada comprobante  → IVA exacto por tarifa (recomendado)
+//   · listado .txt             → se toma lo que traiga; si no trae IVA, el
+//                                comprobante queda «falta IVA» hasta cargar su XML
+//   · ingreso manual           → para casos puntuales
+//  Clasificacion de cada compra para el credito tributario (LRTI art. 66):
+//   'gravada'      uso exclusivo en ventas con IVA 15%   → 100%
+//   'mixto'        uso comun (ventas 15% y 0%)           → factor de proporcionalidad
+//   'no_deducible' gasto personal / solo ventas 0%       → 0%
+//  Se guarda en Firestore iva_compras/{claveAcceso} (solo administracion).
+// ═══════════════════════════════════════════════════════════════════════
+const IVA_CLASIF = { gravada:'Uso en ventas con IVA (100%)', mixto:'Uso mixto (factor)', no_deducible:'No deducible (0%)' };
+let ivaImportando = false, ivaImportMsg = '';
+
+function ivaResumenCompras(r){
+  const base15 = Object.entries(r.grupos).filter(([cp,g])=>g.tarifa>0).reduce((s,[,g])=>s+g.baseF-g.baseNC,0);
+  const baseTot = Object.values(r.grupos).reduce((s,g)=>s+g.baseF-g.baseNC,0);
+  const factor = baseTot>0 ? Math.max(0,Math.min(1, base15/baseTot)) : 1;
+  let credito=0, ivaBruto=0, retIva=0, n=0, nRet=0, sinIva=0;
+  (r.compras||[]).forEach(c=>{
+    if(c.tipo==='07'){ retIva += ivaC(c.retIva); nRet++; return; }
+    n++;
+    if(c.ivaConocido===false){ sinIva++; return; }
+    const signo = c.tipo==='04' ? -1 : 1, iva = signo*ivaC(c.iva);
+    ivaBruto += iva;
+    credito += c.clasificacion==='gravada' ? iva : c.clasificacion==='no_deducible' ? 0 : Math.round(iva*factor);
+  });
+  return { factor, credito, ivaBruto, retIva, n, nRet, sinIva, aPagar: r.ivaCobrado - credito - retIva };
+}
+
+// ── Lectura de comprobantes ──────────────────────────────────────────────
+function ivaDesdeClave(clave){
+  const k = String(clave||'').replace(/\D/g,'');
+  if(k.length!==49) return null;
+  return { fecha: k.slice(4,8)+'-'+k.slice(2,4)+'-'+k.slice(0,2), tipo: k.slice(8,10), ruc: k.slice(10,23), ambiente: k.slice(23,24),
+           numero: k.slice(24,27)+'-'+k.slice(27,30)+'-'+k.slice(30,39) };
+}
+function ivaTxt(el, tag){ const x = el && el.getElementsByTagName(tag)[0]; return x ? x.textContent.trim() : ''; }
+function ivaParsearXML(texto, nombre){
+  const dp = new DOMParser();
+  let d = dp.parseFromString(texto, 'application/xml');
+  // Formato de descarga del SRI: <autorizacion>…<comprobante><![CDATA[<factura…>]]></comprobante>
+  const cdata = d.getElementsByTagName('comprobante')[0];
+  if(cdata && cdata.textContent.trim().startsWith('<')) d = dp.parseFromString(cdata.textContent.trim(), 'application/xml');
+  if(d.getElementsByTagName('parsererror').length) throw new Error(nombre+': XML ilegible');
+  const it = d.getElementsByTagName('infoTributaria')[0];
+  if(!it) throw new Error(nombre+': no es un comprobante del SRI');
+  const tipo = ivaTxt(it,'codDoc'), clave = ivaTxt(it,'claveAcceso');
+  const fechaTxt = ivaTxt(d,'fechaEmision'); const fm = fechaTxt.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const base = { clave, tipo, ruc: ivaTxt(it,'ruc'), razon: ivaTxt(it,'razonSocial'), numero: ivaTxt(it,'estab')+'-'+ivaTxt(it,'ptoEmi')+'-'+ivaTxt(it,'secuencial'),
+                 fecha: fm ? fm[3]+'-'+fm[2]+'-'+fm[1] : '', ambiente: ivaTxt(it,'ambiente'), fuente:'xml', ivaConocido:true };
+  if(tipo==='01' || tipo==='04' || tipo==='05' || tipo==='03'){
+    const info = d.getElementsByTagName(tipo==='04'?'infoNotaCredito':tipo==='03'?'infoLiquidacionCompra':'infoFactura')[0] || d;
+    let iva=0, b15=0, b0=0;
+    [...info.getElementsByTagName('totalImpuesto')].forEach(ti=>{
+      if(ivaTxt(ti,'codigo')!=='2') return;
+      const bi = ivaC(ivaTxt(ti,'baseImponible')), v = ivaC(ivaTxt(ti,'valor'));
+      iva += v; if(v>0) b15 += bi; else b0 += bi;
+    });
+    base.receptor = ivaTxt(info,'identificacionComprador') || ivaTxt(info,'identificacionProveedor');
+    base.iva = (iva/100).toFixed(2); base.base15=(b15/100).toFixed(2); base.base0=(b0/100).toFixed(2);
+    base.total = ivaTxt(info, tipo==='04'?'valorModificacion':'importeTotal') || ((iva+b15+b0)/100).toFixed(2);
+    if(tipo==='04') base.modifica = ivaTxt(info,'numDocModificado');
+    if(tipo==='05') throw new Error(nombre+': es una nota de débito; ingrésela manualmente si corresponde.');
+    return base;
+  }
+  if(tipo==='07'){
+    // Retencion: v1.0.0 (impuestos/impuesto) y v2.0.0 (docsSustento/…/retenciones/retencion). codigo 2 = IVA
+    let ret = 0;
+    [...d.getElementsByTagName('impuesto'), ...d.getElementsByTagName('retencion')].forEach(x=>{ if(ivaTxt(x,'codigo')==='2') ret += ivaC(ivaTxt(x,'valorRetenido')); });
+    base.retIva = (ret/100).toFixed(2);
+    base.receptor = ivaTxt(d,'identificacionSujetoRetenido');
+    base.total = base.retIva;
+    const ps = ivaTxt(d,'periodoFiscal'); const pm = ps.match(/^(\d{2})\/(\d{4})$/);
+    if(pm) base.periodoFiscal = pm[2]+'-'+pm[1];
+    return base;
+  }
+  throw new Error(nombre+': tipo de comprobante '+tipo+' no soportado');
+}
+function ivaParsearTXT(texto){
+  const lineas = texto.replace(/\r/g,'').split('\n').filter(l=>l.trim());
+  const iHead = lineas.findIndex(l=>/CLAVE_?ACCESO/i.test(l));
+  if(iHead<0) throw new Error('El .txt no tiene la columna CLAVE_ACCESO (¿es el listado de comprobantes recibidos del SRI?)');
+  const sep = lineas[iHead].includes('\t') ? '\t' : (lineas[iHead].includes(';') ? ';' : ',');
+  const cols = lineas[iHead].split(sep).map(c=>c.trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,''));
+  const idx = n => cols.findIndex(c=>c===n);
+  const iClave=idx('CLAVE_ACCESO'), iRazon=idx('RAZON_SOCIAL_EMISOR'), iIva=idx('IVA'), iTotal=idx('IMPORTE_TOTAL'), iSin=idx('VALOR_SIN_IMPUESTOS'), iRec=idx('IDENTIFICACION_RECEPTOR');
+  const num = s => { s=String(s||'').trim(); if(!s) return null; if(/,\d{1,2}$/.test(s) && !/\.\d{1,2}$/.test(s)) s=s.replace(/\./g,'').replace(',','.'); const n=Number(s.replace(/[^\d.-]/g,'')); return isFinite(n)?n:null; };
+  const res=[];
+  lineas.slice(iHead+1).forEach(l=>{
+    const v = l.split(sep);
+    const clave = (v[iClave]||'').replace(/\D/g,'');
+    const dc = ivaDesdeClave(clave); if(!dc) return;
+    const iva = iIva>=0 ? num(v[iIva]) : null, total = iTotal>=0 ? num(v[iTotal]) : null, sin = iSin>=0 ? num(v[iSin]) : null;
+    const x = { clave, tipo: dc.tipo, ruc: dc.ruc, razon: iRazon>=0 ? (v[iRazon]||'').trim() : '', numero: dc.numero, fecha: dc.fecha, ambiente: dc.ambiente,
+                receptor: iRec>=0 ? (v[iRec]||'').trim() : '', total: total!=null ? total.toFixed(2) : '', fuente:'txt' };
+    if(dc.tipo==='07'){ x.ivaConocido=false; x.retIva='0.00'; }
+    else if(iva!=null){ x.iva=iva.toFixed(2); x.ivaConocido=true; if(sin!=null){ x.base15 = iva>0 ? (Math.round(iva/0.15*100)/100).toFixed(2) : '0.00'; x.base0 = Math.max(0, sin - (iva>0?iva/0.15:0)).toFixed(2); } }
+    else x.ivaConocido=false;
+    res.push(x);
+  });
+  return res;
+}
+
+async function ivaGuardarCompras(lista){
+  const existentes = {};
+  try{ const s = await getDocs(query(collection(db,'iva_compras'), where('clave','in', lista.slice(0,30).map(x=>x.clave)))); s.docs.forEach(x=>existentes[x.id]=x.data()); }catch(e){}
+  let nuevos=0, actualizados=0, omitidos=0;
+  for(const c of lista){
+    const ant = existentes[c.clave];
+    if(ant && ant.fuente==='xml' && c.fuente==='txt'){ omitidos++; continue; }       // el XML manda sobre el .txt
+    const d = Object.assign({}, c, { mes: (c.tipo==='07' && c.periodoFiscal) ? c.periodoFiscal : c.fecha.slice(0,7),
+      clasificacion: (ant&&ant.clasificacion) || (c.tipo==='07'?'':'mixto'), cargadoPor: authUser(), cargadoEn: new Date().toISOString() });
+    Object.keys(d).forEach(k=>d[k]===undefined&&delete d[k]);
+    await setDoc(doc(db,'iva_compras',c.clave), d);
+    if(ant) actualizados++; else nuevos++;
+  }
+  return {nuevos, actualizados, omitidos};
+}
+async function ivaImportarArchivos(files){
+  if(!files || !files.length) return;
+  ivaImportando = true; ivaImportMsg='Leyendo '+files.length+' archivo(s)…'; render();
+  const ok=[], errores=[];
+  const miId = (sriInfo && sriInfo.emisorRuc) || '';
+  for(const f of files){
+    try{
+      const txt = await f.text();
+      if(/\.xml$/i.test(f.name) || /^\s*<\?xml|^\s*<autorizacion|^\s*<(factura|notaCredito|comprobanteRetencion)/.test(txt)) ok.push(ivaParsearXML(txt, f.name));
+      else ok.push(...ivaParsearTXT(txt));
+    }catch(e){ errores.push(e.message); }
+  }
+  const prod = ok.filter(c=>c.ambiente!=='1' && c.clave && c.fecha);
+  const pruebas = ok.length - prod.length;
+  let r = {nuevos:0, actualizados:0, omitidos:0};
+  try{
+    for(let i=0;i<prod.length;i+=30){ const x = await ivaGuardarCompras(prod.slice(i,i+30)); r.nuevos+=x.nuevos; r.actualizados+=x.actualizados; r.omitidos+=x.omitidos; }
+    try{ bitacora('iva_compras_import',{accion:'Importo '+prod.length+' comprobantes recibidos', nuevos:r.nuevos, actualizados:r.actualizados}); }catch(e){}
+  }catch(e){ errores.push('No se pudo guardar: '+msgError(e,'guardar las compras')+' (¿publicaste la regla de iva_compras?)'); }
+  const meses = [...new Set(prod.map(c=>(c.tipo==='07'&&c.periodoFiscal)?c.periodoFiscal:c.fecha.slice(0,7)))].sort();
+  ivaImportMsg = `✔ ${r.nuevos} nuevo(s), ${r.actualizados} actualizado(s)${r.omitidos?', '+r.omitidos+' ya tenían XML':''}${pruebas?', '+pruebas+' de pruebas ignorado(s)':''}${meses.length?' · meses: '+meses.join(', '):''}${errores.length?' · ✘ '+errores.join(' · '):''}`;
+  ivaImportando = false;
+  const m = ivaMes || ivaMesActual(); delete ivaCache[m]; ivaCalcular(m);
+}
+async function ivaManual(){
+  const tipo = prompt('Tipo: escribe F (factura de compra), NC (nota de crédito recibida) o R (retención de IVA que te hicieron):','F');
+  if(!tipo) return;
+  const T = {F:'01', NC:'04', R:'07'}[tipo.trim().toUpperCase()]; if(!T){ alert('Tipo no válido.'); return; }
+  const fecha = prompt('Fecha de emisión (AAAA-MM-DD):', localISO(new Date()).slice(0,10)); if(!/^\d{4}-\d{2}-\d{2}$/.test(fecha||'')){ alert('Fecha no válida.'); return; }
+  const ruc = (prompt('RUC del emisor (13 dígitos):','')||'').trim(); if(!/^\d{13}$/.test(ruc)){ alert('RUC no válido.'); return; }
+  const razon = (prompt('Razón social del emisor:','')||'').trim();
+  const numero = (prompt('Número del comprobante (001-001-000000123):','')||'').trim(); if(!/^\d{3}-\d{3}-\d{9}$/.test(numero)){ alert('Número no válido.'); return; }
+  const val = (prompt(T==='07'?'Valor de IVA retenido:':'Valor del IVA (no la base):','0.00')||'').replace(',','.');
+  const v = Number(val); if(!(v>=0)){ alert('Valor no válido.'); return; }
+  const c = { clave:'M'+T+'_'+ruc+'_'+numero.replace(/-/g,''), tipo:T, ruc, razon, numero, fecha, ambiente:'2', fuente:'manual', ivaConocido:true };
+  if(T==='07'){ c.retIva=v.toFixed(2); c.total=c.retIva; } else { c.iva=v.toFixed(2); c.base15=(Math.round(v/0.15*100)/100).toFixed(2); c.total=(v+Number(c.base15)).toFixed(2); }
+  try{ await ivaGuardarCompras([c]); try{ bitacora('iva_compras_manual',{accion:'Registro manual '+numero, ruc, valor:v}); }catch(e){} }
+  catch(e){ alert('No se pudo guardar: '+msgError(e,'guardar')); return; }
+  const m = ivaMes || ivaMesActual(); delete ivaCache[m]; ivaCalcular(m);
+}
+
+function ivaComprasHTML(r, rc){
+  const compras = (r.compras||[]).slice().sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||''));
+  const regs = compras.filter(c=>c.tipo!=='07'), rets = compras.filter(c=>c.tipo==='07');
+  const fila = c => {
+    const signo = c.tipo==='04' ? -1 : 1;
+    const iva = c.ivaConocido===false ? null : signo*ivaC(c.iva);
+    const cred = iva==null ? null : c.clasificacion==='gravada' ? iva : c.clasificacion==='no_deducible' ? 0 : Math.round(iva*rc.factor);
+    return `<tr style="border-bottom:.5px solid #eee"><td style="padding:4px">${esc(c.fecha)}</td>
+      <td style="padding:4px;min-width:150px">${esc(c.razon||c.ruc)}<div style="font-size:10px;color:var(--text3)">${esc(c.ruc)} · ${c.tipo==='04'?'NC ':''}${esc(c.numero)}${c.modifica?' (modifica '+esc(c.modifica)+')':''} · ${esc(c.fuente)}</div></td>
+      <td style="text-align:right;padding:4px">${ivaD(signo*ivaC(c.total))}</td>
+      <td style="text-align:right;padding:4px">${iva==null?'<span style="color:#a86b00">falta XML</span>':ivaD(iva)}</td>
+      <td style="padding:4px"><select data-iva-clasif="${esc(c.clave)}" style="font-size:11px;padding:3px;border:1px solid var(--b2);border-radius:6px">${Object.entries(IVA_CLASIF).map(([k,v])=>`<option value="${k}" ${(c.clasificacion||'mixto')===k?'selected':''}>${esc(v)}</option>`).join('')}</select></td>
+      <td style="text-align:right;padding:4px;font-weight:700">${cred==null?'—':ivaD(cred)}</td>
+      <td style="padding:4px"><button class="btn btn-g btn-sm" data-iva-borrar="${esc(c.clave)}" title="Quitar de este control">✕</button></td></tr>`;
+  };
+  return `<div style="margin-top:14px;border-top:1px solid var(--b2);padding-top:10px">
+    <div class="rb" style="gap:6px;flex-wrap:wrap;margin-bottom:6px">
+      <span style="font-size:12px;font-weight:700">IVA en compras y retenciones recibidas</span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap">
+        <label class="btn btn-b btn-sm" style="cursor:pointer">⬆ Importar del SRI (.xml / .txt)<input type="file" id="iva-import" accept=".xml,.txt,text/xml,text/plain" multiple style="display:none"></label>
+        <button class="btn btn-g btn-sm" id="iva-manual">＋ Manual</button>
+      </span>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:6px;line-height:1.45">SRI en línea → Facturación electrónica → <b>Comprobantes electrónicos recibidos</b> → elige el mes y descarga el listado (.txt) o los <b>XML</b> (traen el IVA exacto). Puedes seleccionar varios archivos a la vez. Factor de proporcionalidad del mes: <b>${(rc.factor*100).toFixed(1)}%</b> (ventas con IVA ÷ ventas totales facturadas).</div>
+    ${ivaImportando||ivaImportMsg?`<div style="font-size:12px;margin-bottom:6px;color:${/✘/.test(ivaImportMsg)?'#8b1a1a':'#1f6b45'}">${esc(ivaImportMsg)}</div>`:''}
+    ${rc.sinIva?`<div style="font-size:12px;padding:6px 9px;border-radius:8px;background:#fff4dc;color:#7a5200;margin-bottom:6px">⚠ ${rc.sinIva} comprobante(s) vinieron del .txt sin el valor del IVA: carga su XML para incluirlos en el crédito.</div>`:''}
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:var(--bg3)"><th style="text-align:left;padding:4px">Fecha</th><th style="text-align:left;padding:4px">Proveedor / comprobante</th><th style="text-align:right;padding:4px">Total</th><th style="text-align:right;padding:4px">IVA</th><th style="text-align:left;padding:4px">Uso</th><th style="text-align:right;padding:4px">Crédito</th><th></th></tr></thead>
+      <tbody>${regs.map(fila).join('') || '<tr><td colspan="7" style="padding:6px;color:var(--text3)">Aún no hay compras cargadas para este mes.</td></tr>'}</tbody>
+      ${regs.length?`<tfoot><tr><td colspan="3" style="padding:4px;font-weight:700">Total del mes</td><td style="text-align:right;padding:4px">${ivaD(rc.ivaBruto)}</td><td></td><td style="text-align:right;padding:4px;font-weight:700">${ivaD(rc.credito)}</td><td></td></tr></tfoot>`:''}
+    </table></div>
+    ${rets.length?`<div style="font-size:12px;font-weight:700;margin:10px 0 4px">Retenciones de IVA que te hicieron</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>${rets.map(c=>`<tr style="border-bottom:.5px solid #eee"><td style="padding:4px">${esc(c.fecha)}</td><td style="padding:4px">${esc(c.razon||c.ruc)} · ${esc(c.numero)}</td><td style="text-align:right;padding:4px;font-weight:700">${c.ivaConocido===false?'<span style="color:#a86b00">falta XML</span>':ivaD(ivaC(c.retIva))}</td><td style="padding:4px"><button class="btn btn-g btn-sm" data-iva-borrar="${esc(c.clave)}">✕</button></td></tr>`).join('')}</tbody></table>`:''}
+  </div>`;
+}
+function ivaEnlazarCompras(mc){
+  mc.querySelector('#iva-import')?.addEventListener('change',e=>ivaImportarArchivos([...e.target.files]));
+  mc.querySelector('#iva-manual')?.addEventListener('click',()=>ivaManual());
+  mc.querySelectorAll('[data-iva-clasif]').forEach(s=>s.addEventListener('change',async()=>{
+    const clave = s.dataset.ivaClasif, val = s.value;
+    try{ await updateDoc(doc(db,'iva_compras',clave), {clasificacion:val, clasificadoPor:authUser(), clasificadoEn:new Date().toISOString()}); }
+    catch(e){ alert('No se pudo guardar: '+msgError(e,'guardar')); return; }
+    const r = ivaCache[ivaMes||ivaMesActual()]; const c = r && r.compras.find(x=>x.clave===clave); if(c) c.clasificacion = val;
+    render();
+  }));
+  mc.querySelectorAll('[data-iva-borrar]').forEach(b=>b.addEventListener('click',async()=>{
+    const clave = b.dataset.ivaBorrar;
+    if(!confirm('¿Quitar este comprobante del control de IVA?\n(Solo se quita de esta lista; el comprobante sigue existiendo en el SRI.)')) return;
+    try{ await deleteDoc(doc(db,'iva_compras',clave)); try{ bitacora('iva_compras_quitar',{accion:'Quito del control de IVA '+clave}); }catch(e){} }
+    catch(e){ alert('No se pudo quitar: '+msgError(e,'quitar')); return; }
+    const r = ivaCache[ivaMes||ivaMesActual()]; if(r) r.compras = r.compras.filter(x=>x.clave!==clave);
+    render();
+  }));
+}
+
+function ivaExportarComprasCSV(r){
+  const rc = ivaResumenCompras(r);
+  const T = {'01':'FACTURA','04':'NOTA DE CREDITO','07':'RETENCION','03':'LIQUIDACION DE COMPRA'};
+  const head = ['tipo','fecha_emision','ruc_emisor','razon_social','numero','modifica','clave_acceso','total','base_iva','base_0','iva','uso','credito_tributario','iva_retenido','fuente'];
+  const filas = (r.compras||[]).slice().sort((a,b)=>(a.fecha||'').localeCompare(b.fecha||'')).map(c=>{
+    const s = c.tipo==='04'?-1:1, iva = c.ivaConocido===false?null:s*ivaC(c.iva);
+    const cred = c.tipo==='07'||iva==null ? '' : ((c.clasificacion==='gravada'?iva:c.clasificacion==='no_deducible'?0:Math.round(iva*rc.factor))/100).toFixed(2);
+    return [T[c.tipo]||c.tipo, c.fecha, c.ruc, c.razon, c.numero, c.modifica||'', c.clave.startsWith('M')?'':c.clave, c.total, c.base15||'', c.base0||'', iva==null?'':(iva/100).toFixed(2),
+            c.tipo==='07'?'':(IVA_CLASIF[c.clasificacion||'mixto']||''), cred, c.tipo==='07'?(c.retIva||''):'', c.fuente];
+  });
+  filas.push([]); filas.push(['RESUMEN '+r.mes,'factor_proporcionalidad',(rc.factor*100).toFixed(2)+'%','iva_compras',(rc.ivaBruto/100).toFixed(2),'credito',(rc.credito/100).toFixed(2),'retenciones',(rc.retIva/100).toFixed(2),'iva_cobrado',(r.ivaCobrado/100).toFixed(2),'estimado_a_pagar',(rc.aPagar/100).toFixed(2)]);
+  const csv = [head].concat(filas).map(f=>f.map(v=>{ v=String(v??''); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }).join(',')).join('\n');
+  const url = URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'}));
+  const a = document.createElement('a'); a.href=url; a.download='compras_'+r.mes+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
 }
 
 // ── Barcode Scanner ──────────────────────────────────────────
