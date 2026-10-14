@@ -639,12 +639,15 @@ const PLAZO_DIAS=120;
 let selT=null,selPay='Efectivo',cobConf=false,pagosParciales=[],modoParcial=false,itemSel=null,splitMode=false,splitItems={},cobrando=false,personaMode=false,personaActual=1,numPersonas=2,cancelModal=null;
 let editP=null,cajaConf=false,editStk=null,stkV='',prodSearch='';
 let view='pos',online=false;
-let descuento=0,descuentoTipo='monto',descuentoMotivo='',descuentoAutor='',descuentoAutorAuth='';
+let descuento=0,descuentoTipo='monto',descuentoMotivo='',descuentoAutor='',descuentoAutorAuth='',descuentoAutId='';
 // CONTROL INTERNO: todo descuento exige motivo y PIN de autorizacion
 async function autorizarDescuento(){
   const motivo=prompt('Motivo del descuento (obligatorio):');
   if(!motivo||!motivo.trim()){alert('Debes indicar el motivo del descuento.');return null;}
-  if(!await pedirAutorizacionAdmin('Autorizar descuento'))return null;
+  const r=await pedirAutorizacionAdmin('Autorizar descuento',{motivo:motivo.trim()});
+  if(!r)return null;
+  r.cerrar();   // el descuento no escribe nada ahora: la venta lleva el id de la autorizacion
+  descuentoAutId=r.autId||''; descuentoAutorAuth=r.email||'';
   return motivo.trim();
 }
 
@@ -703,26 +706,47 @@ function _admPedirDatos(accion){
   });
 }
 
+// DEVUELVE r = {uid, email, exp, autId, db, cerrar}
+//   r.db     -> instancia de Firestore con la que se debe ESCRIBIR la accion.
+//               Si la caja esta abierta con una cuenta 'pos', es la sesion
+//               temporal del administrador: asi las reglas del servidor ven
+//               una cuenta admin y no solo la pantalla.
+//   r.autId  -> id del registro de bitacora que firmo el administrador
+//               (las ventas con descuento lo llevan; las reglas lo verifican).
+//   r.cerrar -> cierra la sesion temporal. Si no se llama, se cierra sola a
+//               los 2 minutos.
+// Con cuenta 'pos' NO se reutiliza la autorizacion: cada accion pide la clave.
+const _sinCerrar=async()=>{};
+// Si la caja ya esta abierta con una cuenta admin, no se vuelve a pedir la
+// clave: la propia sesion escribe y la accion queda en la bitacora.
+async function autPropiaOAdmin(accion, extra){
+  if(MI_ROL==='admin'){
+    const autId=await bitacora('accion_admin',Object.assign({accion:accion||'', autorizadoPor:authUser()},extra||{}));
+    return {uid:(auth.currentUser&&auth.currentUser.uid)||'', email:authUser(), autId, db, cerrar:_sinCerrar};
+  }
+  return pedirAutorizacionAdmin(accion, extra);
+}
 async function pedirAutorizacionAdmin(accion, extra){
   // "extra" viaja tal cual a la bitacora: sirve para dejar el rastro concreto
   // (que venta, que mesa, que productos) y no solo el monto.
   const _ex = extra || {};
-  if(_admOK && Date.now()<_admOK.exp){
-    bitacora('autorizacion_reutilizada',Object.assign({accion:accion||'', autorizadoPor:_admOK.email, autorizadoUid:_admOK.uid},_ex));
-    return _admOK;
+  if(MI_ROL==='admin' && _admOK && Date.now()<_admOK.exp){
+    const autId=await bitacora('autorizacion_reutilizada',Object.assign({accion:accion||'', autorizadoPor:_admOK.email, autorizadoUid:_admOK.uid},_ex));
+    return Object.assign({},_admOK,{autId, db, cerrar:_sinCerrar});
   }
   const cred=await _admPedirDatos(accion);
   if(!cred) return null;
-  let app2=null, r=null;
+  let app2=null, r=null, mantener=false;
+  const cerrarApp=async()=>{ if(!app2) return; const a=app2; app2=null;
+    try{ await signOut(getAuth(a)); }catch(e){} try{ await deleteApp(a); }catch(e){} };
   try{
     app2=initializeApp(firebaseConfig,'adm_'+Date.now());
     const auth2=getAuth(app2);
     await setPersistence(auth2,inMemoryPersistence);   // no toca la sesion abierta
     const u=(await signInWithEmailAndPassword(auth2,cred.email,cred.pass)).user;
+    const db2=getFirestore(app2);
     // Usa el sistema de roles que YA existe en Firestore: roles/{uid}.rol
-    // Las reglas permiten a cada cuenta leer su propio documento de rol, y
-    // aqui se lee con la sesion temporal de quien esta autorizando.
-    const snap=await getDoc(doc(getFirestore(app2),'roles',u.uid));
+    const snap=await getDoc(doc(db2,'roles',u.uid));
     const rol=snap.exists()?(snap.data().rol||''):'';
     if(!snap.exists()){
       alert('Esa cuenta no tiene rol asignado en Firebase.\nAccion NO autorizada.');
@@ -731,11 +755,21 @@ async function pedirAutorizacionAdmin(accion, extra){
       alert('Esa cuenta tiene rol "'+rol+'", no de administracion.\nAccion NO autorizada.');
       bitacora('autorizacion_rechazada',Object.assign({accion:accion||'', motivo:'rol insuficiente: '+rol, correoIntento:cred.email},_ex));
     } else {
-      r={uid:u.uid, email:u.email, exp:Date.now()+ADM_MINUTOS*60000};
-      _admOK=r;
-      bitacora('autorizacion_concedida',Object.assign({accion:accion||'', autorizadoPor:u.email, autorizadoUid:u.uid},_ex));
+      // El registro de la autorizacion lo firma la cuenta del ADMINISTRADOR
+      const ses={db:db2, uid:u.uid, email:u.email};
+      const autId=await bitacora('autorizacion_concedida',Object.assign({accion:accion||'', autorizadoPor:u.email, autorizadoUid:u.uid},_ex),ses);
+      if(!autId){ alert('No se pudo registrar la autorizacion en la bitacora.\nAccion NO autorizada.'); return null; }
+      const base={uid:u.uid, email:u.email, exp:Date.now()+ADM_MINUTOS*60000, autId};
+      if(MI_ROL==='admin'){
+        // La caja ya esta abierta con una cuenta admin: escribe la propia sesion
+        _admOK=base;
+        r=Object.assign({},base,{db, cerrar:_sinCerrar});
+      } else {
+        mantener=true;
+        const t=setTimeout(cerrarApp,120000);
+        r=Object.assign({},base,{db:db2, cerrar:async()=>{ clearTimeout(t); await cerrarApp(); }});
+      }
     }
-    try{ await signOut(auth2); }catch(e){}
   }catch(e){
     const c=(e&&e.code)||'';
     if(c==='auth/invalid-credential'||c==='auth/wrong-password'||c==='auth/user-not-found'||c==='auth/invalid-email')
@@ -748,7 +782,7 @@ async function pedirAutorizacionAdmin(accion, extra){
     else
       alert('No se pudo verificar la autorizacion: '+(c||e.message));
   }finally{
-    if(app2){ try{ await deleteApp(app2); }catch(e){} }
+    if(!mantener) await cerrarApp();
   }
   return r;
 }
@@ -780,24 +814,34 @@ const BIT_ETIQUETAS={
   autorizacion_rechazada:'INTENTO RECHAZADO',
   apertura_caja:'Apertura de caja',
   cierre_caja:'Cierre de caja',
-  cierre_caja_sin_conteo:'CIERRE DE CAJA SIN CONTEO'
+  cierre_caja_sin_conteo:'CIERRE DE CAJA SIN CONTEO',
+  accion_admin:'Accion de administracion'
 };
 
-async function bitacora(evento, datos){
+// ses (opcional) = {db, uid, email} de la sesion temporal del administrador.
+// Con ella el registro queda firmado por la cuenta que AUTORIZO, y las reglas
+// exigen que uid/usuario coincidan con la sesion que escribe: no se puede
+// crear un registro a nombre de otra cuenta. "ts" es la hora del SERVIDOR.
+// Devuelve el id del registro (o '' si no se pudo guardar).
+async function bitacora(evento, datos, ses){
+  const id='b'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
   try{
-    const id='b'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-    const reg={ id, fecha:localISO(), evento,
-      usuario:authUser(),
-      uid:(auth.currentUser&&auth.currentUser.uid)||'',
-      turno:(typeof turnoUser!=='undefined'&&turnoUser)||'' };
+    const reg={ id, fecha:localISO(), evento };
     for(const k in (datos||{})) reg[k]=datos[k];
-    await conLimite(setDoc(doc(db,'bitacora',id),reg));
+    // La identidad se fija DESPUES de copiar "datos": ningun dato puede pisarla
+    reg.usuario = ses ? (ses.email||'') : authUser();
+    reg.uid     = ses ? (ses.uid||'')   : ((auth.currentUser&&auth.currentUser.uid)||'');
+    reg.cajero  = authUser();
+    reg.turno   = (typeof turnoUser!=='undefined'&&turnoUser)||'';
+    await conLimite(setDoc(doc(ses?ses.db:db,'bitacora',id),Object.assign({},reg,{ts:serverTimestamp()})));
     if(bitCargado) BIT.unshift(reg);
+    return id;
   }catch(e){
     // Una accion sensible que ocurre y NO queda registrada es justo lo que la
     // bitacora existe para impedir. Tiene que verse en el momento.
     console.error('bitacora:',e);
     avisoError(msgError(e,'registrar la accion en la bitacora'));
+    return '';
   }
 }
 
@@ -894,6 +938,11 @@ function rBitacora(){
         <div style="font-size:11px;color:var(--text2);margin-top:2px;line-height:1.5">
           ${esc(f)} \u00b7 oper\u00f3 <b>${esc(b.usuario||'?')}</b>${b.turno?' (turno: '+esc(b.turno)+')':''}
           ${b.autorizadoPor?` \u00b7 autoriz\u00f3 <b>${esc(b.autorizadoPor)}</b>`:''}
+          ${b.cajero&&b.cajero!==b.usuario?` \u00b7 en la sesi\u00f3n de caja de <b>${esc(b.cajero)}</b>`:''}
+          ${(()=>{ try{ if(!b.ts||typeof b.ts.toMillis!=='function'||!b.fecha) return '';
+              const dif=Math.abs(b.ts.toMillis()-Date.parse(b.fecha));
+              return dif>15*60000?` \u00b7 <span style="color:var(--red)">hora del equipo distinta a la del servidor (${esc(new Date(b.ts.toMillis()).toLocaleString('es-EC'))})</span>`:'';
+            }catch(e){ return ''; } })()}
           ${b.motivo?` \u00b7 ${esc(b.motivo)}`:''}
           ${b.correoIntento?` \u00b7 intent\u00f3 con ${esc(b.correoIntento)}`:''}
         </div>
@@ -1076,25 +1125,28 @@ function _backupStockOp(op){
 }
 
 // Escribe SOLO los productos indicados (batches de 400 por limite de Firestore)
-async function saveProductos(list){
+async function saveProductos(list,dbX){
   const reales=list.filter(p=>p&&p.id&&!p.esConsignado);
-  if(reales.length===0)return;
+  if(reales.length===0)return true;
+  const dbW=dbX||db;
   _writing=true;
   if(_writeTimer)clearTimeout(_writeTimer);
   _writeTimer=setTimeout(()=>{_writing=false;},2000);
   try{
     for(let i=0;i<reales.length;i+=400){
-      const batch=writeBatch(db);
-      reales.slice(i,i+400).forEach(p=>batch.set(doc(db,PRODUCTOS_COL,String(p.id)),_marca(p)));
+      const batch=writeBatch(dbW);
+      reales.slice(i,i+400).forEach(p=>batch.set(doc(dbW,PRODUCTOS_COL,String(p.id)),_marca(p)));
       await conLimite(batch.commit());
     }
     reales.forEach(p=>_lastPSync.set(String(p.id),JSON.stringify(p)));
+    return true;
   }catch(e){
     console.error('saveProductos:',e);
     avisoError(msgError(e,'guardar '+reales.length+' producto(s)'));
     registrarFallo('guardar productos',e);
-    reales.forEach(_backupProd);
-    avisoPendientes();
+    // Lo escrito con la sesion del administrador no se reintenta con la de caja
+    if(!dbX || dbX===db){ reales.forEach(_backupProd); avisoPendientes(); }
+    return false;
   }finally{ _writing=false; }
 }
 
@@ -1102,7 +1154,7 @@ async function saveProductos(list){
 // active, variantes, etc.). El stock NO viaja por aqui: al escribir un producto
 // existente se conserva el stock del servidor para no pisar ventas simultaneas
 // de otra caja. El stock se mueve unicamente con ajustarStock()/fijarStock().
-async function sP(){
+async function sP(dbX){
   const dirty=[];
   P.forEach(p=>{
     if(!p||!p.id||p.esConsignado)return;
@@ -1113,7 +1165,8 @@ async function sP(){
     const a=JSON.stringify({...p,stock:0,updatedAt:0}), b=JSON.stringify({...prevObj,stock:0,updatedAt:0});
     if(a!==b) dirty.push({...p,stock:prevObj.stock}); // conserva stock del servidor
   });
-  if(dirty.length>0)await saveProductos(dirty);
+  if(dirty.length>0)return await saveProductos(dirty,dbX);
+  return true;
 }
 
 // Ajuste RELATIVO de stock (venta, anulacion, devolucion, acta).
@@ -1197,7 +1250,22 @@ async function migrarProductos(){
 const sT=()=>_write('tables',T);
 const sCL=()=>_write('clientes',CL);
 const sCG=()=>_write('consigna',CG);
-const sNOM=()=>_write('nomina',NOM);
+// Al guardar la nomina, la administracion publica tambien la lista de personal
+// (solo id, nombre y si esta activo) que usa la caja para registrar anticipos.
+let _personalPublicado=null;
+async function _publicarPersonal(){
+  if(MI_ROL!=='admin') return;
+  const personal=(NOM.empleados||[]).map(e=>({id:e.id,nombre:e.nombre||'',activo:e.activo!==false}));
+  const j=JSON.stringify(personal);
+  if(j===_personalPublicado) return;
+  try{ await conLimite(setDoc(doc(db,'madu','personal'),{v:personal})); _personalPublicado=j; }
+  catch(e){ console.error('personal',e); }
+}
+const sNOM=async()=>{ await _write('nomina',NOM); await _publicarPersonal(); };
+// Gastos que la cuenta de caja puede corregir sin autorizacion: los de hoy,
+// sin cierre, y que no sean anticipos de nomina ni gastos fijos.
+const gastoEditableCaja=g=>MI_ROL==='admin' ||
+  ((g.date||'').slice(0,10)===today() && !g.closed && !g.esAnticipoNomina && !g.recurrenteId);
 const sGF=()=>_write('gastos_fijos',GF);
 const fmt=n=>'$'+parseFloat(n).toFixed(2);
 // Fecha/hora LOCAL (Ecuador UTC-5). Se guarda sin "Z" para que el dia del POS
@@ -1286,19 +1354,29 @@ function _backupVenta(r){
   }catch(e){}
 }
 
-async function saveVenta(r){
-  if(!r||!r.id)return;
+// dbX (opcional): Firestore de la sesion temporal del administrador.
+// Esas escrituras NO van al respaldo local: reintentarlas despues con la
+// sesion de caja las rechazaria el servidor. Si fallan, se avisa y listo.
+// Devuelve true si el servidor (o la cola local, en el caso normal) la acepto.
+async function saveVenta(r,dbX){
+  if(!r||!r.id)return false;
+  if(dbX && dbX!==db){
+    try{ await conLimite(setDoc(doc(dbX,VENTAS_COL,String(r.id)),r)); return true; }
+    catch(e){ console.error('saveVenta (admin):',e); avisoError(msgError(e,'guardar el registro autorizado')); registrarFallo('guardar el registro autorizado',e); return false; }
+  }
   S_pending.set(String(r.id),r);
   rebuildS();
   try{
     await conLimite(setDoc(doc(db,VENTAS_COL,String(r.id)),r));
     S_pending.delete(String(r.id));
+    return true;
   }catch(e){
     console.error('saveVenta error:',e);
     avisoError(msgError(e,'guardar el registro'));
     registrarFallo('guardar el registro',e);
     _backupVenta(r);
     avisoPendientes();
+    return false;
   }
 }
 
@@ -1608,13 +1686,22 @@ function subRT(){
     },()=>{online=false;showErr();});
   });
 
-  ['tables','clientes','consigna','nomina','gastos_fijos'].forEach(k=>{
+  // Nomina y gastos fijos: solo administracion (las reglas lo exigen). La
+  // cuenta de caja recibe solo la lista de personal (id y nombre, sin sueldos)
+  // para registrar anticipos.
+  const _maduDocs=MI_ROL==='admin'?['tables','clientes','consigna','nomina','gastos_fijos']:['tables','clientes','consigna','personal'];
+  _maduDocs.forEach(k=>{
     onSnapshot(doc(db,'madu',k),snap=>{
+      if(k==='personal'){
+        const lista=snap.exists()?(snap.data().v||[]):[];
+        NOM={empleados:lista,anticipos:[],pagos:[]};
+        _loaded[k]=true; if(_appShown&&!_writing) debouncedRender(); return;
+      }
       if(snap.exists()){
         if(k==='tables')T=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
         if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
-        if(k==='nomina'){const d=snap.data().v||{};NOM={empleados:d.empleados||[],anticipos:d.anticipos||[],pagos:d.pagos||[]};}
+        if(k==='nomina'){const d=snap.data().v||{};NOM={empleados:d.empleados||[],anticipos:d.anticipos||[],pagos:d.pagos||[]};_publicarPersonal();}
         if(k==='gastos_fijos'){GF=snap.data().v||[];}
       }
       _loaded[k]=true;
@@ -1818,7 +1905,7 @@ function rPOS(){
       const selQty=splitMode?(splitItems[i.lid]||0):0;
       const hasAny=splitMode&&selQty>0;
       const pTag=i.persona
-        ?`<span style="font-size:10px;background:var(--acc);color:#fff;border-radius:8px;padding:2px 7px;margin-left:5px;font-weight:700">P${i.persona}</span>`
+        ?`<span style="font-size:10px;background:var(--acc);color:#fff;border-radius:8px;padding:2px 7px;margin-left:5px;font-weight:700">P${esc(i.persona)}</span>`
         :(personaMode?`<span style="font-size:9px;background:#fef3c7;color:#92400e;border-radius:8px;padding:2px 6px;margin-left:4px;border:1px solid #fcd34d;font-weight:600">Sin asignar</span>`:'');
       const itemTapStyle=personaMode&&!splitMode?'cursor:pointer;':'';
       const itemTapHint=personaMode&&!splitMode&&!i.persona?'border-left:3px solid #fcd34d;padding-left:8px;':'';
@@ -1874,7 +1961,7 @@ function rPOS(){
           </div>`).join('')}
           ${sinAsignar.length>0?`<div style="padding:10px 12px;margin-bottom:8px;border-radius:10px;background:var(--abg);border:1.5px solid var(--abrd)">
             <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:4px">⚠ Sin asignar · ${fmt(totSinAsignar)}</div>
-            <div style="font-size:11px;color:var(--amber);line-height:1.5">${sinAsignar.map(i=>i.qty+'× '+i.name).join(', ')}</div>
+            <div style="font-size:11px;color:var(--amber);line-height:1.5">${esc(sinAsignar.map(i=>i.qty+'× '+i.name).join(', '))}</div>
             <div style="font-size:10px;color:var(--text3);margin-top:5px">Toca cada ítem arriba para asignarlo a una persona</div>
           </div>`:''}
           <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;display:flex;gap:6px">
@@ -1946,7 +2033,7 @@ function rPOS(){
       </div>
       <div id="opanel">
         <div id="ohdr">
-          <span id="omesa">${t?t.name:'Sin mesa'}</span>
+          <span id="omesa">${t?esc(t.name):'Sin mesa'}</span>
           <div style="display:flex;gap:5px;align-items:center">
             ${t&&t.order.length>0?`<button class="btn btn-sm" id="breimprimir" title="Reimprimir comanda" style="background:var(--bg3);border:1px solid var(--border);color:var(--text2);font-size:13px;padding:4px 8px">🖨</button>`:''}
             
@@ -2373,30 +2460,32 @@ async function anularVenta(ventaId){
   const _ctlFac=await sriControlAnulacion(venta);
   if(!_ctlFac.ok){alert('Anulación cancelada: la venta tiene factura electrónica.');return;}
   const _resumen=(venta.items||[]).map(i=>(i.qty||1)+'x '+(i.name||'?')+(i.variant?' ('+i.variant+')':'')).join(', ');
-  if(!await pedirAutorizacionAdmin('Anular venta de '+fmt(venta.total),
-      {ventaId:String(venta.id), mesa:venta.tableName||'', detalle:_resumen, monto:+venta.total||0,
-       fechaVenta:venta.date||'', cobradaPor:venta.userAuth||venta.user||''}))return;
   const motivo=prompt('Motivo de la anulación (obligatorio):');
   if(!motivo||!motivo.trim()){alert('Debes indicar un motivo');return;}
-  // Mark sale as annulled instead of deleting (keeps audit trail)
-  venta.anulada=true;
-  venta.motivoAnulacion=motivo.trim();
-  venta.fechaAnulacion=localISO();
-  venta.anuladaPor=turnoUser;
-  venta.anuladaPorAuth=authUser(); // identidad real, no falsificable
-  if(_ctlFac.referencia){ venta.anulacionFacturaRef=_ctlFac.referencia; venta.anulacionFacturaNumero=_ctlFac.factura; }
+  const aut=await pedirAutorizacionAdmin('Anular venta de '+fmt(venta.total),
+      {ventaId:String(venta.id), mesa:venta.tableName||'', detalle:_resumen, monto:+venta.total||0,
+       fechaVenta:venta.date||'', cobradaPor:venta.userAuth||venta.user||'', motivo:motivo.trim()});
+  if(!aut)return;
+  // Se marca anulada (no se borra). Se escribe con la sesion del ADMINISTRADOR:
+  // las reglas solo permiten "anulada" a una cuenta admin. Si esta escritura
+  // falla, NO se repone stock ni se libera la consignacion (antes se hacia
+  // igual y el inventario quedaba inflado con la venta sin anular).
+  const anulada=Object.assign({},venta,{anulada:true, motivoAnulacion:motivo.trim(), fechaAnulacion:localISO(),
+    anuladaPor:turnoUser, anuladaPorAuth:aut.email, anuladaEnCajaDe:authUser(), anulacionAutId:aut.autId||''});
+  if(_ctlFac.referencia){ anulada.anulacionFacturaRef=_ctlFac.referencia; anulada.anulacionFacturaNumero=_ctlFac.factura; }
+  const anulRec={id:'anul'+Date.now(),esAnulacion:true,ventaOriginalId:String(venta.id),tableName:venta.tableName,total:venta.total,motivo:motivo.trim(),date:localISO(),user:turnoUser,userAuth:aut.email,cajaDe:authUser(),autId:aut.autId||''};
+  const ok=await saveVenta(anulada,aut.db) && await saveVenta(anulRec,aut.db);
+  await aut.cerrar();
+  if(!ok){ alert('La venta NO se anuló: no se pudo guardar en el servidor. Revisa la conexión e inténtalo de nuevo.'); return; }
+  Object.assign(venta,anulada);
+  if(!S.some(x=>x.id===anulRec.id)) S.push(anulRec);
   // Revertir libros consignados a "disponible" si la venta los incluia
   revertirConsignaVenta(venta);
   // Restore stock for unidad products (transaccion atomica por producto)
   venta.items?.forEach(i=>{
     if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,i.qty); }
   });
-  // Acta de anulacion: quien, cuando y por que (pista de auditoria)
-  const anulRec={id:'anul'+Date.now(),esAnulacion:true,ventaOriginalId:String(venta.id),tableName:venta.tableName,total:venta.total,motivo:motivo.trim(),date:localISO(),user:turnoUser,userAuth:authUser()};
-  S.push(anulRec);
-  saveVenta(anulRec);
   render();
-  saveVenta(venta);
   alert('✓ Venta anulada correctamente');
 }
 window.anularVenta=anularVenta;
@@ -2421,6 +2510,9 @@ async function confirmarCobro(){
   try{
     const metodo=modoParcial?pagosParciales.map(p=>p.metodo+' '+fmt(p.monto)).join(' / '):selPay;
     const venta={id:`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),subtotal,descuento:descMonto>0?descMonto:0,descuentoTipo:descMonto>0?descuentoTipo:null,descuentoMotivo:descMonto>0?(descuentoMotivo||null):null,descuentoAutor:descMonto>0?(descuentoAutor||null):null,descuentoAutorAuth:descMonto>0?(descuentoAutorAuth||null):null,total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:localISO(),closed:false,user:turnoUser,userAuth:authUser()};
+    // Id del registro de bitacora firmado por el administrador que autorizo el
+    // descuento: las reglas de Firestore lo verifican al guardar la venta.
+    if(venta.descuento>0) venta.descuentoAutId=descuentoAutId||null;
     // Snapshot before clearing
     const ticketItems=t.order.map(i=>({...i}));
     const ticketTotal=total;
@@ -2432,7 +2524,7 @@ async function confirmarCobro(){
     });
     // Clear table
     t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;
-    cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};descuento=0;descuentoTipo='monto';descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';
+    cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};descuento=0;descuentoTipo='monto';descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';descuentoAutId='';
     selT=null;
     // Marcar ventas de libros consignados y actualizar saldo del consignante
     procesarVentaConsigna(venta);
@@ -2657,7 +2749,7 @@ function rFooter(){
       const n=parseFloat(v);
       if(isNaN(n)||n<0||n>100){alert('Ingresa un porcentaje válido (0-100)');return;}
       const motivoD=await autorizarDescuento();if(!motivoD)return;
-      descuento=n;descuentoTipo='porcentaje';descuentoMotivo=motivoD;descuentoAutor=turnoUser;descuentoAutorAuth=adminAutorizador();rFooter();
+      descuento=n;descuentoTipo='porcentaje';descuentoMotivo=motivoD;descuentoAutor=turnoUser;rFooter();
     });
     ftr.querySelector('#bdesc-monto')?.addEventListener('click',async()=>{
       const v=prompt('Descuento en dólares ($):', descuentoTipo==='monto'?descuento:'1');
@@ -2666,9 +2758,9 @@ function rFooter(){
       if(isNaN(n)||n<0){alert('Ingresa un monto válido');return;}
       if(n>bruto){alert('El descuento no puede ser mayor al subtotal ('+fmt(bruto)+')');return;}
       const motivoD=await autorizarDescuento();if(!motivoD)return;
-      descuento=n;descuentoTipo='monto';descuentoMotivo=motivoD;descuentoAutor=turnoUser;descuentoAutorAuth=adminAutorizador();rFooter();
+      descuento=n;descuentoTipo='monto';descuentoMotivo=motivoD;descuentoAutor=turnoUser;rFooter();
     });
-    ftr.querySelector('#bdesc-clear')?.addEventListener('click',()=>{descuento=0;descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';rFooter();});
+    ftr.querySelector('#bdesc-clear')?.addEventListener('click',()=>{descuento=0;descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';descuentoAutId='';rFooter();});
   }
 }
 
@@ -2680,9 +2772,9 @@ function rProductos(){
     const allCats=['Café','Bebidas','Bubble Tea','Platos fuertes','Postres','Bebidas con alcohol','Taller & Merch','Libros'];
     const p=editP==='new'?{name:'',category:'Café',subcategory:'',price:'',cost:'',stock:'',code:'',author:'',active:true,hasVariants:false,stockControl:'sin_control'}:P.find(x=>x.id===editP);
     form=`<div class="card">
-      <div style="font-size:13px;font-weight:700;margin-bottom:12px">${editP==='new'?'Nuevo producto':'Editar: '+p.name}</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:12px">${editP==='new'?'Nuevo producto':'Editar: '+esc(p.name)}</div>
       <div class="fgrid">
-        <div class="fg"><label>Nombre</label><input id="fn" value="${(p.name||'').replace(/"/g,'&quot;')}"></div>
+        <div class="fg"><label>Nombre</label><input id="fn" value="${esc(p.name||'')}"></div>
         <div class="fg"><label>Categoría</label><select id="fcat">${allCats.map(c=>`<option${c===p.category?' selected':''}>${c}</option>`).join('')}</select></div>
         <div class="fg"><label>Subcategoría</label><input id="fsub" value="${(p.subcategory||'').replace(/"/g,'&quot;')}"></div>
         <div class="fg"><label>Precio ($)</label><input id="fprice" type="number" step="0.01" value="${p.price||''}"></div>
@@ -2763,30 +2855,52 @@ function attachProd(){
     if(!name||isNaN(price))return alert('Nombre y precio son requeridos');
     const obj={name,category,subcategory,price,cost,stock,code,author,active:true,stockControl,hasVariants,claseIVA};
     const _pPrev=editP!=='new'?P.find(x=>x.id===editP):null;
-    if(_pPrev && (_pPrev.claseIVA||'')!==claseIVA && !await pedirAutorizacionAdmin('Cambiar el IVA de "'+_pPrev.name+'" a '+(claseIVA||'según categoría'),{producto:_pPrev.name,ivaAnterior:_pPrev.claseIVA||'',ivaNuevo:claseIVA}))return;
+    // CONTROL INTERNO: crear producto o cambiar precio/IVA exige administracion.
+    // Con cuenta 'pos' TODA edicion de ficha la pide, porque el servidor solo
+    // le permite tocar el stock; se guarda con la sesion del administrador.
+    const cambioIVA=!!_pPrev && (_pPrev.claseIVA||'')!==claseIVA;
+    const precioAnterior=_pPrev?(+_pPrev.price||0):0;
+    const cambioPrecio=!!_pPrev && Math.abs(precioAnterior-price)>0.001;
+    let accionAut='';
+    if(editP==='new') accionAut='Crear el producto "'+name+'" a '+fmt(price);
+    else if(cambioPrecio) accionAut='Cambiar el precio de "'+_pPrev.name+'"\nde '+fmt(precioAnterior)+' a '+fmt(price);
+    else if(cambioIVA) accionAut='Cambiar el IVA de "'+_pPrev.name+'" a '+(claseIVA||'según categoría');
+    else if(MI_ROL!=='admin') accionAut='Editar la ficha de "'+((_pPrev&&_pPrev.name)||name)+'"';
+    let aut=null;
+    if(accionAut){
+      aut=await pedirAutorizacionAdmin(accionAut,{producto:name,
+        precioAnterior:_pPrev?precioAnterior:null, precioNuevo:price,
+        ivaAnterior:_pPrev?(_pPrev.claseIVA||''):null, ivaNuevo:claseIVA});
+      if(!aut)return;
+    }
+    const respaldo=JSON.stringify(P.map(x=>x));
     if(editP==='new'){
-      // Crear producto nuevo: tambien es una decision de precio -> PIN de admin
-      if(!await pedirAutorizacionAdmin('Crear el producto "'+name+'" a '+fmt(price)))return;
       P.push({...obj,id:`p${Date.now()}`});
-      await registrarCambioPrecio(null,{name,price},'alta');
     } else {
       const p=P.find(x=>x.id===editP);
-      if(p){
-        const precioAnterior=+p.price||0;
-        const cambioPrecio=Math.abs(precioAnterior-price)>0.001;
-        // CONTROL INTERNO: bajar el precio, cobrar el real y restaurarlo es el
-        // fraude clasico de POS. Ahora exige PIN de admin y deja registro.
-        if(cambioPrecio && !await pedirAutorizacionAdmin('Cambiar el precio de "'+p.name+'"\nde '+fmt(precioAnterior)+' a '+fmt(price)))return;
-        Object.assign(p,obj);
-        if(cambioPrecio) await registrarCambioPrecio(p,{name,price,precioAnterior},'cambio');
-      }
+      if(p) Object.assign(p,obj);
     }
-    editP=null;render();sP();
+    const ok=await sP(aut?aut.db:undefined);
+    if(aut) await aut.cerrar();
+    if(!ok){
+      // No se guardo en el servidor: se deshace el cambio local para no mostrar un precio que no rige
+      try{ const prev=JSON.parse(respaldo); P.length=0; prev.forEach(x=>P.push(x)); }catch(e){}
+      alert('El producto NO se guardó en el servidor. Revisa la conexión e inténtalo de nuevo.');
+      render(); return;
+    }
+    if(editP==='new') await registrarCambioPrecio(null,{name,price},'alta');
+    else if(cambioPrecio){ const p=P.find(x=>x.id===editP); await registrarCambioPrecio(p,{name,price,precioAnterior},'cambio'); }
+    editP=null;render();
   });
   mc.querySelectorAll('[data-pe]').forEach(el=>el.addEventListener('click',()=>{editP=el.dataset.pe;render();}));
   mc.querySelectorAll('[data-pt]').forEach(el=>el.addEventListener('click',async()=>{
-    if(!await pedirAutorizacionAdmin('Activar / desactivar producto'))return;
-    const p=P.find(x=>x.id===el.dataset.pt);if(p){p.active=!p.active;render();sP();}
+    const p=P.find(x=>x.id===el.dataset.pt);if(!p)return;
+    const aut=await pedirAutorizacionAdmin((p.active?'Desactivar':'Activar')+' el producto "'+p.name+'"',{producto:p.name});
+    if(!aut)return;
+    p.active=!p.active;
+    const ok=await sP(aut.db); await aut.cerrar();
+    if(!ok){ p.active=!p.active; alert('No se guardó en el servidor.'); }
+    render();
   }));
 
   // Exportar catalogo completo (formato identico a la plantilla de importacion:
@@ -2905,7 +3019,7 @@ function attachProd(){
         preview.innerHTML=`<div style="color:var(--grn);font-weight:600">${rows.length} productos encontrados en el CSV</div>
           <div>• <strong>${newOnes.length}</strong> nuevos a agregar</div>
           ${existing.length>0?`<div style="color:var(--amber)">• <strong>${existing.length}</strong> ya existen (se actualizarán precio y stock)</div>`:''}
-          <div style="font-size:11px;color:var(--text3);margin-top:6px">Vista previa: ${rows.slice(0,3).map(r=>r.name).join(', ')}${rows.length>3?'...':''}`;
+          <div style="font-size:11px;color:var(--text3);margin-top:6px">Vista previa: ${esc(rows.slice(0,3).map(r=>r.name).join(', '))}${rows.length>3?'...':''}`;
         
         btn.style.display='block';
         btn.dataset.rows=JSON.stringify(rows);
@@ -3188,11 +3302,11 @@ function rCaja(){
       <div class="rb" style="margin-bottom:12px">
         <span style="font-weight:700;font-size:13px">Gastos ${esHoy?'del día':'del período'} · <span style="color:var(--red)">${fmt(totalFiltrado)}</span> <span style="font-size:11px;color:var(--text3)">(${gastosFiltrados.length})</span></span>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-g btn-sm" id="bgfijos">⚙ Fijos${pendGF.length>0?' ('+pendGF.length+')':''}</button>
+          ${MI_ROL==='admin'?`<button class="btn btn-g btn-sm" id="bgfijos">⚙ Fijos${pendGF.length>0?' ('+pendGF.length+')':''}</button>`:''}
           <button class="btn btn-acc btn-sm" id="bgnew">+ Registrar</button>
         </div>
       </div>
-      ${bannerGF}${gfPanel}${gform}${filtro}
+      ${MI_ROL==='admin'?bannerGF+gfPanel:''}${gform}${filtro}
       ${gastosFiltrados.length===0?`<div style="text-align:center;padding:30px;color:var(--text3)">Sin gastos en este período</div>`:''}
       ${gastosFiltrados.map(g=>`<div class="mrow" style="margin-bottom:5px">
         <div style="min-width:0;flex:1"><div style="font-weight:600;font-size:12px">${esc(g.desc)} ${g.recurrenteId?'<span class="badge" style="background:var(--bg3);color:var(--text3);font-size:9px">fijo</span>':''}</div>
@@ -3844,6 +3958,7 @@ async function cjCerrar(sinConteo){
   if(sinConteo){
     autor=await pedirAutorizacionAdmin('Cerrar la caja del '+est.dia+' sin conteo');
     if(!autor) return;
+    autor.cerrar();
     motivo=(prompt('Motivo para cerrar sin contar el efectivo (obligatorio):')||'').trim();
     if(motivo.length<4){ alert('Debes indicar el motivo.'); return; }
   } else {
@@ -3914,8 +4029,22 @@ function attachCaja(){
     if(!desc||isNaN(monto)||monto<=0)return alert('Descripción y monto son requeridos');
     let gRec=null;
     if(editGasto){
-      gRec=S.find(s=>s.id===editGasto.id);
-      if(gRec)Object.assign(gRec,{desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs,proveedor,factura});
+      const orig=S.find(s=>s.id===editGasto.id);
+      if(!orig){ gastoForm=false;editGasto=null;render();return; }
+      const cambios={desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs,proveedor,factura};
+      // La caja corrige sola los gastos de HOY (no cerrados, no anticipos ni fijos).
+      // Lo demas lo autoriza y lo guarda la administracion.
+      if(!gastoEditableCaja(orig)){
+        const aut=await pedirAutorizacionAdmin('Modificar el gasto "'+orig.desc+'" del '+(orig.date||'').slice(0,10)+' ('+fmt(orig.total)+' → '+fmt(monto)+')',
+          {gastoId:String(orig.id), montoAnterior:+orig.total||0, montoNuevo:monto});
+        if(!aut)return;
+        const nuevo=Object.assign({},orig,cambios);
+        const ok=await saveVenta(nuevo,aut.db); await aut.cerrar();
+        if(!ok){ alert('El gasto NO se modificó en el servidor.'); return; }
+        Object.assign(orig,cambios);
+        gastoForm=false;editGasto=null;render();return;
+      }
+      gRec=orig; Object.assign(gRec,cambios);
     } else {
       gRec={id:`g${Date.now()}`,esGasto:true,desc,cat,tipoGasto:catTipo(cat),total:monto,paymentMethod:payM,obs,proveedor,factura,date:localISO(),user:turnoUser,userAuth:authUser(),closed:false};
       S.push(gRec);
@@ -3931,9 +4060,15 @@ function attachCaja(){
     const g=S.find(s=>s.id===el.dataset.gdel);if(!g)return;
     const motivo=prompt('Motivo para eliminar este gasto de '+fmt(g.total)+' (obligatorio):');
     if(!motivo||!motivo.trim()){alert('Debes indicar un motivo.');return;}
-    // Eliminacion LOGICA: el registro se conserva marcado (pista de auditoria)
-    g.anulada=true;g.anuladaPor=turnoUser;g.anuladaPorAuth=authUser();g.anuladaFecha=localISO();g.anuladaMotivo=motivo.trim();
-    saveVenta(g);render();
+    // Eliminacion LOGICA: el registro se conserva marcado (pista de auditoria).
+    // Anular un gasto cambia el efectivo esperado: lo autoriza administracion
+    // y se guarda con su sesion (la regla no deja anular a la cuenta de caja).
+    const aut=await autPropiaOAdmin('Anular el gasto "'+g.desc+'" de '+fmt(g.total),{gastoId:String(g.id), monto:+g.total||0, motivo:motivo.trim()});
+    if(!aut)return;
+    const anul=Object.assign({},g,{anulada:true,anuladaPor:turnoUser,anuladaPorAuth:aut.email,anuladaFecha:localISO(),anuladaMotivo:motivo.trim(),anulacionAutId:aut.autId||''});
+    const ok=await saveVenta(anul,aut.db); await aut.cerrar();
+    if(!ok){ alert('El gasto NO se anuló en el servidor.'); return; }
+    Object.assign(g,anul); render();
   }));
 
   // ── Filtro de gastos (#4) ──
@@ -4028,8 +4163,10 @@ function attachInv(){
   const mc=document.getElementById('mc');
   mc.querySelectorAll('[data-es]').forEach(el=>el.addEventListener('click',async()=>{
     const _p=P.find(x=>x.id===el.dataset.es);
-    if(!await pedirAutorizacionAdmin('Editar stock de "'+((_p&&_p.name)||el.dataset.es)+'"',
-        {productoId:el.dataset.es, detalle:'Stock antes del cambio: '+el.dataset.sv+' uds'}))return;
+    const _aut=await pedirAutorizacionAdmin('Editar stock de "'+((_p&&_p.name)||el.dataset.es)+'"',
+        {productoId:el.dataset.es, detalle:'Stock antes del cambio: '+el.dataset.sv+' uds'});
+    if(!_aut)return;
+    _aut.cerrar();   // fijar stock lo escribe la caja (la regla lo permite); queda en bitacora
     editStk=el.dataset.es;stkV=el.dataset.sv;render();
     const i=document.getElementById('si2');if(i){i.focus();i.select();}
   }));
@@ -4068,7 +4205,7 @@ function rMonitor(){
           <div style="font-weight:700;font-size:13px;margin-bottom:4px">${esc(t.name)}</div>
           ${ocp?`<div style="font-size:11px;color:var(--text2)">${t.order.reduce((a,i)=>a+i.qty,0)} ítems · ${fmt(tT)}</div>
             <div style="font-size:10px;color:${tiempoColor};margin-top:3px">⏱ ${mins} min</div>
-            <div style="font-size:10px;color:var(--text3);margin-top:3px">${t.order.slice(0,2).map(i=>i.qty+'x '+i.name).join(', ')}${t.order.length>2?'...':''}</div>`
+            <div style="font-size:10px;color:var(--text3);margin-top:3px">${esc(t.order.slice(0,2).map(i=>i.qty+'x '+i.name).join(', '))}${t.order.length>2?'...':''}</div>`
           :`<div style="font-size:11px;color:var(--grn)">Libre</div>`}
         </div>`;
       }).join('')}
@@ -4126,7 +4263,7 @@ function rDevoluciones(){
     ${devoluciones.length===0?'<div style="text-align:center;padding:30px;color:var(--text3)">Sin devoluciones registradas</div>':
       devoluciones.map(d=>`<div class="mrow" style="margin-bottom:6px">
         <div style="min-width:0;flex:1">
-          <div style="font-weight:600;font-size:12px">${d.prodName}</div>
+          <div style="font-weight:600;font-size:12px">${esc(d.prodName)}</div>
           <div style="font-size:10px;color:var(--text3)">${esc(d.proveedor)} · ${esc(d.motivo)} · ${new Date(d.date).toLocaleDateString('es-EC')} · ${esc(d.user)}</div>
           ${d.obs?`<div style="font-size:10px;color:var(--text3)">${esc(d.obs)}</div>`:''}
         </div>
@@ -4166,12 +4303,17 @@ function attachDevoluciones(){
     const prod=pid?P.find(p=>p.id===pid):P.find(p=>p.name.toLowerCase().includes(prodInput.toLowerCase())||(p.code&&p.code.includes(prodInput)));
     if(!prod){alert('Busca y selecciona un producto válido');return;}
     if(qty<=0){alert('La cantidad debe ser mayor a 0');return;}
-    // Restore stock (transaccion atomica por producto)
+    // CONTROL INTERNO: una devolucion sube el stock sin venta de por medio.
+    // La autoriza administracion y el registro se guarda con su sesion.
+    const aut=await autPropiaOAdmin('Registrar devolución: '+qty+' u. de "'+prod.name+'"',
+      {productoId:prod.id, cantidad:qty, motivo, proveedor:prov});
+    if(!aut)return;
+    const devRec={id:`dev${Date.now()}`,esDevolucion:true,prodName:prod.name,prodCode:prod.code||'',prodId:prod.id,proveedor:prov,qty,motivo,obs,date:localISO(),user:turnoUser,userAuth:aut.email,cajaDe:authUser(),autId:aut.autId||'',total:0,closed:false};
+    const ok=await saveVenta(devRec,aut.db); await aut.cerrar();
+    if(!ok){ alert('La devolución NO se registró en el servidor. El stock no se modificó.'); return; }
+    // Restore stock (transaccion atomica por producto) solo si quedo registrada
     ajustarStock(prod.id,qty);
-    // Register devolution
-    const devRec={id:`dev${Date.now()}`,esDevolucion:true,prodName:prod.name,prodCode:prod.code||'',prodId:prod.id,proveedor:prov,qty,motivo,obs,date:localISO(),user:turnoUser,total:0,closed:false};
-    S.push(devRec);
-    saveVenta(devRec);
+    if(!S.some(x=>x.id===devRec.id)) S.push(devRec);
     devForm=false;render();alert(`✓ Devolución registrada. Stock de "${esc(prod.name)}" actualizado a ${prod.stock} uds.`);
   });
 }
@@ -4494,7 +4636,7 @@ function rReportes(){
       ${ventas.length===0?`<div style="color:var(--text3);font-size:12px;text-align:center;padding:16px">Sin ventas en el período</div>`:
         ventas.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,60).map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
           <div style="min-width:0;flex:1">
-            <span style="font-weight:600">${v.tableName||'Sin mesa'}</span>
+            <span style="font-weight:600">${esc(v.tableName||'Sin mesa')}</span>
             <span style="color:var(--text3);margin-left:6px;font-size:10px">${new Date(v.date).toLocaleString('es-EC',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})} · ${v.paymentMethod||''} · ${v.items?v.items.length:0} ít.</span>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
@@ -4511,9 +4653,9 @@ function rReportes(){
       <div style="max-height:280px;overflow-y:auto">
       ${ventas.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,40).map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
         <div style="min-width:0;flex:1">
-          <span style="font-weight:600">${v.tableName||'Sin mesa'}</span>
+          <span style="font-weight:600">${esc(v.tableName||'Sin mesa')}</span>
           <span style="color:var(--text3);margin-left:6px;font-size:10px">${new Date(v.date).toLocaleString('es-EC',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} · ${v.paymentMethod||''}</span>
-          <div style="color:var(--text3);font-size:10px">${(v.items||[]).map(i=>i.qty+'x '+i.name).join(', ').slice(0,60)}</div>
+          <div style="color:var(--text3);font-size:10px">${esc((v.items||[]).map(i=>i.qty+'x '+i.name).join(', ').slice(0,60))}</div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:8px;display:flex;align-items:center;gap:8px">
           <span style="font-weight:700">${fmt(v.total)}</span>
@@ -4559,10 +4701,10 @@ function rReportes(){
     ${cancels.length>0?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--red);padding-left:14px">
       <div style="font-weight:700;font-size:12px;margin-bottom:10px;color:var(--red)">⚠ Cancelaciones (${cancels.length})</div>
       ${cancels.map(x=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
-        <div style="min-width:0;flex:1"><span style="font-weight:600">${x.prodName}</span><span style="color:var(--text3);margin-left:8px">${esc(x.motivo)}</span></div>
+        <div style="min-width:0;flex:1"><span style="font-weight:600">${esc(x.prodName)}</span><span style="color:var(--text3);margin-left:8px">${esc(x.motivo)}</span></div>
         <div style="text-align:right;flex-shrink:0;margin-left:8px">
           <div style="color:var(--red);font-weight:700">-${x.qty} uds</div>
-          <div style="font-size:10px;color:var(--text3)">${x.mesa} · ${new Date(x.date).toLocaleDateString('es-EC')} · ${x.user||''}</div>
+          <div style="font-size:10px;color:var(--text3)">${esc(x.mesa)} · ${new Date(x.date).toLocaleDateString('es-EC')} · ${esc(x.user||'')}</div>
         </div>
       </div>`).join('')}
     </div>`:''}
@@ -4882,14 +5024,14 @@ function rFacturasManual(){
       <div class="rb" style="margin-bottom:8px">
         <div>
           <div style="font-weight:700;font-size:13px">${esc(f.nombre)}</div>
-          <div style="font-size:11px;color:var(--text3)">${f.tipo}${f.identificacion?' · '+f.identificacion:''}${f.email?' · '+f.email:''}</div>
+          <div style="font-size:11px;color:var(--text3)">${f.tipo}${f.identificacion?' · '+esc(f.identificacion):''}${f.email?' · '+esc(f.email):''}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-weight:700;color:var(--acc)">${'$'+f.total.toFixed(2)}</div>
-          <div style="font-size:10px;color:var(--text3)">${f.mesa} · ${new Date(f.fecha).toLocaleDateString('es-EC')}</div>
+          <div style="font-size:10px;color:var(--text3)">${esc(f.mesa)} · ${new Date(f.fecha).toLocaleDateString('es-EC')}</div>
         </div>
       </div>
-      ${f.items&&f.items.length>0?`<div style="font-size:11px;color:var(--text3);margin-bottom:10px;background:var(--bg3);padding:7px 10px;border-radius:var(--rs)">${f.items.map(i=>i.qty+'× '+i.name).join(' · ')}</div>`:''}
+      ${f.items&&f.items.length>0?`<div style="font-size:11px;color:var(--text3);margin-bottom:10px;background:var(--bg3);padding:7px 10px;border-radius:var(--rs)">${esc(f.items.map(i=>i.qty+'× '+i.name).join(' · '))}</div>`:''}
       <div style="display:flex;gap:7px;align-items:center">
         <button class="btn btn-g btn-sm" data-fac-copy="${f.id}" style="flex:1">📋 Copiar datos</button>
         <button class="btn btn-b btn-sm" data-fac-sri="${f.id}" style="flex:1">Abrir SRI →</button>
@@ -4901,7 +5043,7 @@ function rFacturasManual(){
       ${hechas.slice(0,10).map(f=>`<div class="mrow" style="margin-bottom:5px;opacity:.7">
         <div style="min-width:0;flex:1">
           <span style="font-weight:600;font-size:12px">${esc(f.nombre)}</span>
-          <span style="font-size:11px;color:var(--text3);margin-left:7px">${f.tipo}${f.identificacion?' · '+f.identificacion:''}</span>
+          <span style="font-size:11px;color:var(--text3);margin-left:7px">${f.tipo}${f.identificacion?' · '+esc(f.identificacion):''}</span>
         </div>
         <div style="text-align:right;flex-shrink:0">
           <span style="font-weight:700;font-size:12px">${'$'+f.total.toFixed(2)}</span>
@@ -4962,7 +5104,7 @@ function rClientes(){
     ${sorted.map(cl=>`<div class="mrow" style="margin-bottom:6px">
       <div style="min-width:0;flex:1">
         <div style="font-weight:700;font-size:13px">${esc(cl.nombre)}</div>
-        <div style="font-size:11px;color:var(--text3)">${cl.tipo} · ${cl.identificacion}${cl.email?' · '+cl.email:''}${cl.telefono?' · '+cl.telefono:''}</div>
+        <div style="font-size:11px;color:var(--text3)">${cl.tipo} · ${esc(cl.identificacion)}${cl.email?' · '+esc(cl.email):''}${cl.telefono?' · '+esc(cl.telefono):''}</div>
         ${cl.ultimaVisita?`<div style="font-size:10px;color:var(--text3)">Última visita: ${new Date(cl.ultimaVisita).toLocaleDateString('es-EC')}</div>`:''}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
@@ -5072,7 +5214,88 @@ function repartirAnticipos(empId,disponible){
   return {aplic,total:r2(aplic.reduce((s,x)=>s+x.monto,0))};
 }
 
+// ── NOMINA vista de CAJA (cuenta 'pos') ─────────────────────────
+// La caja solo registra anticipos/vales: queda un gasto en Caja (ventas/) que
+// la administracion incorpora a la nomina al abrir esta pestana. La caja no ve
+// sueldos ni pagos, y no puede borrar ni editar un anticipo ya registrado.
+function rNominaCaja(){
+  const activos=(NOM.empleados||[]).filter(e=>e.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const mes=today().slice(0,7);
+  const regs=S.filter(g=>g.esGasto&&g.esAnticipoNomina&&!g.anulada&&(g.date||'').slice(0,7)===mes)
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const opts=activos.map(e=>`<option value="${esc(e.id)}">${esc(e.nombre)}</option>`).join('');
+  return `<div class="stitle">Nómina · anticipos desde caja</div>
+    <div style="font-size:11.5px;color:var(--text3);margin-bottom:12px;line-height:1.5">
+      Registra aquí los vales o anticipos que salen del dinero de caja. Quedan como gasto en Caja y la administración los descuenta en la nómina.
+      Un anticipo registrado no se puede editar ni borrar desde caja: si hay un error, avisa a la administración.
+    </div>
+    ${activos.length===0?`<div class="card" style="text-align:center;color:var(--text3)">La administración aún no ha publicado la lista de personal.</div>`:`
+    <div class="card" style="margin-bottom:14px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:12px">Registrar anticipo / vale</div>
+      <div class="fgrid">
+        <div class="fg"><label>Empleado</label><select id="ac-emp">${opts}</select></div>
+        <div class="fg"><label>Monto ($)</label><input id="ac-monto" type="number" step="0.01" placeholder="0.00"></div>
+        <div class="fg"><label>Sale de (método)</label><select id="ac-metodo">${PAY.map(m=>`<option>${m}</option>`).join('')}</select></div>
+        <div class="fg"><label>Nota</label><input id="ac-nota" placeholder="Opcional"></div>
+      </div>
+      <button class="btn btn-acc" id="ac-save">Registrar anticipo</button>
+    </div>`}
+    <div style="font-size:12px;font-weight:700;margin-bottom:8px">Registrados este mes desde caja</div>
+    ${regs.length===0?`<div style="text-align:center;padding:24px;color:var(--text3)">Sin anticipos este mes</div>`:
+      regs.map(g=>`<div class="mrow" style="margin-bottom:5px"><div style="min-width:0;flex:1">
+        <div style="font-weight:700;font-size:13px">${esc(g.empNombre||g.proveedor||'—')} · <span style="color:var(--red)">${fmt(g.total)}</span></div>
+        <div style="font-size:11px;color:var(--text3)">${esc(new Date(g.date).toLocaleDateString('es-EC'))} · ${esc(g.paymentMethod||'')}${g.obs?' · '+esc(g.obs):''} · ${esc(g.userAuth||g.user||'')}</div>
+      </div></div>`).join('')}`;
+}
+function attachNominaCaja(){
+  const mc=document.getElementById('mc');
+  mc.querySelector('#ac-save')?.addEventListener('click',async e=>{
+    const btn=e.currentTarget; if(btn.disabled) return;
+    const empId=document.getElementById('ac-emp').value;
+    const monto=Math.round((parseFloat(document.getElementById('ac-monto').value)||0)*100)/100;
+    const metodo=document.getElementById('ac-metodo').value;
+    const nota=document.getElementById('ac-nota').value.trim();
+    const emp=(NOM.empleados||[]).find(x=>x.id===empId);
+    if(!emp){alert('Selecciona un empleado');return;}
+    if(monto<=0){alert('Ingresa un monto válido');return;}
+    if(!confirm('¿Registrar un anticipo de '+fmt(monto)+' a '+emp.nombre+'?\nNo se podrá editar ni borrar desde caja.'))return;
+    btn.disabled=true;
+    const antId='an'+Date.now();
+    const gRec={id:'g'+Date.now(),esGasto:true,desc:'Anticipo nómina · '+emp.nombre,cat:'Nómina / personal',tipoGasto:catTipo('Nómina / personal'),
+      total:monto,paymentMethod:metodo,obs:nota,proveedor:emp.nombre,factura:'',esAnticipoNomina:true,anticipoId:antId,
+      empId:emp.id,empNombre:emp.nombre,origenAnticipo:'caja',date:localISO(),user:turnoUser,userAuth:authUser(),closed:false};
+    S.push(gRec); await saveVenta(gRec);
+    render();
+  });
+}
+
+// La administracion incorpora a la nomina los anticipos que registro la caja.
+// Fuente: los gastos esAnticipoNomina de ventas/ (consulta directa, no solo la
+// ventana en vivo, para no perder los de meses anteriores).
+let _impAntT=0;
+async function importarAnticiposCaja(){
+  if(MI_ROL!=='admin' || Date.now()-_impAntT<60000) return;
+  _impAntT=Date.now();
+  try{
+    const qs=await getDocs(query(collection(db,VENTAS_COL),where('esAnticipoNomina','==',true)));
+    const ya=new Set((NOM.anticipos||[]).map(a=>a.id));
+    const ya2=new Set((NOM.anticipos||[]).map(a=>a.gastoId).filter(Boolean));
+    let n=0;
+    qs.docs.forEach(d=>{
+      const g=d.data();
+      if(!g||g.anulada||g.origenAnticipo!=='caja'||!g.empId) return;
+      if(ya.has(g.anticipoId)||ya2.has(g.id)) return;
+      NOM.anticipos.push({id:g.anticipoId||('an'+g.id),empId:g.empId,monto:+g.total||0,metodo:g.paymentMethod||'',
+        fecha:(g.date||'').slice(0,10),nota:g.obs||'',pagado:false,pagoId:null,gastoId:g.id,
+        registradoPor:g.userAuth||g.user||'',origen:'caja'});
+      n++;
+    });
+    if(n>0){ await sNOM(); bitacora('anticipos_importados',{accion:'Incorporo '+n+' anticipo(s) registrados desde caja'}); render(); }
+  }catch(e){ console.error('importarAnticiposCaja',e); avisoError(msgError(e,'leer los anticipos registrados en caja')); }
+}
+
 function rNomina(){
+  if(MI_ROL!=='admin') return rNominaCaja();
   const emps=[...NOM.empleados].sort((a,b)=>a.nombre.localeCompare(b.nombre));
   const activos=emps.filter(e=>e.activo!==false);
   const tabs=[['empleados','Empleados'],['anticipos','Anticipos / Vales'],['pagar','Pagar nómina'],['historial','Historial ('+NOM.pagos.length+')']];
@@ -5247,6 +5470,8 @@ function rNomina(){
 }
 
 function attachNomina(){
+  if(MI_ROL!=='admin'){ attachNominaCaja(); return; }
+  importarAnticiposCaja();
   const mc=document.getElementById('mc');
   mc.querySelectorAll('[data-nomtab]').forEach(el=>el.addEventListener('click',()=>{nomTab=el.dataset.nomtab;editEmp=null;pagoEmpId=null;render();}));
 
@@ -5288,7 +5513,7 @@ function attachNomina(){
     const antId='an'+Date.now();
     // Cruce con Caja: el anticipo sale del dinero de caja -> gasto vinculado
     const gId='g'+Date.now();
-    const gRec={id:gId,esGasto:true,desc:'Anticipo nómina · '+(emp?emp.nombre:''),cat:'Nómina / personal',tipoGasto:catTipo('Nómina / personal'),total:monto,paymentMethod:metodo,obs:nota,proveedor:emp?emp.nombre:'',factura:'',esAnticipoNomina:true,anticipoId:antId,date:localISO(new Date(fecha+'T09:00:00')),user:turnoUser,userAuth:authUser(),closed:false};
+    const gRec={id:gId,esGasto:true,desc:'Anticipo nómina · '+(emp?emp.nombre:''),cat:'Nómina / personal',tipoGasto:catTipo('Nómina / personal'),total:monto,paymentMethod:metodo,obs:nota,proveedor:emp?emp.nombre:'',factura:'',esAnticipoNomina:true,anticipoId:antId,empId,empNombre:emp?emp.nombre:'',date:localISO(new Date(fecha+'T09:00:00')),user:turnoUser,userAuth:authUser(),closed:false};
     NOM.anticipos.push({id:antId,empId,monto,metodo,fecha,nota,pagado:false,pagoId:null,gastoId:gId});
     S.push(gRec);await saveVenta(gRec);
     await sNOM();render();
@@ -5360,7 +5585,9 @@ function attachNomina(){
   // Historial - anular pago (revierte anticipos a pendientes) con PIN
   mc.querySelectorAll('[data-pdel]').forEach(el=>el.addEventListener('click',async()=>{
     const p=NOM.pagos.find(x=>x.id===el.dataset.pdel);if(!p)return;
-    if(!await pedirAutorizacionAdmin('Anular el pago de '+fmt(p.neto)+' a '+p.empNombre))return;
+    const _autP=await pedirAutorizacionAdmin('Anular el pago de '+fmt(p.neto)+' a '+p.empNombre);
+    if(!_autP)return;
+    _autP.cerrar();   // la nomina solo la opera una cuenta admin
     // Devolver exactamente lo que se abono en ESTE pago (puede haber sido parcial).
     if(p.antAplic&&p.antAplic.length){
       p.antAplic.forEach(x=>{const a=NOM.anticipos.find(y=>y.id===x.id);
@@ -5529,11 +5756,11 @@ function rConsignantes(){
     const c = editConsignante==='new'?{}:CG.consignantes.find(x=>x.id===editConsignante)||{};
     return `<div class="card" style="padding:16px;max-width:520px">
       <h3 style="margin:0 0 14px">${editConsignante==='new'?'Nuevo consignante':'Editar consignante'}</h3>
-      <div class="fg"><label>Nombre completo *</label><input id="cg-nombre" value="${(c.nombre||'').replace(/"/g,'&quot;')}"></div>
-      <div class="fg"><label>Cédula</label><input id="cg-cedula" value="${(c.cedula||'').replace(/"/g,'&quot;')}"></div>
+      <div class="fg"><label>Nombre completo *</label><input id="cg-nombre" value="${esc(c.nombre||'')}"></div>
+      <div class="fg"><label>Cédula</label><input id="cg-cedula" value="${esc(c.cedula||'')}"></div>
       <div class="two-col">
-        <div class="fg"><label>Teléfono</label><input id="cg-tel" value="${(c.telefono||'').replace(/"/g,'&quot;')}"></div>
-        <div class="fg"><label>Correo</label><input id="cg-email" value="${(c.email||'').replace(/"/g,'&quot;')}"></div>
+        <div class="fg"><label>Teléfono</label><input id="cg-tel" value="${esc(c.telefono||'')}"></div>
+        <div class="fg"><label>Correo</label><input id="cg-email" value="${esc(c.email||'')}"></div>
       </div>
       <div class="fg"><label>Forma de pago (cuenta / banco)</label><input id="cg-pago" value="${(c.formaPago||'').replace(/"/g,'&quot;')}"></div>
       <div class="fg"><label>Notas</label><input id="cg-notas" value="${(c.notas||'').replace(/"/g,'&quot;')}"></div>
@@ -5549,7 +5776,7 @@ function rConsignantes(){
     return `<div class="mrow">
       <div style="flex:1;min-width:0">
         <span style="font-weight:600;font-size:13px">${esc(c.nombre)}</span>
-        <span style="font-size:11px;color:var(--text3);margin-left:8px">${c.telefono||''} ${c.cedula?'· '+c.cedula:''}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:8px">${esc(c.telefono||'')} ${c.cedula?'· '+esc(c.cedula):''}</span>
         <div style="font-size:11px;color:var(--text3);margin-top:2px">${nLibros} en consignación${s.pago>0?` · <b style="color:#0a7a4a">por pagar ${fmt(s.pago)}</b>`:''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center">
@@ -5614,7 +5841,7 @@ function rConsignaLibros(){
     const c=CG.consignantes.find(x=>x.id===addLibrosTo);
     return `<div class="card" style="padding:16px;max-width:560px">
       <h3 style="margin:0 0 4px">Ingresar libros</h3>
-      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Consignante: <b>${c?c.nombre:''}</b> · vencen en ${PLAZO_DIAS} días</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Consignante: <b>${c?esc(c.nombre):''}</b> · vencen en ${PLAZO_DIAS} días</div>
       <div class="two-col"><div class="fg" style="grid-column:1/3"><label>Título *</label><input id="lb-titulo" placeholder="Título del libro"></div></div>
       <div class="two-col">
         <div class="fg"><label>Autor</label><input id="lb-autor"></div>
@@ -5650,7 +5877,7 @@ function rConsignaLibros(){
   const rows=libros.map(l=>`<div class="mrow">
     <div style="flex:1;min-width:0">
       <span style="font-weight:600;font-size:13px">${esc(l.titulo)}</span>
-      <span style="font-size:11px;color:var(--text3);margin-left:6px">${l.autor||''}</span>
+      <span style="font-size:11px;color:var(--text3);margin-left:6px">${esc(l.autor||'')}</span>
       <div style="font-size:11px;color:var(--text3);margin-top:2px">${nombreConsignante(l.consignanteId)} · ${fmt(l.precio)} · ingresó ${fechaCorta(l.fechaIngreso)}${l.estado==='disponible'?' · vence '+fechaCorta(l.fechaVence):''}</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
@@ -5673,7 +5900,7 @@ function rLiquidaciones(){
     const s=saldoConsignante(liquidarTo);
     const filas=s.libros.map(l=>`<div class="mrow"><div style="flex:1"><span style="font-weight:600;font-size:13px">${esc(l.titulo)}</span><div style="font-size:11px;color:var(--text3)">vendido ${fechaCorta(l.fechaVenta)} · ${fmt(l.precioVendido||l.precio)}</div></div><div style="font-weight:700;color:#0a7a4a">${fmt((l.precioVendido||l.precio)*PCT_CONSIGNANTE)}</div></div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:12px">No hay ventas pendientes de liquidar.</div>';
     return `<div class="card" style="padding:16px;max-width:560px">
-      <h3 style="margin:0 0 4px">Liquidar a ${c?c.nombre:''}</h3>
+      <h3 style="margin:0 0 4px">Liquidar a ${c?esc(c.nombre):''}</h3>
       <div style="font-size:12px;color:var(--text3);margin-bottom:12px">${c&&c.formaPago?'Pago a: '+c.formaPago:'Sin forma de pago registrada'}</div>
       ${filas}
       <div style="display:flex;justify-content:space-between;padding:12px 0;border-top:1px solid var(--border);margin-top:8px">
@@ -7527,13 +7754,18 @@ setInterval(()=>{
   }
 },60000);
 
-async function _prepararBitacora(user){
-  let nombre='';
+// El rol se lee ANTES de init(): de el depende a que documentos se suscribe
+// la app (nomina y gastos fijos solo con cuenta admin).
+let _rolNombre='';
+async function _cargarRol(user){
   try{
     const snap=await getDoc(doc(db,'roles',user.uid));
     MI_ROL=snap.exists()?(snap.data().rol||''):'';
-    nombre=snap.exists()?(snap.data().nombre||''):'';
-  }catch(e){ MI_ROL=''; }
+    _rolNombre=snap.exists()?(snap.data().nombre||''):'';
+  }catch(e){ MI_ROL=''; _rolNombre=''; }
+}
+async function _prepararBitacora(user){
+  const nombre=_rolNombre;
   MI_NOMBRE = nombre || (user.email||'').split('@')[0] || user.email || '';
   turnoUser = MI_NOMBRE;
   _diaSesion = today();
@@ -7543,9 +7775,10 @@ async function _prepararBitacora(user){
   bitacora('inicio_sesion',{accion:'Abrio el POS', rol:MI_ROL});
   if(MI_ROL==='admin') await cargarBitacora(30);
 }
-onAuthStateChanged(auth,user=>{
+onAuthStateChanged(auth,async user=>{
   const lg=document.getElementById('login-screen');
   if(user){
+    await _cargarRol(user);
     _prepararBitacora(user);
     if(lg)lg.style.display='none';
     if(!_initDone){_initDone=true;init();}
