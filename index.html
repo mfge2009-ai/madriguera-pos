@@ -215,6 +215,43 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 @media(max-width:900px){.ing-grid{grid-template-columns:1fr}.ing-res{position:static}.sg4{grid-template-columns:1fr 1fr}}
 @media(max-width:760px){.inv-head{display:none}.inv-row,.inv-pos .inv-row{display:flex;flex-wrap:wrap;gap:6px 10px}.inv-prod{flex:1 1 100%}.inv-cat,.inv-adm{display:none}.inv-acc{flex:1;justify-content:flex-end}
   .ing-row{grid-template-columns:minmax(0,1fr) 56px 120px}.ing-row>div:nth-child(4),.ing-row>div:nth-child(5){display:none}}
+
+/* ── Rediseño fase 1 (22-oct-2026): menú lateral agrupado e Inicio ── */
+#app.shown{display:flex}
+.nbrand,.ngrp,.nmini{display:none}
+nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;vertical-align:-3px;margin-right:5px}
+.nbadge:empty{display:none}
+.nbadge{margin-left:6px;background:#fff3cd;color:#8a4f00;border-radius:999px;font-size:10px;font-weight:700;padding:1px 7px;line-height:16px}
+@media(min-width:900px){
+  #app.shown{display:grid;grid-template-columns:232px minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr)}
+  #app.shown.nav-mini{grid-template-columns:64px minmax(0,1fr)}
+  #app.shown>nav{grid-column:1;grid-row:1/4;flex-direction:column;overflow-y:auto;overflow-x:hidden;background:#2e2516;border:none;padding:14px 10px;gap:2px}
+  #app.shown>header,#app.shown>#tbar,#app.shown>#mc{grid-column:2}
+  #app.shown>header .logo{display:none}
+  #app.shown>header{justify-content:flex-end}
+  .nbrand{display:flex;flex-direction:column;padding:2px 12px 12px;color:#ede5d0}
+  .nbrand b{font-family:Georgia,serif;font-size:18px}.nbrand span{font-size:11px;color:#d9cfbb}
+  .ngrp{display:block;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#d9cfbb;opacity:.7;padding:12px 12px 4px}
+  nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;color:#d9cfbb;border:none!important;border-radius:8px;padding:8px 12px;font-size:13px}
+  nav button .ni{width:18px;height:18px;margin:0}
+  nav button:hover{background:rgba(255,255,255,.06)}
+  nav button.active{background:#4a3a20;color:#fff;font-weight:600;box-shadow:inset 3px 0 0 #ede5d0}
+  nav .nbadge{margin-left:auto}
+  .nmini{display:flex;margin-top:auto!important;opacity:.75}
+  #app.nav-mini .nbrand,#app.nav-mini .ngrp,#app.nav-mini .nl,#app.nav-mini nav .nbadge{display:none}
+  #app.nav-mini nav button{justify-content:center;padding:10px 0;position:relative}
+  #app.nav-mini nav .nbadge:not(:empty){display:block;position:absolute;top:3px;right:6px;padding:0 5px;font-size:9px}
+  #app.nav-mini .nmini .ni{transform:rotate(180deg)}
+}
+.ini-h{font-size:24px;font-weight:800;letter-spacing:-.3px;color:var(--text)}
+.ini-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+.ini-al{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px;background:var(--bg2)}
+.ini-dot{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0}
+.ini-qa{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ini-qb{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:14px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--bg2);font-family:inherit;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;text-align:left}
+.ini-qb:hover{border-color:var(--acc)}
+.ini-qb kbd{font-family:inherit;font-size:10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--text2);font-weight:600}
+@media(max-width:900px){.ini-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -260,20 +297,28 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
   </header>
   <div id="tbar"></div>
   <nav>
-    <button class="active" data-v="pos">POS</button>
-    <button data-v="productos">Productos</button>
-    <button data-v="dashboard">Dashboard</button>
-    <button data-v="caja">Caja</button>
-    <button data-v="nomina">Nómina</button>
-    <button data-v="inventario">Inventario</button>
-    <button id="nav-insumos" title="Insumos, recetas y varianza de cocina y bar">🥬 Insumos</button>
-    <button data-v="reportes">Reportes</button>
-    <button data-v="bitacora" id="nav-bitacora" style="display:none">📋 Bitácora</button>
-    <button data-v="monitor">Monitor</button>
-    <button data-v="devoluciones">Devoluciones</button>
-    <button data-v="facturas">Facturas</button>
-    <button data-v="clientes">Clientes</button>
-    <button data-v="consigna">Consignación</button>
+    <div class="nbrand"><b>La Madriguera</b><span>Panel del POS</span></div>
+    <button data-v="inicio" title="Inicio"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span class="nl">Inicio</span></button>
+    <div class="ngrp">Operación</div>
+    <button data-v="pos" title="Punto de venta"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h8.6a2 2 0 0 0 2-1.6L22 7H6"/></svg><span class="nl">Punto de venta</span></button>
+    <button data-v="monitor" title="Monitor de mesas"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span class="nl">Monitor de mesas</span><span class="nbadge" data-badge="monitor"></span></button>
+    <div class="ngrp">Caja</div>
+    <button data-v="caja" title="Turno y cuadre"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M16 15h2"/></svg><span class="nl">Turno y cuadre</span><span class="nbadge" data-badge="caja"></span></button>
+    <button data-v="nomina" title="Nómina"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="12" r="2.5"/><path d="M14 10h4M14 14h4"/></svg><span class="nl">Nómina</span></button>
+    <div class="ngrp">Inventario</div>
+    <button data-v="inventario" title="Inventario"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span class="nl">Inventario</span><span class="nbadge" data-badge="inventario"></span></button>
+    <button data-v="productos" title="Productos"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span class="nl">Productos</span></button>
+    <button id="nav-insumos" title="Insumos y recetas"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20A7 7 0 0 1 4 13c0-5 4-9 16-10-1 12-5 16-9 17z"/><path d="M4 21c4-4 7-7 10-9"/></svg><span class="nl">Insumos y recetas</span></button>
+    <button data-v="consigna" title="Consignación"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg><span class="nl">Consignación</span></button>
+    <div class="ngrp">Clientes y SRI</div>
+    <button data-v="facturas" title="Facturación"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 13h6M9 17h6"/></svg><span class="nl">Facturación</span><span class="nbadge" data-badge="facturas"></span></button>
+    <button data-v="clientes" title="Clientes"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/></svg><span class="nl">Clientes</span></button>
+    <button data-v="devoluciones" title="Devoluciones"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg><span class="nl">Devoluciones</span></button>
+    <div class="ngrp">Análisis</div>
+    <button data-v="dashboard" title="Dashboard"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span class="nl">Dashboard</span></button>
+    <button data-v="reportes" title="Reportes"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg><span class="nl">Reportes</span></button>
+    <button data-v="bitacora" id="nav-bitacora" style="display:none" title="Bitácora"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="18" rx="2"/><path d="M9 2h6v4H9zM9 12h6M9 16h4"/></svg><span class="nl">Bitácora</span></button>
+    <button class="nmini" id="nav-mini" title="Contraer o expandir el menú"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg><span class="nl">Contraer menú</span></button>
   </nav>
   <div id="mc"></div>
 </div>
@@ -1508,9 +1553,12 @@ function showApp(){
   const app=document.getElementById('app');
   const cdot=document.getElementById('cdot');
   if(ldg)ldg.style.display='none';
-  if(app)app.style.display='flex';
+  if(app){ app.style.display=''; app.classList.add('shown'); }
+  if(MI_ROL==='admin'&&view==='pos') view='inicio';
+  marcarNav(view); aplicarNavMini();
   if(cdot)cdot.classList.add('on');
   render();
+  setInterval(()=>{ try{ actualizarNavBadges(); }catch(e){} },60000);
   // Sin caja abierta no se trabaja: se lleva directo a abrir/cerrar
   setTimeout(()=>{ try{ if(estadoCaja().e!=='abierta') irACaja(); }catch(e){} },1500);
 }
@@ -1817,7 +1865,9 @@ function render(){
   updateHdr();
   const mc=document.getElementById('mc');
   if(!mc)return;
-  if(view==='pos'){
+  try{ actualizarNavBadges(); }catch(e){}
+  if(view==='inicio'){mc.innerHTML=`<div class="sc">${rInicio()}</div>`;attachInicio();}
+  else if(view==='pos'){
     if(!turnoUser){ turnoUser = MI_NOMBRE || authUser() || ''; }
     mc.innerHTML=rPOS();attachPOS();
   } else if(view==='productos'){mc.innerHTML=`<div class="sc">${rProductos()}</div>`;attachProd();}
@@ -6885,6 +6935,140 @@ function attachConsigna(){
   });
 }
 
+// ── INICIO / CENTRO DE CONTROL y navegacion (rediseño fase 1, 22-oct-2026) ──
+// Inicio reune lo que requiere atencion y lleva directo a la pantalla donde se
+// corrige. No escribe nada: solo lee datos que el POS ya tiene en memoria
+// (ventas, mesas, gastos fijos, bitacora) y las facturas SRI de 45 dias.
+function marcarNav(v){
+  document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
+}
+function irA(v,prep){
+  if(typeof prep==='function') prep();
+  view=v; editP=null; cajaConf=false; editStk=null;
+  marcarNav(v); aplicarNavMini(); render();
+  const mc=document.getElementById('mc'); if(mc) mc.scrollTop=0;
+}
+window.irA=irA;
+// En el punto de venta el menu se reduce a iconos para dar espacio al salon y al pedido.
+let navMiniManual=null; // null = automatico
+function aplicarNavMini(){
+  const app=document.getElementById('app'); if(!app) return;
+  const mini = navMiniManual!==null ? navMiniManual : (view==='pos');
+  app.classList.toggle('nav-mini', mini);
+}
+let _iniSriPedido=false;
+function iniAlertas(){
+  const admin=MI_ROL==='admin', out=[];
+  const add=(sev,titulo,desc,label,fn,badgeKey)=>out.push({sev,titulo,desc,label,fn,badgeKey});
+  try{
+    const ec=estadoCaja();
+    if(ec.e==='cerrada') add('alta','La caja está cerrada','Para cobrar hay que abrirla contando el efectivo inicial.','Abrir caja',()=>irACaja(),'caja');
+    else if(ec.e==='pendiente') add('alta','Hay un turno de caja sin cerrar','Quedó abierta la caja del '+ec.dia+'. Ciérrela contando el efectivo.','Ir al cierre',()=>irACaja(),'caja');
+  }catch(e){}
+  try{
+    const d=diasSinCierre();
+    if(d.length) add('alta',d.length+' día(s) con ventas sin cierre de caja','Sin conteo físico un faltante no se puede detectar. Más reciente: '+d[0]+'.','Revisar',()=>irA('caja',()=>{cajaTab='cierre';}),'caja');
+  }catch(e){}
+  if(typeof sriConfigurado==='function'&&sriConfigurado()){
+    if(sriCargado){
+      const malas=SRI_F.filter(f=>f.tipoDoc!=='04'&&['DEVUELTA','NO_AUTORIZADA'].includes(f.estado));
+      if(malas.length) add('alta',malas.length+' factura(s) devuelta(s) o no autorizada(s) por el SRI','La venta está cobrada pero el comprobante no es válido. Corrija y reemita.','Revisar',()=>irA('facturas'),'facturas');
+      const ids=new Set(SRI_F.map(f=>String(f.ventaId))), cola=sriCola();
+      const desde=new Date(); desde.setDate(desde.getDate()-2); const dt=localISO(desde).slice(0,10);
+      const sin=S.filter(s=>isVenta(s)&&(s.date||'')>=dt&&!ids.has(String(s.id))&&!cola.some(c=>c.ventaId===String(s.id)));
+      if(sin.length) add('media',sin.length+' venta(s) cobrada(s) sin comprobante','Últimos 2 días · '+fmt(sin.reduce((a,s)=>a+(+s.total||0),0))+'. Toda venta debe tener factura o comprobante.','Facturar',()=>irA('facturas'),'facturas');
+    } else if(admin && view==='inicio' && !_iniSriPedido && !sriCargando){
+      _iniSriPedido=true;
+      setTimeout(()=>{ sriCargarFacturas().then(()=>{ if(view==='inicio') render(); else actualizarNavBadges(); }); },0);
+    }
+  }
+  if(admin){
+    try{
+      const mes=today().slice(0,7), gp=gfPendientes(mes);
+      if(gp.length) add('media',gp.length+' gasto(s) fijo(s) de este mes sin generar',gp.slice(0,3).map(g=>g.desc).join(', ')+(gp.length>3?'…':''),'Generar',()=>irA('caja',()=>{cajaTab='gastos';}),'caja');
+    }catch(e){}
+    try{
+      const ing=(BIT||[]).filter(b=>b.evento==='ingreso_mercaderia');
+      const casos=ing.filter(b=>(Array.isArray(b.pendientesAlta)&&b.pendientesAlta.length)||(Array.isArray(b.lineas)&&b.lineas.some(l=>l.guia!=null&&+l.guia!==+l.recibido)));
+      if(casos.length) add('media',casos.length+' ingreso(s) de mercadería con diferencias o códigos sin alta','Crúcelos con la guía o factura del proveedor y cree los productos que faltan.','Revisar',()=>irA('inventario',()=>{invModo='lista';}),'inventario');
+    }catch(e){}
+  }
+  try{
+    const largas=T.filter(t=>t.openedAt&&t.order&&t.order.length&&(Date.now()-new Date(t.openedAt).getTime())>60*60000);
+    if(largas.length) add('baja',largas.length+' mesa(s) abierta(s) hace más de 1 hora',largas.slice(0,4).map(t=>t.name).join(', '),'Ver mesas',()=>irA('monitor'),'monitor');
+  }catch(e){}
+  try{
+    const sinStk=P.filter(p=>p&&p.active&&!p.esConsignado&&p.stockControl==='unidad'&&(+p.stock||0)<=0&&(+p.stock)<999&&p.category!=='Libros').length;
+    if(sinStk) add('baja',sinStk+' producto(s) de cafetería o merch sin stock','No incluye libros. Revise si hay que reponer o desactivar.','Ver',()=>irA('inventario',()=>{invModo='lista';invVista='sin';invCat='Todas';}),null);
+  }catch(e){}
+  return out;
+}
+function actualizarNavBadges(){
+  const n={};
+  try{ iniAlertas().forEach(a=>{ if(a.badgeKey) n[a.badgeKey]=(n[a.badgeKey]||0)+1; }); }catch(e){}
+  document.querySelectorAll('nav [data-badge]').forEach(el=>{ const k=el.dataset.badge; el.textContent=n[k]?String(n[k]):''; });
+  const hi=document.querySelector('nav [data-badge="inicio"]');
+}
+function rInicio(){
+  const al=iniAlertas();
+  const h=new Date().getHours(), saludo=h<12?'Buenos días':h<19?'Buenas tardes':'Buenas noches';
+  const nombre=(MI_NOMBRE||authUser()||'').split(/[ @]/)[0];
+  let caja='';
+  try{ const ec=estadoCaja(); caja = ec.e==='abierta' ? 'Caja abierta'+(ec.ap&&ec.ap.date?' desde las '+new Date(ec.ap.date).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'}):'')+(ec.ap&&ec.ap.user?' por '+ec.ap.user:'') : ec.e==='pendiente'?'Turno pendiente de cierre':'Caja cerrada'; }catch(e){}
+  const fecha=new Date().toLocaleDateString('es-EC',{weekday:'long',day:'numeric',month:'long'});
+  const sevC={alta:['var(--rbg)','var(--red)'],media:['var(--abg)','var(--amb)'],baja:['var(--bbg)','var(--blu)']};
+  const acciones=[['venta','Nueva venta','F2'],['gasto','Registrar gasto','F3'],['ingreso','Ingresar mercadería','F4'],['factura','Facturar venta','F6'],['cuadre','Cuadrar caja','F8'],['buscar','Buscar producto','/']];
+  return `<div class="ini">
+    <div class="rb" style="align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <div><div class="ini-h">${saludo}${nombre?', '+esc(nombre):''}</div>
+        <div style="font-size:13px;color:var(--text2);text-transform:none">${esc(fecha.charAt(0).toUpperCase()+fecha.slice(1))} · ${esc(caja)}</div></div>
+      <div style="display:flex;gap:8px"><button class="btn btn-g" data-qa="gasto">Registrar gasto</button><button class="btn btn-acc" data-qa="venta">🛒 Nueva venta</button></div>
+    </div>
+    <div class="ini-grid">
+      <div class="card" style="margin:0">
+        <div class="rb" style="margin-bottom:6px"><b style="font-size:14px">Requiere tu atención</b>
+          <span class="badge ${al.length?(al.some(a=>a.sev==='alta')?'br':'ba'):'bg'}">${al.length?al.length+' pendiente'+(al.length>1?'s':''):'Todo en orden'}</span></div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Lo que el sistema detectó y no puede resolver solo. Cada fila lleva a la pantalla donde se corrige.</div>
+        ${al.length?al.map((a,i)=>`<div class="ini-al"><span class="ini-dot" style="background:${sevC[a.sev][0]};color:${sevC[a.sev][1]}">!</span>
+          <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">${esc(a.titulo)}</div><div style="font-size:11px;color:var(--text2)">${esc(a.desc)}</div></div>
+          <button class="btn btn-g btn-sm" data-ial="${i}">${esc(a.label)}</button></div>`).join('')
+          :`<div style="padding:18px;text-align:center;color:var(--grn);font-size:13px">✓ No hay pendientes en este momento.</div>`}
+        ${(sriConfigurado&&sriConfigurado()&&!sriCargado)?'<div style="font-size:11px;color:var(--text3);margin-top:6px">Revisando facturas electrónicas…</div>':''}
+      </div>
+      <div>
+        <div class="rb" style="margin-bottom:8px"><b style="font-size:14px">Acciones rápidas</b><span style="font-size:11px;color:var(--text3)">Atajos de teclado</span></div>
+        <div class="ini-qa">${acciones.map(([k,l,s])=>`<button class="ini-qb" data-qa="${k}"><span>${l}</span><kbd>${s}</kbd></button>`).join('')}</div>
+      </div>
+    </div>
+    <div style="margin-top:16px">${rDash()}</div>
+  </div>`;
+}
+function attachInicio(){
+  const al=iniAlertas();
+  const mc=document.getElementById('mc');
+  mc.querySelectorAll('[data-ial]').forEach(el=>el.addEventListener('click',()=>{ const a=al[+el.dataset.ial]; if(a&&a.fn) a.fn(); }));
+  mc.querySelectorAll('[data-qa]').forEach(el=>el.addEventListener('click',()=>accionRapida(el.dataset.qa)));
+}
+function accionRapida(k){
+  if(k==='venta') irA('pos');
+  else if(k==='gasto') irA('caja',()=>{cajaTab='gastos';gastoForm=true;});
+  else if(k==='ingreso') irA('inventario',()=>{invModo='ingreso'; if(!ING) ING=ingCargar();});
+  else if(k==='factura') irA('facturas');
+  else if(k==='cuadre') irA('caja',()=>{cajaTab='cierre';});
+  else if(k==='buscar'){ irA('pos'); setTimeout(()=>{ const i=document.getElementById('si'); if(i){ i.focus(); i.select&&i.select(); } },60); }
+}
+// Atajos: solo cuando no se esta escribiendo y no hay ventanas abiertas.
+document.addEventListener('keydown',e=>{
+  if(!_appShown||e.metaKey||e.ctrlKey||e.altKey) return;
+  const t=e.target, tag=(t&&t.tagName)||'';
+  const escribiendo=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable);
+  const modal=[...document.querySelectorAll('#cancel-modal,#factura-modal,#scan-modal,#inv-modal,.modal-bg')].some(m=>m.offsetParent!==null&&getComputedStyle(m).display!=='none');
+  if(modal) return;
+  const map={F2:'venta',F3:'gasto',F4:'ingreso',F6:'factura',F8:'cuadre'};
+  if(map[e.key]){ e.preventDefault(); accionRapida(map[e.key]); return; }
+  if(e.key==='/'&&!escribiendo){ e.preventDefault(); accionRapida('buscar'); }
+});
+
 // ── Nav ───────────────────────────────────────────────────────
 // El boton de Insumos abre otro archivo, no es una vista: se excluye con [data-v]
 document.getElementById('nav-insumos')?.addEventListener('click',()=>{
@@ -6893,8 +7077,9 @@ document.getElementById('nav-insumos')?.addEventListener('click',()=>{
 document.getElementById('btn-salir')?.addEventListener('click',()=>cerrarSesionPOS('manual'));
 document.querySelectorAll('nav button[data-v]').forEach(btn=>btn.addEventListener('click',()=>{
   document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');view=btn.dataset.v;editP=null;cajaConf=false;editStk=null;render();
+  btn.classList.add('active');view=btn.dataset.v;editP=null;cajaConf=false;editStk=null;aplicarNavMini();render();
 }));
+document.getElementById('nav-mini')?.addEventListener('click',()=>{ const app=document.getElementById('app'); navMiniManual=!(app&&app.classList.contains('nav-mini')); aplicarNavMini(); });
 
 // ── Cancel modal ────────────────────────────────────────────
 let selectedCancelMotivo = '';
