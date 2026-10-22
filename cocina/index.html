@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#0b0d10">
+<title>LA MADRI | COCINA</title>
+<style>
+:root{
+  --bg:#0b0d10; --panel:#151a21; --card:#1b212a; --line:#2b333f;
+  --txt:#ffffff; --txt2:#c9d1dc; --txt3:#8b96a5;
+  --verde:#22c55e; --verde-bg:#0f3d22;
+  --amar:#facc15; --amar-bg:#4a3d06;
+  --rojo:#ef4444; --rojo-bg:#4a1111;
+  --azul:#38bdf8; --azul-bg:#0c3346;
+  --morado:#c084fc; --naranja:#fb923c;
+  --esc:1;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-size:calc(clamp(14px,1.04vw,26px) * var(--esc))}
+body{background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible{outline:4px solid #fff;outline-offset:2px}
+
+/* ── Encabezado ── */
+header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap;
+  padding:.7rem 1.2rem;background:#07090b;border-bottom:2px solid var(--line)}
+.marca{font-size:1.9rem;font-weight:900;letter-spacing:.06em;white-space:nowrap}
+.marca span{color:var(--txt3);font-weight:400;margin:0 .35em}
+.cont{display:flex;gap:.6rem;flex:1;flex-wrap:wrap}
+.kpi{display:flex;align-items:center;gap:.5rem;padding:.35rem .9rem;border-radius:.6rem;background:var(--panel);
+  border:2px solid var(--line);font-size:1.05rem;font-weight:700;white-space:nowrap}
+.kpi b{font-size:1.7rem;line-height:1}
+.kpi.n{border-color:var(--verde)} .kpi.n b{color:var(--verde)}
+.kpi.p{border-color:var(--amar)} .kpi.p b{color:var(--amar)}
+.kpi.d{border-color:var(--rojo)} .kpi.d b{color:var(--rojo)}
+.kpi.d.on{background:var(--rojo-bg);animation:latido 1.4s infinite}
+.kpi.t b{color:#fff}
+.der{display:flex;align-items:center;gap:.6rem}
+.reloj{font-size:1.7rem;font-weight:800;font-variant-numeric:tabular-nums}
+.conn{display:flex;align-items:center;gap:.4rem;font-size:.95rem;font-weight:700;padding:.35rem .7rem;border-radius:.6rem;background:var(--panel)}
+.conn i{width:.8rem;height:.8rem;border-radius:50%;background:var(--verde);display:inline-block}
+.conn.off i{background:var(--rojo)} .conn.off{color:var(--rojo)}
+.conn.wait i{background:var(--amar)}
+.hb{background:var(--panel);color:#fff;border:2px solid var(--line);border-radius:.6rem;font-size:1.2rem;padding:.35rem .7rem;font-weight:700}
+.hb.alerta{border-color:var(--amar);color:var(--amar);animation:latido 1.4s infinite}
+
+/* ── Avisos ── */
+#banda{display:none;padding:.8rem 1.2rem;font-size:1.3rem;font-weight:800;text-align:center}
+#banda.on{display:block}
+#banda.off{background:var(--rojo);color:#fff}
+#banda.warn{background:var(--amar);color:#111}
+
+/* ── Tablero ── */
+main{padding:1rem 1.2rem 2rem}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,19.5rem),1fr));gap:1rem;align-items:start}
+.vacio{grid-column:1/-1;text-align:center;color:var(--txt3);font-size:2rem;font-weight:700;padding:18vh 0}
+.vacio small{display:block;font-size:1.1rem;font-weight:400;margin-top:.6rem}
+
+/* ── Tarjeta ── */
+.card{background:var(--card);border:3px solid var(--line);border-radius:.9rem;overflow:hidden;display:flex;flex-direction:column;position:relative}
+.card .cab{padding:.6rem .8rem;display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem}
+.card.nuevo{border-color:var(--verde)} .card.nuevo .cab{background:var(--verde-bg)}
+.card.preparacion{border-color:var(--amar)} .card.preparacion .cab{background:var(--amar-bg)}
+.card.listo{border-color:var(--azul);opacity:.55} .card.listo .cab{background:var(--azul-bg)}
+.card.demorado{border-color:var(--rojo);box-shadow:0 0 0 3px var(--rojo) inset}
+.card.demorado .cab{background:var(--rojo-bg)}
+.card.recien{animation:destello 1s ease-in-out 8}
+.mesa{font-size:2.1rem;font-weight:900;line-height:1.05;word-break:break-word}
+.orden{font-size:1rem;color:var(--txt2);font-weight:700;margin-top:.15rem}
+.t{text-align:right;flex-shrink:0}
+.crono{font-size:2.1rem;font-weight:900;font-variant-numeric:tabular-nums;line-height:1}
+.crono.aviso{color:var(--naranja)} .crono.tarde{color:var(--rojo)}
+.hora{font-size:.95rem;color:var(--txt2);margin-top:.2rem}
+.chips{display:flex;gap:.4rem;flex-wrap:wrap;padding:.45rem .8rem 0}
+.chip{font-size:.9rem;font-weight:900;letter-spacing:.04em;padding:.2rem .55rem;border-radius:.4rem}
+.chip.e-nuevo{background:var(--verde);color:#04210f}
+.chip.e-preparacion{background:var(--amar);color:#2a2203}
+.chip.e-listo{background:var(--azul);color:#04202c}
+.chip.dem{background:var(--rojo);color:#fff;animation:latido 1.2s infinite}
+.chip.adi{background:var(--morado);color:#240a3a}
+.chip.anu{background:#fff;color:var(--rojo)}
+.items{list-style:none;padding:.5rem .8rem .3rem;max-height:20rem;overflow:hidden;position:relative}
+.items.corte::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2.5rem;background:linear-gradient(transparent,var(--card))}
+.it{display:flex;gap:.6rem;padding:.35rem 0;border-bottom:1px solid var(--line);font-size:1.35rem;line-height:1.2}
+.it:last-child{border-bottom:none}
+.q{font-weight:900;min-width:2.4rem;font-variant-numeric:tabular-nums}
+.q.mas{color:var(--morado)}
+.nm{font-weight:700;flex:1;word-break:break-word}
+.va{display:block;font-size:1rem;color:var(--txt2);font-weight:500;margin-top:.1rem}
+.no{display:block;font-size:1.1rem;color:#111;background:var(--amar);font-weight:800;border-radius:.3rem;padding:.05rem .35rem;margin-top:.25rem;width:fit-content}
+.pe{font-size:.85rem;color:var(--txt3);font-weight:700;margin-left:.3rem}
+.it.anulado .nm,.it.anulado .q{text-decoration:line-through;color:var(--txt3)}
+.it.anulado .an{display:block;font-size:.95rem;color:var(--rojo);font-weight:900;text-decoration:none;margin-top:.15rem}
+.mas-items{padding:0 .8rem .3rem;color:var(--txt2);font-size:1rem;font-weight:700}
+.pie{font-size:.9rem;color:var(--txt3);padding:.2rem .8rem .5rem}
+.acc{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;padding:.6rem .8rem .8rem;margin-top:auto}
+.b{border:none;border-radius:.6rem;padding:.85rem .5rem;font-size:1.15rem;font-weight:900;letter-spacing:.02em;color:#111;min-height:3.4rem}
+.b.ini{background:var(--amar)}
+.b.lis{background:var(--verde)}
+.b.lis.conf{background:#fff;color:#0b5d2a;animation:latido .8s infinite}
+.b.det{background:#2f3946;color:#fff;font-size:1rem}
+.b.full{grid-column:1/-1}
+.b:disabled{opacity:.45;cursor:wait}
+
+/* ── Detalle ── */
+#det{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.82);display:none;align-items:flex-start;justify-content:center;padding:3vh 2vw;overflow:auto}
+#det.on{display:flex}
+#det .card{width:min(62rem,96vw);opacity:1}
+#det .items{max-height:none}
+#det .it{font-size:1.9rem}
+#det .no{font-size:1.5rem}
+#det .hist{padding:.4rem .8rem .8rem;color:var(--txt2);font-size:1.05rem;line-height:1.6}
+
+/* ── Inicio / login / config ── */
+.capa{position:fixed;inset:0;z-index:60;background:var(--bg);display:none;align-items:center;justify-content:center;padding:1rem}
+.capa.on{display:flex}
+.caja{background:var(--panel);border:2px solid var(--line);border-radius:1rem;padding:1.6rem;width:min(30rem,94vw)}
+.caja h1{font-size:2rem;font-weight:900;margin-bottom:.3rem}
+.caja p{color:var(--txt2);font-size:1.05rem;margin-bottom:1rem;line-height:1.4}
+.caja label{display:block;font-size:1rem;color:var(--txt2);margin:.6rem 0 .25rem;font-weight:700}
+.caja input,.caja select{width:100%;font-size:1.3rem;padding:.6rem .7rem;border-radius:.5rem;border:2px solid var(--line);background:#0e1217;color:#fff;font-family:inherit}
+.caja .b{width:100%;margin-top:1rem}
+.err{color:var(--rojo);font-weight:700;margin-top:.7rem;display:none}
+.fila{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}
+
+#toast{position:fixed;left:50%;bottom:1.5rem;transform:translateX(-50%);z-index:70;display:flex;flex-direction:column;gap:.5rem;align-items:center;pointer-events:none}
+.tst{background:#fff;color:#111;font-size:1.3rem;font-weight:800;padding:.7rem 1.2rem;border-radius:.7rem;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+.tst.ok{background:var(--verde)} .tst.mal{background:var(--rojo);color:#fff} .tst.info{background:var(--morado)}
+
+@keyframes latido{50%{opacity:.55}}
+@keyframes destello{50%{box-shadow:0 0 0 .5rem rgba(255,255,255,.85)}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+@media (max-width:700px){.marca{font-size:1.4rem}.kpi b{font-size:1.3rem}.reloj{font-size:1.3rem}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="marca">LA MADRI<span>|</span>COCINA</div>
+  <div class="cont">
+    <div class="kpi n">Nuevos <b id="k-n">0</b></div>
+    <div class="kpi p">En preparación <b id="k-p">0</b></div>
+    <div class="kpi d" id="k-dbox">Demorados <b id="k-d">0</b></div>
+    <div class="kpi t">Pendientes <b id="k-t">0</b></div>
+  </div>
+  <div class="der">
+    <div class="conn wait" id="conn"><i></i><span>Conectando…</span></div>
+    <div class="reloj" id="reloj">--:--</div>
+    <button class="hb alerta" id="b-sonido" title="Activar sonido">🔇</button>
+    <button class="hb" id="b-full" title="Pantalla completa">⛶</button>
+    <button class="hb" id="b-conf" title="Configuración">⚙</button>
+  </div>
+</header>
+<div id="banda"></div>
+<main><div id="grid"></div></main>
+
+<div id="det" role="dialog" aria-modal="true"></div>
+<div id="toast"></div>
+
+<!-- Inicio de sesion -->
+<div class="capa" id="c-login">
+  <div class="caja">
+    <h1>LA MADRI | COCINA</h1>
+    <p>Ingresa con la cuenta de cocina (o una cuenta del POS). La sesión queda abierta en este equipo.</p>
+    <label for="l-mail">Correo</label><input id="l-mail" type="email" autocomplete="username">
+    <label for="l-pass">Contraseña</label><input id="l-pass" type="password" autocomplete="current-password">
+    <button class="b lis" id="l-btn">INGRESAR</button>
+    <div class="err" id="l-err"></div>
+  </div>
+</div>
+
+<!-- Toque inicial: habilita sonido, pantalla completa y pantalla siempre encendida -->
+<div class="capa" id="c-inicio">
+  <div class="caja" style="text-align:center">
+    <h1>LA MADRI | COCINA</h1>
+    <p>Pulsa el botón (con el control remoto: OK / Enter) para activar el sonido de alertas y la pantalla completa.</p>
+    <button class="b lis" id="i-btn" autofocus>▶ INICIAR PANTALLA</button>
+    <button class="b det" id="i-sin" style="margin-top:.6rem">Continuar sin sonido</button>
+  </div>
+</div>
+
+<!-- Configuracion del equipo -->
+<div class="capa" id="c-conf">
+  <div class="caja">
+    <h1>Configuración</h1>
+    <p>Se guarda solo en este equipo.</p>
+    <div class="fila">
+      <div><label for="cf-av">Advertencia (min)</label><input id="cf-av" type="number" min="1" max="120"></div>
+      <div><label for="cf-de">Demorado (min)</label><input id="cf-de" type="number" min="1" max="240"></div>
+    </div>
+    <div class="fila">
+      <div><label for="cf-li">Ocultar «Listo» tras (seg)</label><input id="cf-li" type="number" min="0" max="900"></div>
+      <div><label for="cf-es">Tamaño de letra</label>
+        <select id="cf-es"><option value="0.85">Pequeña</option><option value="1">Normal</option><option value="1.15">Grande</option><option value="1.3">Muy grande</option></select></div>
+    </div>
+    <label for="cf-vol">Volumen de alerta</label>
+    <select id="cf-vol"><option value="0.4">Bajo</option><option value="0.7">Medio</option><option value="1">Alto</option></select>
+    <button class="b lis" id="cf-ok">GUARDAR</button>
+    <button class="b det" id="cf-prueba" style="margin-top:.5rem">🔔 Probar sonido</button>
+    <button class="b det" id="cf-cancel" style="margin-top:.5rem">Cerrar</button>
+    <p id="cf-user" style="margin:1rem 0 0;font-size:.95rem"></p>
+    <button class="b det" id="cf-salir" style="margin-top:.4rem;background:#5a1a1a">Cerrar sesión de este equipo</button>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc,
+  onSnapshot, runTransaction, collection, query, where, serverTimestamp, arrayUnion } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// Mismo proyecto que el POS (la-madriguera-cb489)
+const firebaseConfig = {
+  apiKey: "AIzaSyBzAwD0HBDhWe7u_1o1toLPJLhiduHVJyo",
+  authDomain: "la-madriguera-cb489.firebaseapp.com",
+  projectId: "la-madriguera-cb489",
+  storageBucket: "la-madriguera-cb489.firebasestorage.app",
+  messagingSenderId: "648077569073",
+  appId: "1:648077569073:web:7b438dfdac9d5fef063910"
+};
+const COL='lm_cocina';
+const ROLES_OK=['cocina','pos','admin'];
+
+const app=initializeApp(firebaseConfig);
+// Copia local: si se cierra y reabre el navegador, los pedidos se ven al
+// instante y la conexion solo trae lo que cambio. Si el navegador del
+// televisor no la admite, se sigue sin ella.
+const db=(()=>{ try{ return initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})}); }
+  catch(e){ console.warn('Sin copia local',e); return getFirestore(app); } })();
+const auth=getAuth(app);
+
+// ── Configuracion por equipo ───────────────────────────────
+const CFG_DEF={aviso:5, demora:15, listoSeg:45, esc:1, vol:0.7};
+let CFG=Object.assign({},CFG_DEF);
+try{ Object.assign(CFG, JSON.parse(localStorage.getItem('kds_cfg')||'{}')); }catch(e){}
+const aplicarEsc=()=>document.documentElement.style.setProperty('--esc',String(CFG.esc||1));
+aplicarEsc();
+
+// ── Utilidades ─────────────────────────────────────────────
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ms=v=>!v?0:(typeof v==='number'?v:(v.toMillis?v.toMillis():0));
+const inicio=c=>ms(c.creado)||c.creadoMs||0;
+const hhmm=t=>t?new Date(t).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit',hour12:false}):'--:--';
+const dur=s=>{s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0');};
+function toast(msg,tipo,t){ const d=document.createElement('div'); d.className='tst '+(tipo||''); d.textContent=msg; $('toast').appendChild(d); setTimeout(()=>d.remove(),t||3200); }
+
+// ── Sonido ────────────────────────────────────────────────
+let AC=null, sonidoOK=false;
+function activarSonido(){
+  try{
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==='suspended') AC.resume();
+    sonidoOK=true;
+  }catch(e){ sonidoOK=false; }
+  pintarSonido();
+}
+function pintarSonido(){
+  const ok=sonidoOK&&AC&&AC.state==='running';
+  const b=$('b-sonido'); b.textContent=ok?'🔔':'🔇'; b.classList.toggle('alerta',!ok);
+  b.title=ok?'Sonido activo':'Activar sonido';
+}
+function pitido(veces){
+  if(!AC||AC.state!=='running'){ pintarSonido(); return; }
+  const v=Math.max(.05,Math.min(1,+CFG.vol||.7));
+  let t=AC.currentTime+.02;
+  for(let k=0;k<(veces||2);k++){
+    [[880,.16],[1320,.22]].forEach(([f,d])=>{
+      const o=AC.createOscillator(), g=AC.createGain();
+      o.type='sine'; o.frequency.value=f; o.connect(g); g.connect(AC.destination);
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(.6*v,t+.02); g.gain.exponentialRampToValueAtTime(.001,t+d);
+      o.start(t); o.stop(t+d+.02); t+=d+.04;
+    });
+    t+=.18;
+  }
+}
+
+// ── Pantalla completa y pantalla encendida ────────────────
+async function pantallaCompleta(){
+  const el=document.documentElement;
+  try{
+    if(!document.fullscreenElement&&!document.webkitFullscreenElement){
+      if(el.requestFullscreen) await el.requestFullscreen();
+      else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }
+  }catch(e){ /* el navegador del TV puede no permitirlo */ }
+}
+let wakeLock=null;
+async function mantenerEncendida(){
+  try{ if('wakeLock' in navigator&&document.visibilityState==='visible'){ wakeLock=await navigator.wakeLock.request('screen'); } }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ mantenerEncendida(); if(AC&&AC.state==='suspended'){AC.resume().then(pintarSonido).catch(()=>{});} } });
+
+$('i-btn').addEventListener('click',async()=>{ activarSonido(); pitido(1); await pantallaCompleta(); mantenerEncendida(); $('c-inicio').classList.remove('on'); });
+$('i-sin').addEventListener('click',()=>{ mantenerEncendida(); $('c-inicio').classList.remove('on'); });
+$('b-sonido').addEventListener('click',()=>{ activarSonido(); pitido(1); });
+$('b-full').addEventListener('click',()=>{ if(document.fullscreenElement){document.exitFullscreen&&document.exitFullscreen();} else pantallaCompleta(); });
+
+// ── Estado ────────────────────────────────────────────────
+let ACT=new Map(), LIS=new Map(), USUARIO='', UID='';
+let primeraCarga=true, enCurso=new Set(), confListo=null, detalleId=null;
+const recien=new Map();          // id -> hasta cuando resaltar
+const vistoListo=new Map();      // id -> momento local en que se vio LISTO
+let conocidos=new Set();
+try{ conocidos=new Set(JSON.parse(localStorage.getItem('kds_vistos')||'[]')); }catch(e){}
+function guardarConocidos(){ try{ localStorage.setItem('kds_vistos',JSON.stringify([...conocidos].slice(-400))); }catch(e){} }
+
+// ── Conexion ──────────────────────────────────────────────
+let desdeCache=true, ultimoServidor=0, offDesde=0, errorEscucha='';
+function pintarConexion(){
+  const c=$('conn'), b=$('banda');
+  const sinRed=!navigator.onLine;
+  if(errorEscucha){
+    c.className='conn off'; c.lastElementChild.textContent='Sin acceso';
+    b.className='on off'; b.textContent='⚠ '+errorEscucha; return;
+  }
+  if(sinRed||desdeCache){
+    if(!offDesde) offDesde=Date.now();
+    c.className='conn off'; c.lastElementChild.textContent='SIN CONEXIÓN';
+    b.className='on off';
+    b.textContent='⚠ SIN SINCRONIZACIÓN desde las '+hhmm(offDesde)+' — se muestra la última copia. Los pedidos nuevos NO están llegando.';
+  } else {
+    offDesde=0;
+    c.className='conn'; c.lastElementChild.textContent='En línea';
+    b.className=''; b.textContent='';
+  }
+}
+window.addEventListener('online',pintarConexion);
+window.addEventListener('offline',pintarConexion);
+
+// ── Escuchas en tiempo real (solo lo relevante) ───────────
+let desuscribir=[];
+function escuchar(){
+  desuscribir.forEach(f=>{try{f();}catch(e){}}); desuscribir=[];
+  primeraCarga=true;
+  // 1) Pendientes: NUEVO y EN PREPARACION
+  desuscribir.push(onSnapshot(query(collection(db,COL),where('estado','in',['nuevo','preparacion'])),{includeMetadataChanges:true},snap=>{
+    errorEscucha='';
+    desdeCache=snap.metadata.fromCache;
+    if(!desdeCache) ultimoServidor=Date.now();
+    let nuevos=0, adic=0;
+    snap.docChanges().forEach(ch=>{
+      const d=ch.doc.data(); d.id=d.id||ch.doc.id;
+      if(ch.type==='removed'){
+        const prev=ACT.get(ch.doc.id); ACT.delete(ch.doc.id);
+        // Salio de pendientes sin pasar por LISTO: se averigua si fue anulado
+        if(prev&&!primeraCarga) setTimeout(()=>{ if(!LIS.has(ch.doc.id)) revisarSalida(ch.doc.id,prev); },1500);
+        return;
+      }
+      const antes=ACT.get(ch.doc.id);
+      ACT.set(ch.doc.id,d);
+      if(!conocidos.has(ch.doc.id)){
+        conocidos.add(ch.doc.id);
+        // Al abrir o reconectar, lo que ya estaba NO suena; si es de hace mas de 1 hora tampoco
+        if(!primeraCarga&&Date.now()-inicio(d)<3600000){
+          d.tipo==='adicion'?adic++:nuevos++;
+          recien.set(ch.doc.id,Date.now()+9000);
+        }
+      } else if(antes&&!primeraCarga){
+        const anulAntes=(antes.items||[]).filter(i=>i.anulado).length, anulAhora=(d.items||[]).filter(i=>i.anulado).length;
+        if(anulAhora>anulAntes){ recien.set(ch.doc.id,Date.now()+9000); toast('✕ ANULACIÓN en '+d.mesa+' — revisar comanda','mal',6000); pitido(1); }
+      }
+    });
+    if(nuevos||adic){
+      pitido(2);
+      if(adic) toast('➕ Adición a mesa: '+adic+' comanda(s)','info',5000);
+      if(nuevos) toast('🆕 '+nuevos+' pedido(s) nuevo(s)','ok',5000);
+    }
+    guardarConocidos();
+    // La "carga inicial" termina con la primera respuesta REAL del servidor:
+    // lo que llega al reconectar y ya estaba pendiente no suena.
+    if(!snap.metadata.fromCache) primeraCarga=false;
+    pintarConexion(); pintar();
+  },err=>{ falloEscucha(err); }));
+  // 2) Listos recientes (para mostrarlos un momento antes de retirarlos)
+  desuscribir.push(onSnapshot(query(collection(db,COL),where('listoMs','>=',Date.now()-2*3600000)),snap=>{
+    snap.docChanges().forEach(ch=>{
+      if(ch.type==='removed'){ LIS.delete(ch.doc.id); return; }
+      const d=ch.doc.data(); d.id=d.id||ch.doc.id;
+      if(d.estado!=='listo') return;
+      if(!LIS.has(ch.doc.id)){
+        // Solo se muestran los que se marcaron hace poco
+        const edad=Date.now()-(d.listoMs||0);
+        vistoListo.set(ch.doc.id, edad<CFG.listoSeg*1000 ? Date.now()-Math.max(0,edad) : 0);
+      }
+      LIS.set(ch.doc.id,d);
+    });
+    pintar();
+  },err=>{ falloEscucha(err); }));
+}
+async function revisarSalida(id,prev){
+  try{
+    const s=await getDoc(doc(db,COL,id));
+    if(s.exists()&&s.data().estado==='anulado') toast('✕ '+prev.mesa+(prev.orden?' #'+prev.orden:'')+': pedido ANULADO por el mesero','mal',7000);
+  }catch(e){}
+}
+function falloEscucha(err){
+  console.warn(err);
+  const c=String(err&&err.code||'');
+  errorEscucha=c.includes('permission-denied')
+    ? 'Esta cuenta no tiene permiso para ver la cocina, o faltan las reglas de Firestore (lm_cocina).'
+    : 'Se perdió la conexión con la base de datos ('+(c||'error')+'). Reintentando…';
+  pintarConexion();
+  if(!c.includes('permission-denied')) setTimeout(escuchar,10000);
+}
+
+// ── Cambio de estado (transaccion: sin dobles toques ni choques) ──
+const DESDE={preparacion:['nuevo'], listo:['nuevo','preparacion']};
+async function cambiar(id,nuevo){
+  if(enCurso.has(id)) return;
+  enCurso.add(id); pintar();
+  try{
+    const r=await runTransaction(db,async tx=>{
+      const ref=doc(db,COL,id), s=await tx.get(ref);
+      if(!s.exists()) return 'no';
+      const d=s.data();
+      if(d.estado===nuevo) return 'ya';
+      if(!(DESDE[nuevo]||[]).includes(d.estado)) return 'otro';
+      const t=Date.now();
+      const upd={estado:nuevo, actualizado:serverTimestamp(),
+        historial:arrayUnion({estado:nuevo, por:USUARIO, uid:UID, ms:t, origen:'cocina'})};
+      if(nuevo==='preparacion'){ upd.iniciadoMs=t; upd.iniciadoPor=USUARIO; }
+      if(nuevo==='listo'){ upd.listoMs=t; upd.listoPor=USUARIO; }
+      tx.update(ref,upd);
+      return 'ok';
+    });
+    const d=ACT.get(id)||LIS.get(id)||{};
+    if(r==='ok') toast((nuevo==='listo'?'✓ LISTO: ':'✓ En preparación: ')+(d.mesa||''),'ok');
+    else if(r==='ya') toast('Ya estaba así: '+(d.mesa||''));
+    else toast('No se cambió: otro equipo ya lo actualizó','mal');
+  }catch(e){
+    const c=String(e&&e.code||'');
+    toast(c.includes('permission-denied')?'Sin permiso para cambiar el estado':'No se pudo guardar (sin conexión). Intenta de nuevo.','mal',5000);
+  }finally{ enCurso.delete(id); pintar(); }
+}
+
+// ── Pintado ───────────────────────────────────────────────
+function demoraDe(c){ return (Date.now()-inicio(c))/60000; }
+function itemsHTML(c,lim){
+  const its=c.items||[];
+  const mostrar=lim?its.slice(0,lim):its;
+  const adi=c.tipo==='adicion';
+  return mostrar.map(i=>`<li class="it${i.anulado?' anulado':''}">
+      <span class="q${adi?' mas':''}">${adi?'+':''}${esc(i.qty)}</span>
+      <span class="nm">${esc(i.nombre)}${i.persona?`<span class="pe">P${esc(i.persona)}</span>`:''}
+        ${i.variante?`<span class="va">${esc(i.variante)}</span>`:''}
+        ${i.nota?`<span class="no">⚠ ${esc(i.nota)}</span>`:''}
+        ${i.anulado?`<span class="an">ANULADO${i.motivoAnulacion?' · '+esc(i.motivoAnulacion):''}</span>`:''}
+      </span></li>`).join('');
+}
+function tarjeta(c,enDetalle){
+  const min=demoraDe(c), listo=c.estado==='listo';
+  const dem=!listo&&min>=CFG.demora;
+  const cls=['card',c.estado]; if(dem) cls.push('demorado'); if(!enDetalle&&(recien.get(c.id)||0)>Date.now()) cls.push('recien');
+  const est={nuevo:'NUEVO',preparacion:'EN PREPARACIÓN',listo:'LISTO'}[c.estado]||c.estado.toUpperCase();
+  const lim=enDetalle?0:7, total=(c.items||[]).length;
+  const ocupado=enCurso.has(c.id);
+  const anul=(c.items||[]).some(i=>i.anulado);
+  const seg=listo?((c.listoMs||Date.now())-inicio(c))/1000:(Date.now()-inicio(c))/1000;
+  return `<article class="${cls.join(' ')}" data-id="${esc(c.id)}">
+    <div class="cab">
+      <div><div class="mesa">${esc(c.mesa||'—')}</div>
+        <div class="orden">${c.orden?'Orden #'+esc(c.orden):'Orden '+hhmm(inicio(c))}${c.lote>1?' · comanda '+esc(c.lote):''}</div></div>
+      <div class="t"><div class="crono ${listo?'':(min>=CFG.demora?'tarde':(min>=CFG.aviso?'aviso':''))}" data-crono="${esc(c.id)}">${dur(seg)}</div>
+        <div class="hora">Recibido ${hhmm(inicio(c))}</div></div>
+    </div>
+    <div class="chips"><span class="chip e-${esc(c.estado)}">${est}</span>${dem?'<span class="chip dem">DEMORADO</span>':''}${c.tipo==='adicion'?'<span class="chip adi">ADICIÓN A MESA</span>':''}${anul?'<span class="chip anu">CON ANULACIÓN</span>':''}</div>
+    <ul class="items${lim&&total>lim?' corte':''}">${itemsHTML(c,lim)}</ul>
+    ${lim&&total>lim?`<div class="mas-items">+ ${total-lim} producto(s) más — ver detalles</div>`:''}
+    ${enDetalle?`<div class="hist">Mesero: ${esc(c.mesero||'—')}<br>${(c.historial||[]).map(h=>`${hhmm(h.ms)} · ${esc(h.estado)} · ${esc(h.por||'')}${h.origen?' ('+esc(h.origen)+')':''}`).join('<br>')}</div>`:''}
+    ${listo?`<div class="pie">Listo ${hhmm(c.listoMs)}${c.listoPor?' · '+esc(c.listoPor):''}</div>`:''}
+    <div class="acc">
+      ${c.estado==='nuevo'?`<button class="b ini" data-acc="preparacion" data-id="${esc(c.id)}" ${ocupado?'disabled':''}>INICIAR PREPARACIÓN</button>`:''}
+      ${!listo?`<button class="b lis${confListo&&confListo.id===c.id?' conf':''}${c.estado!=='nuevo'?' full':''}" data-acc="listo" data-id="${esc(c.id)}" ${ocupado?'disabled':''}>${confListo&&confListo.id===c.id?'¿CONFIRMAR LISTO?':'MARCAR LISTO'}</button>`:''}
+      ${enDetalle?`<button class="b det full" data-acc="cerrar">CERRAR</button>`:`<button class="b det full" data-acc="detalle" data-id="${esc(c.id)}">VER DETALLES</button>`}
+    </div>
+  </article>`;
+}
+function visibles(){
+  const ahora=Date.now();
+  const lista=[...ACT.values()];
+  LIS.forEach((c,id)=>{ if(ACT.has(id)) return; const v=vistoListo.get(id)||0; if(v&&ahora-v<CFG.listoSeg*1000) lista.push(c); });
+  // Prioridad: pendientes primero, del mas antiguo al mas nuevo; listos al final
+  return lista.sort((a,b)=>((a.estado==='listo')-(b.estado==='listo'))||(inicio(a)-inicio(b)));
+}
+function pintar(){
+  const pend=[...ACT.values()];
+  const dem=pend.filter(c=>demoraDe(c)>=CFG.demora).length;
+  $('k-n').textContent=pend.filter(c=>c.estado==='nuevo').length;
+  $('k-p').textContent=pend.filter(c=>c.estado==='preparacion').length;
+  $('k-d').textContent=dem; $('k-dbox').classList.toggle('on',dem>0);
+  $('k-t').textContent=pend.length;
+  document.title=(pend.length?'('+pend.length+') ':'')+'LA MADRI | COCINA';
+  const v=visibles();
+  const foco=document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.id+'|'+document.activeElement.dataset.acc:'';
+  $('grid').innerHTML=v.length?v.map(c=>tarjeta(c,false)).join('')
+    :`<div class="vacio">Sin pedidos pendientes<small>${desdeCache?'Esperando conexión…':'Los pedidos aparecerán aquí automáticamente'}</small></div>`;
+  // Conserva el foco del control remoto entre repintados
+  if(foco){ const [i,a]=foco.split('|'); const el=$('grid').querySelector(`[data-id="${CSS.escape(i)}"][data-acc="${a}"]`); if(el) el.focus(); }
+  if(detalleId) pintarDetalle();
+}
+function pintarDetalle(){
+  const c=ACT.get(detalleId)||LIS.get(detalleId);
+  if(!c){ cerrarDetalle(); return; }
+  $('det').innerHTML=tarjeta(c,true); $('det').classList.add('on');
+}
+function cerrarDetalle(){ detalleId=null; $('det').classList.remove('on'); $('det').innerHTML=''; }
+
+function onAccion(e){
+  const b=e.target.closest('[data-acc]'); if(!b) return;
+  const acc=b.dataset.acc, id=b.dataset.id;
+  if(acc==='detalle'){ detalleId=id; pintarDetalle(); return; }
+  if(acc==='cerrar'){ cerrarDetalle(); return; }
+  if(acc==='preparacion'){ cambiar(id,'preparacion'); return; }
+  if(acc==='listo'){
+    // Dos toques: evita marcar listo por accidente
+    if(confListo&&confListo.id===id&&Date.now()<confListo.hasta){ confListo=null; cambiar(id,'listo'); if(detalleId===id) cerrarDetalle(); return; }
+    confListo={id,hasta:Date.now()+4000}; pintar();
+    setTimeout(()=>{ if(confListo&&confListo.id===id&&Date.now()>=confListo.hasta){ confListo=null; pintar(); } },4100);
+  }
+}
+$('grid').addEventListener('click',onAccion);
+$('det').addEventListener('click',e=>{ if(e.target.id==='det') cerrarDetalle(); else onAccion(e); });
+document.addEventListener('keydown',e=>{ if(detalleId&&(e.key==='Escape'||e.key==='Backspace'||e.key==='GoBack')){ e.preventDefault(); cerrarDetalle(); } });
+
+// Reloj, cronometros y retiro de los LISTO (sin repintar todo cada segundo)
+setInterval(()=>{
+  const ahora=new Date();
+  $('reloj').textContent=hhmm(ahora);
+  let repintar=false;
+  document.querySelectorAll('[data-crono]').forEach(el=>{
+    const c=ACT.get(el.dataset.crono); if(!c) return;
+    const min=demoraDe(c);
+    el.textContent=dur((Date.now()-inicio(c))/1000);
+    const cl=min>=CFG.demora?'tarde':(min>=CFG.aviso?'aviso':'');
+    const prev=el.classList.contains('tarde')?'tarde':(el.classList.contains('aviso')?'aviso':'');
+    if(prev!==cl){
+      el.className='crono '+cl;
+      if(cl==='tarde'||prev==='tarde') repintar=true;   // entra/sale de DEMORADO: cambia la tarjeta
+    }
+  });
+  LIS.forEach((c,id)=>{ const v=vistoListo.get(id)||0; if(v&&Date.now()-v>=CFG.listoSeg*1000){ vistoListo.set(id,0); repintar=true; } });
+  recien.forEach((h,id)=>{ if(h<Date.now()){ recien.delete(id); } });
+  if(repintar) pintar();
+  // Si la conexion sigue caida mas de 5 minutos con red disponible, recarga
+  // la pagina (los pedidos estan en Firebase, no se pierde nada)
+  if(offDesde&&navigator.onLine&&Date.now()-offDesde>5*60000&&!detalleId){ location.reload(); }
+  pintarConexion();
+},1000);
+// Recarga diaria de madrugada: renueva la conexion y las ventanas de consulta
+setInterval(()=>{ const h=new Date(); if(h.getHours()===4&&h.getMinutes()===0) location.reload(); },60000);
+
+// ── Configuracion ─────────────────────────────────────────
+$('b-conf').addEventListener('click',()=>{
+  $('cf-av').value=CFG.aviso; $('cf-de').value=CFG.demora; $('cf-li').value=CFG.listoSeg;
+  $('cf-es').value=String(CFG.esc); $('cf-vol').value=String(CFG.vol);
+  $('cf-user').textContent='Sesión: '+(USUARIO||'—');
+  $('c-conf').classList.add('on'); $('cf-av').focus();
+});
+$('cf-cancel').addEventListener('click',()=>$('c-conf').classList.remove('on'));
+$('cf-prueba').addEventListener('click',()=>{ activarSonido(); CFG.vol=+$('cf-vol').value; pitido(2); });
+$('cf-ok').addEventListener('click',()=>{
+  const av=Math.max(1,+$('cf-av').value||CFG_DEF.aviso), de=Math.max(av+1,+$('cf-de').value||CFG_DEF.demora);
+  CFG={aviso:av, demora:de, listoSeg:Math.max(0,+$('cf-li').value||0), esc:+$('cf-es').value||1, vol:+$('cf-vol').value||.7};
+  try{ localStorage.setItem('kds_cfg',JSON.stringify(CFG)); }catch(e){}
+  aplicarEsc(); $('c-conf').classList.remove('on'); pintar(); toast('✓ Configuración guardada','ok');
+});
+$('cf-salir').addEventListener('click',async()=>{ if(confirm('¿Cerrar la sesión de cocina en este equipo?')){ await signOut(auth); location.reload(); } });
+
+// ── Sesion y permisos ─────────────────────────────────────
+async function ingresar(){
+  const m=$('l-mail').value.trim(), p=$('l-pass').value, er=$('l-err');
+  er.style.display='none';
+  if(!m||!p){ er.textContent='Ingresa correo y contraseña'; er.style.display='block'; return; }
+  $('l-btn').disabled=true;
+  try{ await signInWithEmailAndPassword(auth,m,p); }
+  catch(e){
+    const map={'auth/invalid-credential':'Correo o contraseña incorrectos','auth/too-many-requests':'Demasiados intentos; espera unos minutos','auth/network-request-failed':'Sin conexión a internet'};
+    er.textContent=map[e.code]||('Error: '+(e.code||e.message)); er.style.display='block';
+  } finally{ $('l-btn').disabled=false; }
+}
+$('l-btn').addEventListener('click',ingresar);
+['l-mail','l-pass'].forEach(id=>$(id).addEventListener('keydown',e=>{ if(e.key==='Enter') ingresar(); }));
+
+let iniciado=false;
+onAuthStateChanged(auth,async user=>{
+  if(!user){ $('c-login').classList.add('on'); setTimeout(()=>$('l-mail').focus(),100); return; }
+  let rol='', nombre='';
+  try{ const s=await getDoc(doc(db,'roles',user.uid)); rol=s.exists()?(s.data().rol||''):''; nombre=s.exists()?(s.data().nombre||''):''; }
+  catch(e){ rol=''; }
+  if(!ROLES_OK.includes(rol)){
+    await signOut(auth);
+    $('c-login').classList.add('on');
+    $('l-err').textContent='Esta cuenta no tiene acceso a la pantalla de cocina (rol: '+(rol||'ninguno')+').';
+    $('l-err').style.display='block';
+    return;
+  }
+  USUARIO=nombre||(user.email||'').split('@')[0]; UID=user.uid;
+  $('c-login').classList.remove('on');
+  if(!iniciado){ iniciado=true; $('c-inicio').classList.add('on'); setTimeout(()=>$('i-btn').focus(),100); escuchar(); }
+});
+pintarSonido(); pintar();
+</script>
+</body>
+</html>

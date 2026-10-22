@@ -180,6 +180,41 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 @media(max-width:540px){.sg3{grid-template-columns:1fr 1fr}}
 #cancel-modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200}
 .cancel-box{background:#fff;border-radius:10px;padding:24px;width:320px;max-width:90vw}
+
+/* Inventario rediseñado (22-oct-2026) */
+.sg4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.inv-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--border)}
+.inv-vistas{display:flex;gap:3px;background:var(--bg3);border-radius:var(--rs);padding:3px}
+.inv-vista{border:none;background:none;padding:6px 11px;border-radius:6px;font-family:inherit;font-size:12px;color:var(--text2);cursor:pointer;white-space:nowrap}
+.inv-vista.on{background:var(--bg2);color:var(--text);font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.inv-head,.inv-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 76px 76px 60px 96px 200px;gap:10px;align-items:center;padding:9px 14px}
+.inv-pos .inv-head,.inv-pos .inv-row{grid-template-columns:minmax(0,1fr) 120px 76px 96px 130px}
+.inv-head{background:var(--bg);font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border)}
+.inv-row{border-bottom:1px solid var(--border);font-size:12px}
+.inv-row.inv-inact{opacity:.6}
+.inv-edit{background:var(--acl)}
+.inv-n{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inv-c{font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inv-cat{font-size:12px;color:var(--text2)}
+.inv-num{text-align:right}
+.inv-acc{display:flex;gap:5px;justify-content:flex-end;align-items:center}
+.inv-del{background:var(--rbg);color:var(--red);border:1px solid var(--rbrd)}
+.inv-pie{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;font-size:11px;color:var(--text3)}
+.inv-modal-bg{position:fixed;inset:0;background:rgba(46,37,22,.55);z-index:9996;display:none;align-items:center;justify-content:center;padding:16px}
+.inv-modal{background:#fff;border-radius:14px;padding:22px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.25)}
+.ing-grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:start}
+.ing-row{display:grid;grid-template-columns:minmax(0,1fr) 64px 128px 92px 92px;gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--border)}
+.ing-head{font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3)}
+.ing-qty{display:flex;gap:5px;align-items:center;justify-content:center}
+.ing-in{width:52px;padding:5px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:13px;text-align:center;font-family:inherit}
+.ing-aviso{border-radius:var(--rs);padding:8px 10px;font-size:11px;margin:6px 0;line-height:1.5}
+.ing-res{position:sticky;top:10px}
+#inv-q,#ing-scan{width:100%;box-sizing:border-box;padding:9px 10px 9px 32px;border:1.5px solid var(--b2);border-radius:var(--rs);font-family:inherit;font-size:13px;background:var(--bg2);outline:none}
+#inv-q:focus{border-color:var(--acc)}
+#ing-scan{border:2px solid var(--acc);font-size:14px;padding:11px 10px 11px 34px}
+@media(max-width:900px){.ing-grid{grid-template-columns:1fr}.ing-res{position:static}.sg4{grid-template-columns:1fr 1fr}}
+@media(max-width:760px){.inv-head{display:none}.inv-row,.inv-pos .inv-row{display:flex;flex-wrap:wrap;gap:6px 10px}.inv-prod{flex:1 1 100%}.inv-cat,.inv-adm{display:none}.inv-acc{flex:1;justify-content:flex-end}
+  .ing-row{grid-template-columns:minmax(0,1fr) 56px 120px}.ing-row>div:nth-child(4),.ing-row>div:nth-child(5){display:none}}
 </style>
 </head>
 <body>
@@ -363,7 +398,7 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
@@ -815,7 +850,10 @@ const BIT_ETIQUETAS={
   apertura_caja:'Apertura de caja',
   cierre_caja:'Cierre de caja',
   cierre_caja_sin_conteo:'CIERRE DE CAJA SIN CONTEO',
-  accion_admin:'Accion de administracion'
+  accion_admin:'Accion de administracion',
+  producto_eliminado:'PRODUCTO ELIMINADO',
+  ingreso_mercaderia:'Ingreso de mercaderia',
+  ajuste_stock:'Ajuste de stock'
 };
 
 // ses (opcional) = {db, uid, email} de la sesion temporal del administrador.
@@ -1722,6 +1760,8 @@ function subRT(){
     }
     if(_appShown&&!_writing) debouncedRender();
   },()=>{online=false;showErr();});
+  // Pantalla de cocina: lotes pendientes y listos recientes (no bloquea el POS)
+  cocinaSuscribir(debouncedRender);
   // Fallback: show app after 4 seconds no matter what
   setTimeout(function(){ showApp(); }, 4000);
 }
@@ -1846,7 +1886,7 @@ function rPOS(){
     const s=tb.status,sel=tb.id===selT;
     const tbT=tb.order.reduce((a,i)=>a+i.price*i.qty,0);
     return `<button class="mchip ${s}${sel?' sel':''}" data-tid="${tb.id}">
-      ${esc(tb.name)}${s!=='libre'?`<br><span style="font-size:10px">${fmt(tbT)}</span>`:''}
+      ${esc(tb.name)}${cocinaChip(tb)}${s!=='libre'?`<br><span style="font-size:10px">${fmt(tbT)}</span>`:''}
     </button>`;
   }).join('');
 
@@ -1913,6 +1953,7 @@ function rPOS(){
         <div class="oin">
           <div class="oinn">${esc(i.name)}${pTag}${personaMode&&!splitMode?`<span style="font-size:9px;color:var(--text3);margin-left:4px">${i.persona?'':'← toca para asignar'}</span>`:''}</div>
           ${i.variant?`<div class="oiv">${i.variant}</div>`:''}
+          ${i.nota?`<div class="oiv" style="color:#b45309;font-weight:600">📝 ${esc(i.nota)}</div>`:''}
         </div>
         ${splitMode?`<div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
             <button class="qb" data-sp="${i.lid}" data-sd="-1" style="${selQty===0?'opacity:.3':''}">−</button>
@@ -1925,6 +1966,7 @@ function rPOS(){
             ${hasAny?fmt(i.price*selQty):fmt(i.price*i.qty)}
           </span>`
         :`<div class="oic">
+            ${wasSent?'':`<button class="qb" data-nota="${i.lid}" title="Observacion para cocina (sin cebolla, extra queso...)" style="font-size:11px">📝</button>`}
             ${wasSent?'':`<button class="qb" data-qp="${i.lid}" data-d="-1">−</button>`}
             <span style="font-size:12px;font-weight:700;min-width:15px;text-align:center">${i.qty}</span>
             ${wasSent?'':`<button class="qb" data-qp="${i.lid}" data-d="1">+</button>`}
@@ -2058,6 +2100,7 @@ function rPOS(){
             }).join('')}
           </div>
         </div>`:''}
+        ${cocinaPanelHTML(t)}
         <div id="oitems">${items}</div>
         ${ftr}
       </div>
@@ -2108,7 +2151,7 @@ function attachPOS(){
 
   // Qty (only for +/- buttons, not cancel X)
   mc.querySelectorAll('.qb:not([data-cancelitem])').forEach(el=>el.addEventListener('click',()=>{
-    if(el.dataset.cancelitem||el.dataset.sp)return;
+    if(el.dataset.cancelitem||el.dataset.sp||el.dataset.nota)return;
     const t=T.find(x=>x.id===selT);if(!t)return;
     const it=t.order.find(i=>i.lid===el.dataset.qp);if(!it)return;
     it.qty+=parseInt(el.dataset.d);t.order=t.order.filter(i=>i.qty>0);
@@ -2122,6 +2165,26 @@ function attachPOS(){
 
   // Comanda
   mc.querySelector('#bcomanda')?.addEventListener('click',()=>{enviarComanda();});
+  // Observacion por item (solo antes de enviarlo a cocina)
+  mc.querySelectorAll('[data-nota]').forEach(el=>el.addEventListener('click',e=>{
+    e.stopPropagation();
+    const t=T.find(x=>x.id===selT);if(!t)return;
+    const it=t.order.find(i=>i.lid===el.dataset.nota);if(!it)return;
+    const r=prompt('Observacion para cocina de "'+it.name+'"\n(ej: sin cebolla, sin picante, extra queso). Deja vacio para quitarla.',it.nota||'');
+    if(r===null)return;
+    const v=r.replace(/\s+/g,' ').trim().slice(0,120);
+    if(v) it.nota=v; else delete it.nota;
+    render(); sT();
+  }));
+  // Estados de cocina desde el POS (mesero / administracion)
+  mc.querySelectorAll('[data-coc-estado]').forEach(el=>el.addEventListener('click',async e=>{
+    e.stopPropagation();
+    if(el.disabled)return;
+    const [id,est]=el.dataset.cocEstado.split('|');
+    if(est==='listo'&&!confirm('¿Marcar este pedido como LISTO?\nDesaparecera de la pantalla de cocina.'))return;
+    el.disabled=true; el.style.opacity='.5';
+    await cocinaCambiarEstado(id,est);
+  }));
 
   // Cobro
   mc.querySelector('#bcobrar')?.addEventListener('click',()=>{if(!cajaPuedeCobrar())return;cobConf=true;modoParcial=false;pagosParciales=[];itemSel=null;render();});
@@ -2419,17 +2482,20 @@ function enviarComanda(){
   // GROUP by name+variant and sum quantities for cocina
   const grouped={};
   toSendRaw.forEach(i=>{
-    const key=(i.name+(i.variant?'|'+i.variant:'')).toLowerCase();
-    if(!grouped[key]) grouped[key]={name:i.name,variant:i.variant||null,qty:0};
+    const key=(i.name+(i.variant?'|'+i.variant:'')+(i.nota?'|'+i.nota:'')).toLowerCase();
+    if(!grouped[key]) grouped[key]={name:i.name,variant:i.variant||null,nota:i.nota||'',qty:0};
     grouped[key].qty+=i.qty;
   });
   const toSend=Object.values(grouped);
+  const _esAdicionCocina=!!(t.comandas&&t.comandas.length>0);
 
   const comanda={id:`c${Date.now()}`,items:t.order.map(i=>({...i})),time:localISO(),user:turnoUser};
   if(!t.comandas)t.comandas=[];
   t.comandas.push(comanda);
   t.status='enviada';
   sT();
+  // KDS: publica en la pantalla de cocina SOLO lo nuevo de este envio
+  cocinaPublicar(t, comanda, toSendRaw, _esAdicionCocina);
 
   // Print comanda
   const now=new Date();
@@ -2440,7 +2506,7 @@ function enviarComanda(){
     <div>Hora: ${now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})}</div>
     <div>Atiende: ${esc(turnoUser)}</div>
     <div class="line"></div>
-    ${toSend.map(i=>`<div><strong>${i.qty}x ${esc(i.name)}</strong>${i.variant?`<br><span style="margin-left:12px;font-size:11px">-> ${i.variant}</span>`:''}</div>`).join('')}
+    ${toSend.map(i=>`<div><strong>${i.qty}x ${esc(i.name)}</strong>${i.variant?`<br><span style="margin-left:12px;font-size:11px">-> ${esc(i.variant)}</span>`:''}${i.nota?`<br><span style="margin-left:12px;font-size:11px">** ${esc(i.nota)}</span>`:''}</div>`).join('')}
     <div class="line"></div>
   `;
   // Open print window
@@ -2452,6 +2518,187 @@ function enviarComanda(){
   </style></head><body>`+html+`</body></html>`);
   pwc.document.close();
   setTimeout(()=>{pwc.print();},400);
+}
+
+// ══ PANTALLA DE COCINA (KDS) ══════════════════════════════════════
+// Las mesas viven en UN solo documento (madu/tables) que cada dispositivo
+// reescribe completo, y sus "comandas" se vacian al cobrar. Por eso la
+// cocina NO escribe ahi: tendria choques con los meseros y perderia el
+// historial. Cada envio de comanda crea UN documento en lm_cocina (un
+// "lote": el pedido inicial o una adicion a la mesa). El id del documento
+// es el id de la comanda, asi que un reintento nunca lo duplica.
+// La cocina y el POS solo cambian el ESTADO, con transaccion, y cada
+// cambio queda en "historial" con quien y cuando.
+const COCINA_COL='lm_cocina';
+// Categorias que NO se preparan (no van a la pantalla de cocina)
+const COCINA_EXCLUIR=['Libros','Consignados','Taller & Merch'];
+const COCINA_LISTO_VISIBLE_MIN=30;   // en el POS, cuanto tiempo se ve un "listo"
+let COC_ACT=[], COC_LIS=[], COC=[];
+let _cocDisponible=true, _cocListosVistos=null;
+let _cocRender=()=>{ try{ if(_appShown&&!_writing&&view==='pos'&&!cobConf&&!splitMode&&!personaMode) render(); }catch(e){} };
+
+function _cocUsuario(){ return turnoUser||authUser()||''; }
+function _cocUid(){ try{ return (auth.currentUser&&auth.currentUser.uid)||''; }catch(e){ return ''; } }
+function _cocMs(v){ if(!v) return 0; if(typeof v==='number') return v; if(v.toMillis) return v.toMillis(); return 0; }
+function _cocInicio(c){ return _cocMs(c.creado)||c.creadoMs||0; }
+
+async function cocinaPublicar(t, comanda, nuevos, esAdicion){
+  try{
+    const items=(nuevos||[]).filter(i=>i&&!COCINA_EXCLUIR.includes(i.category||'')).map(i=>({
+      lid:i.lid, productId:i.productId||null, nombre:i.name||'', variante:i.variant||null,
+      qty:+i.qty||1, nota:i.nota||'', persona:i.persona||null, categoria:i.category||'', anulado:false
+    }));
+    if(!items.length) return;                       // solo libros/merch: nada que preparar
+    const ahora=Date.now(), dia=today();
+    const base={
+      id:comanda.id, mesaId:t.id, mesa:t.name, tipo:esAdicion?'adicion':'nuevo',
+      lote:(t.comandas||[]).length, items, estado:'nuevo', dia,
+      creado:serverTimestamp(), creadoMs:ahora, creadoLocal:comanda.time||localISO(),
+      mesero:_cocUsuario(), meseroUid:_cocUid(),
+      historial:[{estado:'nuevo', por:_cocUsuario(), uid:_cocUid(), ms:ahora}]
+    };
+    const ref=doc(db,COCINA_COL,comanda.id);
+    try{
+      // Numero de orden correlativo del dia, en la misma transaccion
+      await conLimite(runTransaction(db,async tx=>{
+        const cRef=doc(db,'lm_cocina_meta','contador');
+        const c=await tx.get(cRef);
+        const d=c.exists()?c.data():{};
+        const n=(d.dia===dia?(+d.n||0):0)+1;
+        tx.set(cRef,{dia,n});
+        tx.set(ref,Object.assign({},base,{orden:n}));
+      }));
+    }catch(e){
+      if(String(e&&e.code||'').includes('permission-denied')){ avisoError(msgError(e,'enviar la comanda a la pantalla de cocina')); return; }
+      // Sin servidor: la escritura queda en cola (copia local) y sube sola al
+      // volver internet. Sin numero correlativo: la cocina muestra la hora.
+      setDoc(ref,Object.assign({},base,{orden:null})).catch(e2=>{
+        if(!String(e2&&e2.code||'').includes('permission-denied')||!COC.some(c=>c.id===comanda.id))
+          avisoError(msgError(e2,'enviar la comanda a la pantalla de cocina'));
+      });
+      avisoCocina('Comanda de '+t.name+' en cola para cocina: se mostrara en la pantalla al volver la conexion.', '#92400e');
+    }
+  }catch(e){ console.error('cocinaPublicar',e); avisoError(msgError(e,'enviar la comanda a la pantalla de cocina')); }
+}
+
+// Transicion de estado con transaccion: solo avanza si el estado actual es
+// el esperado (evita dobles toques y cambios simultaneos entre equipos).
+const _COC_DESDE={preparacion:['nuevo'], listo:['nuevo','preparacion']};
+async function cocinaCambiarEstado(id, nuevo){
+  const ref=doc(db,COCINA_COL,id);
+  try{
+    const r=await conLimite(runTransaction(db,async tx=>{
+      const s=await tx.get(ref);
+      if(!s.exists()) return 'no-existe';
+      const d=s.data();
+      if(d.estado===nuevo) return 'ya';
+      if(!(_COC_DESDE[nuevo]||[]).includes(d.estado)) return 'estado-'+d.estado;
+      const ms=Date.now(), upd={estado:nuevo, actualizado:serverTimestamp(),
+        historial:arrayUnion({estado:nuevo, por:_cocUsuario(), uid:_cocUid(), ms, origen:'pos'})};
+      if(nuevo==='preparacion'){ upd.iniciadoMs=ms; upd.iniciadoPor=_cocUsuario(); }
+      if(nuevo==='listo'){ upd.listoMs=ms; upd.listoPor=_cocUsuario(); }
+      tx.update(ref,upd);
+      return 'ok';
+    }));
+    if(r==='ok') avisoCocina(nuevo==='listo'?'✓ Pedido marcado LISTO':'✓ Pedido en preparacion','#1f6b45');
+    else if(r==='ya') avisoCocina('Ese pedido ya estaba en ese estado.','#555');
+    else avisoCocina('No se cambio: el pedido ya fue actualizado desde otro equipo.','#92400e');
+  }catch(e){ avisoError(msgError(e,'cambiar el estado del pedido en cocina')); }
+  _cocRender();
+}
+window.cocinaCambiarEstado=cocinaCambiarEstado;
+
+// Anulacion de un item YA enviado: se marca anulado (no se borra) en los
+// lotes pendientes de esa mesa. Si el lote queda sin nada, pasa a "anulado".
+async function cocinaAnular(mesaId, lid, item, motivo){
+  const pend=COC_ACT.filter(c=>c.mesaId===mesaId);
+  let afect=pend.filter(c=>(c.items||[]).some(i=>i.lid===lid&&!i.anulado));
+  // El lid cambia al reasignar persona: se ubica por producto y variante
+  if(!afect.length&&item) afect=pend.filter(c=>(c.items||[]).some(i=>!i.anulado&&i.productId===item.productId&&(i.variante||null)===(item.variant||null)));
+  for(const c of afect){
+    const marca=i=>i.anulado?i:((i.lid===lid||(item&&i.productId===item.productId&&(i.variante||null)===(item.variant||null)))
+      ? Object.assign({},i,{anulado:true, motivoAnulacion:motivo||'', anuladoPor:_cocUsuario(), anuladoMs:Date.now()}) : i);
+    const ref=doc(db,COCINA_COL,c.id);
+    try{
+      await conLimite(runTransaction(db,async tx=>{
+        const s=await tx.get(ref); if(!s.exists()) return;
+        const d=s.data(); if(d.estado!=='nuevo'&&d.estado!=='preparacion') return;
+        const items=(d.items||[]).map(marca);
+        const upd={items, actualizado:serverTimestamp(),
+          historial:arrayUnion({estado:'anulacion', por:_cocUsuario(), uid:_cocUid(), ms:Date.now(), detalle:(item&&item.name||'')+' - '+(motivo||'')})};
+        if(items.every(i=>i.anulado)) upd.estado='anulado';
+        tx.update(ref,upd);
+      }));
+    }catch(e){
+      if(String(e&&e.code||'').includes('permission-denied')){ avisoError(msgError(e,'avisar la anulacion a cocina')); continue; }
+      // Sin servidor: se encola con la ultima copia conocida
+      const items=(c.items||[]).map(marca), upd={items, historial:arrayUnion({estado:'anulacion', por:_cocUsuario(), uid:_cocUid(), ms:Date.now()})};
+      if(items.every(i=>i.anulado)) upd.estado='anulado';
+      updateDoc(ref,upd).catch(e2=>avisoError(msgError(e2,'avisar la anulacion a cocina')));
+    }
+  }
+}
+
+function cocinaSuscribir(rerender){
+  if(typeof rerender==='function') _cocRender=rerender;
+  const err=e=>{ console.warn('Cocina:',e); _cocDisponible=false; _cocRender(); };
+  onSnapshot(query(collection(db,COCINA_COL),where('estado','in',['nuevo','preparacion'])),snap=>{
+    _cocDisponible=true; COC_ACT=snap.docs.map(d=>d.data()); _cocUnir();
+  },err);
+  onSnapshot(query(collection(db,COCINA_COL),where('listoMs','>=',Date.now()-COCINA_LISTO_VISIBLE_MIN*60000)),snap=>{
+    const lis=snap.docs.map(d=>d.data()).filter(c=>c.estado==='listo');
+    // Aviso al mesero cuando cocina termina un pedido (no en la carga inicial)
+    if(_cocListosVistos){
+      lis.forEach(c=>{ if(!_cocListosVistos.has(c.id)&&!snap.metadata.hasPendingWrites)
+        avisoCocina('✅ '+c.mesa+(c.orden?' · orden #'+c.orden:'')+': pedido LISTO para servir','#1f6b45',7000); });
+    }
+    _cocListosVistos=new Set(lis.map(c=>c.id));
+    COC_LIS=lis; _cocUnir();
+  },err);
+}
+function _cocUnir(){
+  const m=new Map(); COC_LIS.forEach(c=>m.set(c.id,c)); COC_ACT.forEach(c=>m.set(c.id,c));
+  COC=[...m.values()].sort((a,b)=>_cocInicio(a)-_cocInicio(b));
+  if(_appShown&&!_writing) _cocRender();
+}
+
+function cocinaChip(tb){
+  const p=COC_ACT.filter(c=>c.mesaId===tb.id);
+  if(p.length) return ' <span title="En cocina">'+(p.some(c=>c.estado==='nuevo')?'🟢':'🍳')+'</span>';
+  if(tb.status!=='libre'&&COC_LIS.some(c=>c.mesaId===tb.id&&Date.now()-(c.listoMs||0)<15*60000)) return ' <span title="Listo en cocina">✅</span>';
+  return '';
+}
+function cocinaPanelHTML(t){
+  if(!t) return '';
+  const lotes=COC.filter(c=>c.mesaId===t.id&&(c.estado!=='listo'||Date.now()-(c.listoMs||0)<COCINA_LISTO_VISIBLE_MIN*60000));
+  if(!lotes.length) return _cocDisponible?'':'';
+  const est={nuevo:['NUEVO','#dcfce7','#166534'],preparacion:['EN PREPARACIÓN','#fef9c3','#854d0e'],listo:['LISTO','#e0f2fe','#075985']};
+  return `<div style="margin:0 0 8px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:#fbfaf7">
+    <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">🍳 Cocina</div>
+    ${lotes.map(c=>{
+      const e=est[c.estado]||[c.estado,'#eee','#333'];
+      const min=Math.max(0,Math.floor((Date.now()-_cocInicio(c))/60000));
+      const n=(c.items||[]).filter(i=>!i.anulado).reduce((a,i)=>a+(+i.qty||0),0);
+      return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px dashed var(--border);font-size:11px">
+        <span style="background:${e[1]};color:${e[2]};font-weight:700;border-radius:6px;padding:2px 6px;white-space:nowrap">${e[0]}</span>
+        <span style="flex:1;color:var(--text2)">${c.tipo==='adicion'?'Adición · ':''}${c.orden?'#'+c.orden+' · ':''}${n} ítem(s) · ${c.estado==='listo'?'listo':min+' min'}</span>
+        ${c.estado==='nuevo'||c.estado==='preparacion'?`<button class="btn btn-ok btn-sm" style="padding:4px 8px;font-size:11px" data-coc-estado="${esc(c.id)}|listo">Marcar listo</button>`:''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+// Aviso breve (no bloquea): confirmaciones y "pedido listo"
+function avisoCocina(msg,color,ms){
+  try{
+    const d=document.createElement('div');
+    d.textContent=msg;
+    d.style.cssText='position:fixed;right:14px;bottom:14px;z-index:12500;max-width:360px;background:'+(color||'#333')+
+      ';color:#fff;font-size:13px;font-weight:600;padding:11px 14px;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.25);font-family:inherit';
+    const prev=document.querySelectorAll('.aviso-cocina').length; d.className='aviso-cocina'; d.style.bottom=(14+prev*56)+'px';
+    document.body.appendChild(d);
+    setTimeout(()=>d.remove(),ms||3500);
+  }catch(e){}
 }
 
 async function anularVenta(ventaId){
@@ -2770,7 +3017,7 @@ function rProductos(){
   let form='';
   if(editP!==null){
     const allCats=['Café','Bebidas','Bubble Tea','Platos fuertes','Postres','Bebidas con alcohol','Taller & Merch','Libros'];
-    const p=editP==='new'?{name:'',category:'Café',subcategory:'',price:'',cost:'',stock:'',code:'',author:'',active:true,hasVariants:false,stockControl:'sin_control'}:P.find(x=>x.id===editP);
+    const p=editP==='new'?{name:'',category:'Café',subcategory:'',price:'',cost:'',stock:'',code:(window._prefillCodigo||''),author:'',active:true,hasVariants:false,stockControl:(window._prefillCodigo?'unidad':'sin_control'),category:(window._prefillCodigo?'Libros':'Café')}:P.find(x=>x.id===editP);
     form=`<div class="card">
       <div style="font-size:13px;font-weight:700;margin-bottom:12px">${editP==='new'?'Nuevo producto':'Editar: '+esc(p.name)}</div>
       <div class="fgrid">
@@ -4128,51 +4375,437 @@ function attachCaja(){
 
   mc.querySelector('#bcalcular')?.addEventListener('click',()=>{render();});
 }
-// ── INVENTARIO ────────────────────────────────────────────────
-function rInv(){
-  const cats=[...new Set(P.map(p=>p.category))].sort();
-  const low=P.filter(p=>p.stockControl==='unidad'&&p.stock<=5&&p.stock<999&&p.active);
-  return `<div>
-    <div class="stitle">Inventario y Stock</div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Solo productos con control por unidad (libros, merch, postres)</div>
-    ${cats.map(cat=>{
-      const ctrl=P.filter(p=>p.category===cat&&p.stockControl==='unidad');
-      if(ctrl.length===0)return'';
-      return `<div style="margin-bottom:16px">
-        <div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${cat} (${ctrl.length})</div>
-        ${ctrl.map(p=>{
-          const clr=p.stock<=0?'br':p.stock<=5?'ba':'bg';
-          if(editStk===p.id) return `<div class="mrow"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>
-            <div style="display:flex;gap:6px;align-items:center">
-              <input id="si2" type="number" min="0" value="${stkV}" style="width:70px;padding:5px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:12px;text-align:center">
-              <button class="btn btn-ok btn-sm" data-sv="${p.id}">OK</button>
-              <button class="btn btn-g btn-sm" id="bcs2">✕</button>
-            </div></div>`;
-          return `<div class="mrow" style="opacity:${p.active?1:.5}">
-            <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:6px">${p.code}</span>`:''}</div>
-            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-              <span class="badge ${clr}">${p.stock} uds</span>
-              <button class="btn btn-g btn-sm" data-es="${p.id}" data-sv="${p.stock}">Editar</button>
-            </div></div>`;
-        }).join('')}
-      </div>`;
+// ── INVENTARIO (rediseño aprobado 22-oct-2026) ────────────────
+// Una sola vista para administración y caja. Lo que cambia por rol:
+//  - admin: costo, margen, valor del inventario, inactivos, editar y ELIMINAR.
+//  - pos  : ajustar stock (con autorización, como antes) e ingreso de mercadería.
+// Eliminar exige: rol admin, verificación contra TODO el historial de ventas,
+// motivo y escribir ELIMINAR. Primero se registra en la Bitácora (con copia
+// del producto) y solo después se borra. Las reglas de Firestore ya impiden
+// que una cuenta que no sea admin borre productos (allow delete: if esAdmin()).
+let invQ='', invVista='todos', invCat='Todas', invPag=0, invModo='lista';
+const INV_PAG=50;
+const esProdReal=p=>!!(p&&p.id&&!p.esConsignado&&!String(p.id).startsWith('cg_'));
+// sin = sin control de stock · cero · bajo (1-5) · ok
+const stockTipo=p=>{ if(!p||p.stockControl!=='unidad'||(+p.stock)>=999) return 'sin'; const s=+p.stock||0; return s<=0?'cero':s<=5?'bajo':'ok'; };
+function invFiltrados(){
+  const q=invQ.trim().toLowerCase(), admin=MI_ROL==='admin';
+  return P.filter(esProdReal).filter(p=>{
+    if(invVista==='bajo' && !(p.active && stockTipo(p)==='bajo')) return false;
+    if(invVista==='sin' && !(p.active && stockTipo(p)==='cero')) return false;
+    if(invVista==='inactivos' && (p.active || !admin)) return false;
+    if(invVista==='todos' && !p.active && !admin) return false;
+    if(invCat!=='Todas' && p.category!==invCat) return false;
+    if(q && !((p.name||'').toLowerCase().includes(q)||String(p.code||'').toLowerCase().includes(q)||(p.author||'').toLowerCase().includes(q))) return false;
+    return true;
+  }).sort((a,b)=>(a.name||'').localeCompare(b.name||'','es'));
+}
+function invFila(p,admin){
+  const t=stockTipo(p), id=esc(String(p.id));
+  if(editStk===p.id) return `<div class="inv-row inv-edit"><div class="inv-prod"><div class="inv-n">${esc(p.name)}</div><div class="inv-c">Nuevo stock (unidades)</div></div>
+    <div class="inv-acc" style="grid-column:2/-1">
+      <input id="si2" type="number" min="0" value="${esc(String(stkV))}" style="width:90px;padding:6px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:13px;text-align:center">
+      <button class="btn btn-ok btn-sm" data-svok="${id}">Guardar</button>
+      <button class="btn btn-g btn-sm" id="bcs2">Cancelar</button></div></div>`;
+  const badge = t==='sin' ? '<span class="badge" style="background:var(--bg3);color:var(--text3)">sin control</span>'
+    : `<span class="badge ${t==='cero'?'br':t==='bajo'?'ba':'bg'}">${t==='cero'?'Sin stock':(p.stock+(p.stock==1?' ud':' uds'))}</span>`;
+  const costo=(typeof p.cost==='number')?p.cost:null;
+  const margen=(costo!=null&&p.price>0)?Math.round((p.price-costo)/p.price*100)+'%':'—';
+  return `<div class="inv-row${p.active?'':' inv-inact'}">
+    <div class="inv-prod"><div class="inv-n">${esc(p.name)}${p.active?'':' <span class="badge br" style="font-size:9px">inactivo</span>'}</div>
+      <div class="inv-c">${esc([p.code,p.author].filter(Boolean).join(' · '))||'&nbsp;'}</div></div>
+    <div class="inv-cat">${esc(p.category||'')}</div>
+    <div class="inv-num"><b>${fmt(p.price)}</b></div>
+    ${admin?`<div class="inv-num inv-adm">${costo!=null?fmt(costo):'—'}</div><div class="inv-num inv-adm" style="color:var(--grn);font-weight:600">${margen}</div>`:''}
+    <div class="inv-num">${badge}</div>
+    <div class="inv-acc">
+      ${t!=='sin'?`<button class="btn btn-g btn-sm" data-es="${id}" data-sv="${+p.stock||0}">${admin?'Stock':'Ajustar stock'}</button>`:''}
+      ${admin?`<button class="btn btn-g btn-sm" data-ped="${id}">Editar</button>
+      <button class="btn btn-sm inv-del" data-pdel="${id}" title="Eliminar producto (solo administración)" aria-label="Eliminar ${esc(p.name)}">🗑</button>`:''}
+    </div></div>`;
+}
+function invIngresosRecientes(){
+  if(MI_ROL!=='admin'||typeof BIT==='undefined') return '';
+  const ing=BIT.filter(b=>b.evento==='ingreso_mercaderia').slice(0,8);
+  if(!ing.length) return '';
+  return `<div class="card" style="margin-top:14px">
+    <div class="rb" style="margin-bottom:8px"><b style="font-size:13px">Ingresos de mercadería recientes</b>
+      <span style="font-size:11px;color:var(--text3)">Crúcelos con la guía o factura del proveedor</span></div>
+    ${ing.map(b=>{
+      const lin=Array.isArray(b.lineas)?b.lineas:[], pend=Array.isArray(b.pendientesAlta)?b.pendientesAlta:[];
+      const dif=lin.filter(l=>l.guia!=null&&+l.guia!==+l.recibido);
+      const est=(dif.length||pend.length)?`<span class="badge ba">${dif.length?dif.length+' diferencia'+(dif.length>1?'s':''):''}${dif.length&&pend.length?' · ':''}${pend.length?pend.length+' sin alta':''}</span>`:'<span class="badge bg">Cuadra</span>';
+      return `<div class="mrow" style="align-items:flex-start;flex-wrap:wrap;gap:6px">
+        <div style="min-width:0;flex:1"><div style="font-weight:600;font-size:12px">${esc(b.proveedor||'')} · ${esc(b.tipoDoc||'')} ${esc(b.numeroDoc||'')}</div>
+          <div style="font-size:11px;color:var(--text3)">${esc((b.fecha||'').slice(0,16).replace('T',' '))} · ${esc(b.usuario||'')} · ${+b.unidades||0} uds${b.modalidad?' · '+esc(b.modalidad):''}</div>
+          ${dif.map(l=>`<div style="font-size:11px;color:var(--amb)">${esc(l.nombre)}: guía ${l.guia} · contado ${l.recibido}</div>`).join('')}
+          ${pend.map(x=>`<div style="font-size:11px;color:var(--red);display:flex;gap:6px;align-items:center;margin-top:3px">Código ${esc(x.codigo)} · ${+x.cantidad||0} uds sin alta
+            <button class="btn btn-g btn-sm" style="padding:2px 8px;font-size:10px" data-ingalta="${esc(x.codigo)}">Crear producto</button></div>`).join('')}
+        </div>${est}</div>`;
     }).join('')}
   </div>`;
 }
+function rInv(){
+  if(invModo==='ingreso') return rIngreso();
+  const admin=MI_ROL==='admin';
+  const reales=P.filter(esProdReal), activos=reales.filter(p=>p.active);
+  const nSin=activos.filter(p=>stockTipo(p)==='cero').length, nBajo=activos.filter(p=>stockTipo(p)==='bajo').length;
+  const nCtrl=activos.filter(p=>stockTipo(p)!=='sin').length, nInact=reales.length-activos.length;
+  const valor=activos.reduce((a,p)=>a+((stockTipo(p)!=='sin'&&typeof p.cost==='number')?p.cost*(+p.stock||0):0),0);
+  const cats=[...new Set(reales.map(p=>p.category).filter(Boolean))].sort();
+  const lista=invFiltrados(), pags=Math.max(1,Math.ceil(lista.length/INV_PAG));
+  if(invPag>=pags) invPag=pags-1;
+  const pagina=lista.slice(invPag*INV_PAG,(invPag+1)*INV_PAG);
+  const vistas=[['todos','Todos'],['bajo','Stock bajo · '+nBajo],['sin','Sin stock · '+nSin]].concat(admin?[['inactivos','Inactivos · '+nInact]]:[]);
+  const kpi=(t,v,s,c)=>`<div class="scard"><div class="slbl">${t}</div><div class="sval"${c?` style="color:${c}"`:''}>${v}</div><div class="ssub">${s}</div></div>`;
+  return `<div class="${admin?'':'inv-pos'}">
+    <div class="rb" style="margin-bottom:12px;align-items:flex-start;gap:10px;flex-wrap:wrap">
+      <div><div class="stitle" style="margin:0">Inventario y productos</div>
+        <div style="font-size:12px;color:var(--text3)">${reales.length.toLocaleString('es-EC')} productos · ${nCtrl} con control de stock</div></div>
+      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+        <span class="badge" style="background:${admin?'var(--acl)':'var(--bbg)'};color:${admin?'var(--acc)':'var(--blu)'};padding:5px 10px">${admin?'🛡 Administración · control total':'🔒 Caja · permisos limitados'}</span>
+        <button class="btn btn-acc" id="binging">📦 Ingresar mercadería</button>
+      </div>
+    </div>
+    ${admin?'':`<div style="background:var(--bbg);border:1px solid var(--bbrd);color:var(--blu);border-radius:var(--rs);padding:10px 14px;font-size:12px;margin-bottom:12px;line-height:1.5">
+      <b>Puedes ingresar mercadería (suma stock) y pedir un ajuste de stock.</b> Cambiar precios o costos, desactivar y eliminar productos lo hace solo la administración. Todo queda en la Bitácora.</div>`}
+    <div class="${admin?'sg4':'sg3'}" style="margin-bottom:14px">
+      ${kpi('Sin stock',nSin,'productos activos por reponer',nSin?'var(--red)':'')}
+      ${kpi('Stock bajo',nBajo,'5 unidades o menos',nBajo?'var(--amb)':'')}
+      ${admin?kpi('Valor a costo',fmt(valor),'stock × costo registrado')+kpi('Inactivos',nInact,'ocultos del POS, conservan historial'):kpi('Con control de stock',nCtrl,'productos activos')}
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="inv-tools">
+        <div class="inv-vistas">${vistas.map(([k,l])=>`<button class="inv-vista${invVista===k?' on':''}" data-iv="${k}">${l}</button>`).join('')}</div>
+        <div class="swr" style="flex:1;min-width:200px;margin:0"><span class="sic">🔍</span>
+          <input id="inv-q" type="text" placeholder="Buscar por nombre, código, ISBN o autor…" value="${esc(invQ)}" autocomplete="off"></div>
+        <select id="inv-cat" style="padding:7px 9px;border-radius:var(--rs);border:1.5px solid var(--b2);font-family:inherit;font-size:12px">
+          <option${invCat==='Todas'?' selected':''}>Todas</option>${cats.map(c=>`<option${c===invCat?' selected':''}>${esc(c)}</option>`).join('')}</select>
+      </div>
+      <div class="inv-head"><div>Producto</div><div>Categoría</div><div class="inv-num">Precio</div>${admin?'<div class="inv-num">Costo</div><div class="inv-num">Margen</div>':''}<div class="inv-num">Stock</div><div class="inv-num">Acciones</div></div>
+      ${pagina.length?pagina.map(p=>invFila(p,admin)).join(''):`<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Sin resultados${invQ?` para «${esc(invQ)}»`:''}</div>`}
+      <div class="inv-pie">
+        <span>${lista.length?`Mostrando ${invPag*INV_PAG+1}–${Math.min(lista.length,(invPag+1)*INV_PAG)} de ${lista.length.toLocaleString('es-EC')}`:''}${admin?' · Eliminar solo procede en productos sin ventas ni movimientos; los demás se desactivan.':''}</span>
+        ${pags>1?`<span style="display:flex;gap:5px;align-items:center"><button class="btn btn-g btn-sm" data-ipag="-1"${invPag===0?' disabled':''}>‹</button><span>${invPag+1} / ${pags}</span><button class="btn btn-g btn-sm" data-ipag="1"${invPag>=pags-1?' disabled':''}>›</button></span>`:''}
+      </div>
+    </div>
+    ${invIngresosRecientes()}
+  </div>`;
+}
 function attachInv(){
+  if(invModo==='ingreso') return attachIngreso();
   const mc=document.getElementById('mc');
+  const q=mc.querySelector('#inv-q');
+  q?.addEventListener('input',e=>{ invQ=e.target.value; invPag=0; const pos=e.target.selectionStart; render(); const n=document.getElementById('inv-q'); if(n){ n.focus(); try{n.setSelectionRange(pos,pos);}catch(_){} } });
+  mc.querySelector('#inv-cat')?.addEventListener('change',e=>{ invCat=e.target.value; invPag=0; render(); });
+  mc.querySelectorAll('[data-iv]').forEach(el=>el.addEventListener('click',()=>{ invVista=el.dataset.iv; invPag=0; render(); }));
+  mc.querySelectorAll('[data-ipag]').forEach(el=>el.addEventListener('click',()=>{ invPag=Math.max(0,invPag+(+el.dataset.ipag)); render(); }));
+  mc.querySelector('#binging')?.addEventListener('click',()=>{ invModo='ingreso'; if(!ING) ING=ingCargar(); render(); });
+  // Ajustar / fijar stock: igual que antes, con autorizacion de administracion (queda en bitacora)
   mc.querySelectorAll('[data-es]').forEach(el=>el.addEventListener('click',async()=>{
-    const _p=P.find(x=>x.id===el.dataset.es);
+    const _p=P.find(x=>String(x.id)===el.dataset.es);
     const _aut=await pedirAutorizacionAdmin('Editar stock de "'+((_p&&_p.name)||el.dataset.es)+'"',
         {productoId:el.dataset.es, detalle:'Stock antes del cambio: '+el.dataset.sv+' uds'});
     if(!_aut)return;
-    _aut.cerrar();   // fijar stock lo escribe la caja (la regla lo permite); queda en bitacora
-    editStk=el.dataset.es;stkV=el.dataset.sv;render();
-    const i=document.getElementById('si2');if(i){i.focus();i.select();}
+    _aut.cerrar();
+    editStk=_p?_p.id:el.dataset.es; stkV=el.dataset.sv; render();
+    const i=document.getElementById('si2'); if(i){i.focus();i.select();}
   }));
   mc.querySelector('#bcs2')?.addEventListener('click',()=>{editStk=null;render();});
-  mc.querySelectorAll('[data-sv]').forEach(el=>{if(el.tagName==='BUTTON'&&el.textContent==='OK')el.addEventListener('click',async()=>{const v=parseInt(document.getElementById('si2')?.value)||0;const p=P.find(x=>x.id===el.dataset.sv);if(p){fijarStock(p.id,v);}editStk=null;render();});});
+  mc.querySelectorAll('[data-svok]').forEach(el=>el.addEventListener('click',async()=>{
+    const v=parseInt(document.getElementById('si2')?.value); const p=P.find(x=>String(x.id)===el.dataset.svok);
+    if(isNaN(v)||v<0){ alert('Ingresa una cantidad válida (0 o más).'); return; }
+    if(p){ const antes=+p.stock||0; await fijarStock(p.id,v); bitacora('ajuste_stock',{accion:'Fijo el stock de "'+p.name+'" en '+v+' (antes '+antes+')', productoId:String(p.id), antes, despues:v}); }
+    editStk=null; render();
+  }));
   document.getElementById('si2')?.addEventListener('input',e=>stkV=e.target.value);
+  mc.querySelectorAll('[data-ped]').forEach(el=>el.addEventListener('click',()=>{
+    const p=P.find(x=>String(x.id)===el.dataset.ped); if(!p) return;
+    editP=p.id; view='productos'; document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v==='productos')); render(); window.scrollTo(0,0);
+  }));
+  mc.querySelectorAll('[data-pdel]').forEach(el=>el.addEventListener('click',()=>invAbrirEliminar(el.dataset.pdel)));
+  mc.querySelectorAll('[data-ingalta]').forEach(el=>el.addEventListener('click',()=>{
+    if(MI_ROL!=='admin') return;
+    window._prefillCodigo=el.dataset.ingalta; editP='new'; view='productos';
+    document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v==='productos')); render(); window.scrollTo(0,0);
+  }));
+}
+
+// ── Eliminacion de productos (solo administracion) ──
+let _histCompletoDesde=null;
+// Carga TODO el historial de ventas (una vez por sesion) para verificar que un
+// producto nunca se vendio. Solo lo dispara la administracion al eliminar.
+async function invCargarHistorialCompleto(){
+  if(_histCompletoDesde) return _histCompletoDesde;
+  const qs=await getDocs(query(collection(db,VENTAS_COL),orderBy('date'),limit(1)));
+  const primero=qs.empty?VENTAS_DESDE:String(qs.docs[0].data().date||VENTAS_DESDE).slice(0,10);
+  const fin=VENTAS_DESDE.slice(0,7);
+  const d=new Date(primero.slice(0,7)+'-15'); let guard=0;
+  while(localISO(d).slice(0,7)<fin && guard<240){
+    const mes=localISO(d).slice(0,7);
+    await cargarMes(mes);
+    if(!_mesesCargados.has(mes)) throw new Error('No se pudo leer '+mes);
+    d.setMonth(d.getMonth()+1); guard++;
+  }
+  _histCompletoDesde=primero;
+  return primero;
+}
+async function invVerificarEliminacion(p){
+  const id=String(p.id), usa=i=>i&&String(i.productId??i.prodId??'')===id;
+  let completo=true, desde='';
+  try{ desde=await invCargarHistorialCompleto(); }catch(e){ console.error('historial completo',e); completo=false; }
+  const ventas=S.filter(s=>(Array.isArray(s.items)&&s.items.some(usa))||String(s.prodId||'')===id).length;
+  const mesas=T.filter(t=>(t.order||[]).some(usa)).map(t=>t.name);
+  const stock=stockTipo(p)==='sin'?0:(+p.stock||0);
+  const ingresos=(typeof BIT!=='undefined'?BIT:[]).filter(b=>b.evento==='ingreso_mercaderia'&&Array.isArray(b.lineas)&&b.lineas.some(l=>String(l.productoId)===id)).length;
+  const checks=[
+    {ok:completo, txt:completo?'Historial de ventas revisado completo (desde '+desde+')':'No se pudo leer todo el historial de ventas (sin conexión)'},
+    {ok:ventas===0, txt:ventas===0?'Sin ventas, anulaciones ni devoluciones':ventas+' registro(s) de venta, anulación o devolución'},
+    {ok:stock===0, txt:stock===0?'Sin stock (0 uds)':'Tiene '+stock+' unidad(es) en stock'},
+    {ok:mesas.length===0, txt:mesas.length===0?'No está en pedidos abiertos':'Está en pedidos abiertos: '+mesas.join(', ')},
+    {ok:ingresos===0, txt:ingresos===0?'Sin ingresos de mercadería recientes':ingresos+' ingreso(s) de mercadería registrados'}
+  ];
+  return {checks, ok:checks.every(c=>c.ok), resumen:checks.map(c=>(c.ok?'OK ':'NO ')+c.txt).join(' | ')};
+}
+function invModal(html){
+  let bg=document.getElementById('inv-modal');
+  if(!bg){ bg=document.createElement('div'); bg.id='inv-modal'; bg.className='inv-modal-bg'; document.body.appendChild(bg); }
+  bg.innerHTML=`<div class="inv-modal" role="dialog" aria-modal="true">${html}</div>`;
+  bg.style.display='flex';
+  return bg;
+}
+function invCerrarModal(){ const bg=document.getElementById('inv-modal'); if(bg){ bg.style.display='none'; bg.innerHTML=''; } }
+async function invAbrirEliminar(id){
+  if(MI_ROL!=='admin'){ alert('Solo la administración puede eliminar productos.'); return; }
+  const p=P.find(x=>String(x.id)===String(id)); if(!p||!esProdReal(p)) return;
+  invModal(`<div style="font-size:15px;font-weight:700;margin-bottom:6px">Eliminar producto</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:14px">${esc(p.name)}${p.code?' · '+esc(p.code):''}</div>
+    <div style="font-size:13px;color:var(--text2);padding:18px 0;text-align:center">Revisando el historial de ventas…</div>`);
+  const ver=await invVerificarEliminacion(p);
+  const filas=ver.checks.map(c=>`<div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;color:${c.ok?'var(--text)':'var(--red)'}">
+    <span style="width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:${c.ok?'var(--gbg)':'var(--rbg)'};color:${c.ok?'var(--grn)':'var(--red)'}">${c.ok?'✓':'✕'}</span>${esc(c.txt)}</div>`).join('');
+  const cab=(ico,bg,t)=>`<div style="display:flex;gap:12px;align-items:center;margin-bottom:12px"><div style="width:40px;height:40px;border-radius:10px;background:${bg};display:flex;align-items:center;justify-content:center;font-size:18px">${ico}</div>
+    <div style="min-width:0"><div style="font-size:16px;font-weight:700">${t}</div><div style="font-size:11px;color:var(--text3)">${esc(p.name)}${p.code?' · '+esc(p.code):''}</div></div></div>`;
+  const verif=`<div style="background:var(--bg);border-radius:var(--rs);padding:10px 12px;margin-bottom:12px"><div style="font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--text3);margin-bottom:4px">VERIFICACIÓN AUTOMÁTICA</div>${filas}</div>`;
+  if(!ver.ok){
+    invModal(`${cab('⚠️','var(--abg)','No se puede eliminar')}
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Este producto tiene movimientos o no se pudo comprobar que no los tenga. Eliminarlo borraría su rastro en reportes, kardex y comprobantes.</div>
+      ${verif}
+      ${p.active?`<div style="background:var(--gbg);color:var(--grn);border-radius:var(--rs);padding:9px 12px;font-size:12px;margin-bottom:12px">Recomendado: <b>desactivarlo</b>. Se oculta del POS, conserva todo el historial y se puede reactivar.</div>`:''}
+      <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-g" id="inv-x">Cancelar</button>${p.active?'<button class="btn btn-acc" id="inv-desact">Desactivar producto</button>':''}</div>`);
+    document.getElementById('inv-x').onclick=invCerrarModal;
+    const bd=document.getElementById('inv-desact');
+    if(bd) bd.onclick=async()=>{
+      const aut=await autPropiaOAdmin('Desactivar el producto "'+p.name+'"',{producto:p.name, productoId:String(p.id), motivo:'eliminacion bloqueada por historial'});
+      if(!aut) return;
+      p.active=false; const ok=await sP(aut.db); await aut.cerrar();
+      if(!ok){ p.active=true; alert('No se guardó en el servidor.'); }
+      invCerrarModal(); render();
+    };
+    return;
+  }
+  invModal(`${cab('🗑','var(--rbg)','Eliminar producto')}${verif}
+    <div class="fg" style="margin-bottom:10px"><label>Motivo</label><select id="inv-mot">
+      <option value="">Elige un motivo…</option><option>Creado por error / duplicado</option><option>Código o datos equivocados (se creará de nuevo)</option><option>Producto de prueba</option><option>Otro</option></select></div>
+    <div class="fg" style="margin-bottom:6px"><label>Escribe ELIMINAR para confirmar</label><input id="inv-conf" autocomplete="off" style="text-transform:uppercase"></div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Queda en la Bitácora con tu usuario, la fecha, el motivo y una copia del producto. No se puede deshacer.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-g" id="inv-x">Cancelar</button>
+      <button class="btn" id="inv-go" disabled style="background:var(--red);color:#fff;border:none;font-weight:700;opacity:.45">Eliminar definitivamente</button></div>`);
+  const mot=document.getElementById('inv-mot'), conf=document.getElementById('inv-conf'), go=document.getElementById('inv-go');
+  const chk=()=>{ const ok=mot.value&&conf.value.trim().toUpperCase()==='ELIMINAR'; go.disabled=!ok; go.style.opacity=ok?'1':'.45'; };
+  mot.onchange=chk; conf.oninput=chk;
+  document.getElementById('inv-x').onclick=invCerrarModal;
+  go.onclick=async()=>{
+    if(go.disabled) return; go.disabled=true; go.textContent='Eliminando…';
+    const ok=await invEjecutarEliminacion(p,mot.value,ver);
+    invCerrarModal();
+    if(ok) alert('Producto eliminado. Quedó registrado en la Bitácora.');
+    render();
+  };
+}
+async function invEjecutarEliminacion(p,motivo,ver){
+  if(MI_ROL!=='admin'){ alert('Solo la administración puede eliminar productos.'); return false; }
+  const id=String(p.id), copia={...p}; delete copia.updatedAt;
+  // 1) Primero la evidencia. Si no queda registro, no se borra nada.
+  const bid=await bitacora('producto_eliminado',{accion:'Elimino el producto "'+p.name+'"', productoId:id, producto:JSON.stringify(copia), motivo, verificacion:ver.resumen});
+  if(!bid){ alert('No se pudo registrar en la Bitácora. El producto NO se eliminó.'); return false; }
+  // 2) Borrado en el servidor (la regla exige rol admin)
+  try{ await conLimite(deleteDoc(doc(db,PRODUCTOS_COL,id))); }
+  catch(e){
+    avisoError(msgError(e,'eliminar el producto'));
+    bitacora('accion_admin',{accion:'FALLO al eliminar "'+p.name+'": el producto sigue en el catalogo', productoId:id, refBitacora:bid});
+    return false;
+  }
+  // 3) Copia local: los demas equipos lo detectan al abrir (el conteo no coincide y releen el catalogo)
+  P=P.filter(x=>String(x.id)!==id);
+  for(const [k,v] of [..._catMap.entries()]) if(k===id||String(v&&v.id)===id) _catMap.delete(k);
+  _lastPSync.delete(id); _catProgramarGuardado();
+  return true;
+}
+
+// ── Hoja de ingreso de mercaderia (caja y administracion) ──
+// Solo SUMA unidades contra un documento del proveedor. Los codigos que no
+// existen en el catalogo no suman: quedan "sin alta" para la administracion.
+let ING=null, ingSug=[];
+const ING_KEY='lm_ingreso_borrador';
+const ingNuevo=()=>({prov:'',tipo:'Guía de remisión',num:'',fecha:today(),modalidad:'Compra',lineas:[],pend:[],nota:''});
+function ingCargar(){ try{ const s=localStorage.getItem(ING_KEY); if(s){ const o=JSON.parse(s); if(o&&Array.isArray(o.lineas)) return Object.assign(ingNuevo(),o); } }catch(e){} return ingNuevo(); }
+function ingGuardar(){ try{ localStorage.setItem(ING_KEY,JSON.stringify(ING)); }catch(e){} }
+function ingTotales(){
+  const L=ING.lineas;
+  const guia=L.reduce((a,l)=>a+(l.guia===''||l.guia==null?0:+l.guia),0)+ING.pend.reduce((a,x)=>a+(+x.guia||0),0);
+  const conGuia=L.some(l=>l.guia!==''&&l.guia!=null);
+  const contadas=L.reduce((a,l)=>a+(+l.recibido||0),0)+ING.pend.reduce((a,x)=>a+(+x.cantidad||0),0);
+  const suman=L.reduce((a,l)=>a+(+l.recibido||0),0), espera=ING.pend.reduce((a,x)=>a+(+x.cantidad||0),0);
+  const dif=L.filter(l=>l.guia!==''&&l.guia!=null&&+l.guia!==+l.recibido);
+  return {guia,conGuia,contadas,suman,espera,dif};
+}
+function ingAgregar(p){
+  if(stockTipo(p)==='sin'){ alert('«'+p.name+'» no lleva control de stock por unidad: no se registra en un ingreso.'); return; }
+  const l=ING.lineas.find(x=>String(x.pid)===String(p.id));
+  if(l) l.recibido=(+l.recibido||0)+1; else ING.lineas.unshift({pid:String(p.id),guia:'',recibido:1});
+  ING.ultimo=p.name; ingSug=[]; ingGuardar();
+}
+function ingEstado(l){
+  const g=(l.guia===''||l.guia==null)?null:+l.guia, r=+l.recibido||0;
+  return g==null?'<span class="badge" style="background:var(--bg3);color:var(--text3)">Sin guía</span>':g===r?'<span class="badge bg">Coincide</span>':g>r?`<span class="badge ba">Falta ${g-r}</span>`:`<span class="badge ba">Sobra ${r-g}</span>`;
+}
+function ingTotHTML(){
+  const t=ingTotales();
+  return [['Líneas',ING.lineas.length+ING.pend.length],['Unidades según guía',t.conGuia||ING.pend.some(x=>+x.guia)?t.guia:'—'],['Unidades contadas',t.contadas],['Suman stock ahora',t.suman,'var(--grn)'],['En espera de alta',t.espera,t.espera?'var(--red)':'']].map(([l,v,c])=>`<div class="rb" style="padding:4px 0;font-size:13px"><span style="color:var(--text2)">${l}</span><b${c?` style="color:${c}"`:''}>${v}</b></div>`).join('')
+   + t.dif.map(l=>{const p=P.find(x=>String(x.id)===String(l.pid));return `<div class="ing-aviso" style="background:var(--abg);color:var(--amb)"><b>${esc(p?p.name:'')}: guía ${l.guia} · contado ${l.recibido}</b><br>Se registra lo contado y la administración ve la diferencia.</div>`;}).join('')
+   + (ING.pend.length?`<div class="ing-aviso" style="background:var(--rbg);color:var(--red)"><b>${ING.pend.length} código(s) no existen en el catálogo</b><br>No suman stock: quedan en espera hasta que la administración cree el producto.</div>`:'');
+}
+// Actualiza totales, estado y stock de la fila sin redibujar la pantalla
+// (redibujar mientras se escribe en un campo haria perder el foco o el clic).
+function ingRefrescar(i){
+  ingGuardar();
+  const tot=document.getElementById('ing-tot'); if(tot) tot.innerHTML=ingTotHTML();
+  const n=document.getElementById('ing-n'); if(n) n.textContent=ingTotales().suman;
+  if(i!=null){ const l=ING.lineas[i]; const p=l&&P.find(x=>String(x.id)===String(l.pid));
+    const e=document.getElementById('ing-est-'+i); if(e&&l) e.innerHTML=ingEstado(l);
+    const s=document.getElementById('ing-stk-'+i); if(s&&p){ const a=+p.stock||0; s.innerHTML=a+' → <b>'+(a+(+l.recibido||0))+'</b>'; } }
+}
+function rIngreso(){
+  if(!ING) ING=ingCargar();
+  const t=ingTotales();
+  const linea=(l,i)=>{
+    const p=P.find(x=>String(x.id)===String(l.pid)); if(!p) return '';
+    const antes=+p.stock||0, g=(l.guia===''||l.guia==null)?null:+l.guia;
+    const est=ingEstado(l);
+    return `<div class="ing-row"><div class="inv-prod"><div class="inv-n">${esc(p.name)}</div><div class="inv-c">${esc(p.code||'')}</div></div>
+      <div class="inv-num"><input type="number" min="0" class="ing-in" data-ig="${i}" value="${g==null?'':g}" placeholder="—" aria-label="Unidades según guía"></div>
+      <div class="ing-qty"><button class="qb" data-iq="${i}" data-d="-1" aria-label="Restar">−</button><input type="number" min="0" class="ing-in" data-ir="${i}" value="${+l.recibido||0}" aria-label="Unidades recibidas"><button class="qb" data-iq="${i}" data-d="1" aria-label="Sumar">+</button></div>
+      <div class="inv-num" style="font-size:12px;color:var(--text2)" id="ing-stk-${i}">${antes} → <b>${antes+(+l.recibido||0)}</b></div>
+      <div class="inv-num" id="ing-est-${i}">${est}</div></div>`;
+  };
+  const pend=ING.pend.map((x,i)=>`<div class="ing-row"><div class="inv-prod"><div class="inv-n" style="color:var(--red)">No existe en el catálogo</div><div class="inv-c">Código ${esc(x.codigo)}</div></div>
+      <div class="inv-num"><input type="number" min="0" class="ing-in" data-pg="${i}" value="${x.guia||''}" placeholder="—"></div>
+      <div class="ing-qty"><button class="qb" data-pq="${i}" data-d="-1">−</button><input type="number" min="0" class="ing-in" data-pr="${i}" value="${+x.cantidad||0}"><button class="qb" data-pq="${i}" data-d="1">+</button></div>
+      <div class="inv-num" style="color:var(--text3)">—</div><div class="inv-num"><span class="badge br">Sin alta</span></div></div>`).join('');
+  const sel=(id,v,opts)=>`<select id="${id}">${opts.map(o=>`<option${o===v?' selected':''}>${o}</option>`).join('')}</select>`;
+  return `<div>
+    <div class="rb" style="margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div><div style="font-size:11px;color:var(--text3)">Inventario › Ingreso de mercadería</div><div class="stitle" style="margin:0">Hoja de ingreso</div>
+        <div style="font-size:12px;color:var(--text3)">Cuenta lo que llegó contra el documento del proveedor. Solo suma stock.</div></div>
+      <div style="display:flex;gap:7px"><button class="btn btn-g" id="ing-volver">← Volver al inventario</button><button class="btn btn-g" id="ing-desc">Descartar hoja</button></div>
+    </div>
+    <div class="ing-grid">
+      <div>
+        <div class="card" style="margin-bottom:12px"><div style="font-weight:700;font-size:13px;margin-bottom:10px">1 · Documento del proveedor</div>
+          <div class="fgrid">
+            <div class="fg"><label>Proveedor *</label><input id="ing-prov" value="${esc(ING.prov)}" placeholder="Ej: Editorial Océano"></div>
+            <div class="fg"><label>Tipo</label>${sel('ing-tipo',ING.tipo,['Guía de remisión','Factura','Nota de entrega','Nota interna'])}</div>
+            <div class="fg"><label>Número *</label><input id="ing-num" value="${esc(ING.num)}" placeholder="001-002-000004512"></div>
+            <div class="fg"><label>Fecha</label><input id="ing-fecha" type="date" value="${esc(ING.fecha)}"></div>
+            <div class="fg"><label>Modalidad</label>${sel('ing-mod',ING.modalidad,['Compra','Consignación','Producción propia'])}</div>
+          </div></div>
+        <div class="card"><div class="rb" style="margin-bottom:10px"><b style="font-size:13px">2 · Escanear y contar</b><span style="font-size:11px;color:var(--text3)">Enter suma 1</span></div>
+          <div class="swr" style="margin-bottom:6px"><span class="sic">▦</span>
+            <input id="ing-scan" placeholder="Escanea el código o ISBN, o escribe el nombre…" autocomplete="off"></div>
+          ${ING.ultimo?`<div style="font-size:11px;color:var(--grn);margin-bottom:6px">✓ ${esc(ING.ultimo)} +1</div>`:''}
+          <div id="ing-sug">${ingSug.map(p=>`<button class="mrow" style="width:100%;text-align:left;cursor:pointer;margin-bottom:4px" data-isug="${esc(String(p.id))}"><span style="font-size:12px"><b>${esc(p.name)}</b> <span style="color:var(--text3)">${esc(p.code||'')}</span></span><span class="badge bg">Agregar</span></button>`).join('')}</div>
+          <div class="ing-row ing-head"><div>Producto</div><div class="inv-num">Guía</div><div class="inv-num" style="text-align:center">Recibido</div><div class="inv-num">Stock</div><div class="inv-num">Estado</div></div>
+          ${ING.lineas.map(linea).join('')}${pend}
+          ${!ING.lineas.length&&!ING.pend.length?'<div style="padding:18px;text-align:center;color:var(--text3);font-size:12px">Escanea el primer producto para empezar.</div>':''}
+        </div>
+      </div>
+      <div class="card ing-res">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">3 · Revisar y registrar</div>
+        <div id="ing-tot">${ingTotHTML()}</div>
+        ${'' && [['Líneas',ING.lineas.length+ING.pend.length],['Unidades según guía',t.conGuia||ING.pend.some(x=>+x.guia)?t.guia:'—'],['Unidades contadas',t.contadas],['Suman stock ahora',t.suman,'var(--grn)'],['En espera de alta',t.espera,t.espera?'var(--red)':'']].map(([l,v,c])=>`<div class="rb" style="padding:4px 0;font-size:13px"><span style="color:var(--text2)">${l}</span><b${c?` style="color:${c}"`:''}>${v}</b></div>`).join('')}
+        ${'' && t.dif.map(l=>{const p=P.find(x=>String(x.id)===String(l.pid));return `<div class="ing-aviso" style="background:var(--abg);color:var(--amb)"><b>${esc(p?p.name:'')}: guía ${l.guia} · contado ${l.recibido}</b><br>Se registra lo contado y la administración ve la diferencia.</div>`;}).join('')}
+        <div style="background:var(--bg3);border-radius:var(--rs);padding:9px 11px;font-size:11px;color:var(--text2);margin:8px 0;line-height:1.6">• Solo suma unidades: aquí no se baja ni se fija stock.<br>• Queda en la Bitácora con stock antes y después, tu usuario y la hora.<br>• Desde 50 unidades en una línea pide confirmar.</div>
+        <div class="fg" style="margin-bottom:10px"><label>Nota (opcional)</label><input id="ing-nota" value="${esc(ING.nota)}" placeholder="Ej: la caja llegó abierta"></div>
+        <button class="btn btn-acc btn-full" id="ing-reg" style="padding:11px">✓ Registrar ingreso · <span id="ing-n">${t.suman}</span> uds</button>
+      </div>
+    </div>
+  </div>`;
+}
+function attachIngreso(){
+  const mc=document.getElementById('mc');
+  const campo=(id,k)=>mc.querySelector('#'+id)?.addEventListener('input',e=>{ ING[k]=e.target.value; ingGuardar(); });
+  campo('ing-prov','prov'); campo('ing-num','num'); campo('ing-fecha','fecha'); campo('ing-nota','nota');
+  mc.querySelector('#ing-tipo')?.addEventListener('change',e=>{ ING.tipo=e.target.value; ingGuardar(); });
+  mc.querySelector('#ing-mod')?.addEventListener('change',e=>{ ING.modalidad=e.target.value; ingGuardar(); });
+  mc.querySelector('#ing-volver')?.addEventListener('click',()=>{ invModo='lista'; render(); });
+  mc.querySelector('#ing-desc')?.addEventListener('click',()=>{ if(!confirm('¿Descartar esta hoja de ingreso? No se registra nada.')) return; ING=ingNuevo(); try{localStorage.removeItem(ING_KEY);}catch(e){} render(); });
+  const scan=mc.querySelector('#ing-scan');
+  if(scan){
+    scan.focus();
+    scan.addEventListener('keydown',e=>{
+      if(e.key!=='Enter') return; e.preventDefault();
+      const v=scan.value.trim(); if(!v) return;
+      const reales=P.filter(esProdReal), vl=v.toLowerCase();
+      const exacto=reales.find(p=>String(p.code||'').trim().toLowerCase()===vl);
+      if(exacto){ ingAgregar(exacto); render(); return; }
+      const por=reales.filter(p=>(p.name||'').toLowerCase().includes(vl)||(p.author||'').toLowerCase().includes(vl)).slice(0,8);
+      if(por.length===1){ ingAgregar(por[0]); render(); return; }
+      if(por.length>1){ ingSug=por; render(); return; }
+      if(/^[0-9Xx-]{6,}$/.test(v)){
+        const x=ING.pend.find(q=>q.codigo===v); if(x) x.cantidad=(+x.cantidad||0)+1; else ING.pend.push({codigo:v,cantidad:1,guia:''});
+        ING.ultimo='Código '+v+' (sin alta)'; ingGuardar(); render(); return;
+      }
+      alert('No se encontró «'+v+'». Revisa el nombre o escanea el código.');
+    });
+  }
+  mc.querySelectorAll('[data-isug]').forEach(el=>el.addEventListener('click',()=>{ const p=P.find(x=>String(x.id)===el.dataset.isug); if(p){ ingAgregar(p); render(); } }));
+  const num=v=>{ const n=parseInt(v); return isNaN(n)||n<0?0:n; };
+  mc.querySelectorAll('[data-iq]').forEach(el=>el.addEventListener('click',()=>{ const l=ING.lineas[+el.dataset.iq]; if(!l) return; l.recibido=Math.max(0,(+l.recibido||0)+(+el.dataset.d)); if(l.recibido===0&&(l.guia===''||l.guia==null)) ING.lineas.splice(+el.dataset.iq,1); ingGuardar(); render(); }));
+  mc.querySelectorAll('[data-pq]').forEach(el=>el.addEventListener('click',()=>{ const x=ING.pend[+el.dataset.pq]; if(!x) return; x.cantidad=Math.max(0,(+x.cantidad||0)+(+el.dataset.d)); if(x.cantidad===0) ING.pend.splice(+el.dataset.pq,1); ingGuardar(); render(); }));
+  mc.querySelectorAll('[data-ir]').forEach(el=>el.addEventListener('input',()=>{ const i=+el.dataset.ir, l=ING.lineas[i]; if(l){ l.recibido=num(el.value); ingRefrescar(i); } }));
+  mc.querySelectorAll('[data-ig]').forEach(el=>el.addEventListener('input',()=>{ const i=+el.dataset.ig, l=ING.lineas[i]; if(l){ l.guia=el.value===''?'':num(el.value); ingRefrescar(i); } }));
+  mc.querySelectorAll('[data-pr]').forEach(el=>el.addEventListener('input',()=>{ const x=ING.pend[+el.dataset.pr]; if(x){ x.cantidad=num(el.value); ingRefrescar(null); } }));
+  mc.querySelectorAll('[data-pg]').forEach(el=>el.addEventListener('input',()=>{ const x=ING.pend[+el.dataset.pg]; if(x){ x.guia=el.value===''?'':num(el.value); ingRefrescar(null); } }));
+  mc.querySelector('#ing-reg')?.addEventListener('click',ingRegistrar);
+}
+let _ingEnCurso=false;
+async function ingRegistrar(){
+  if(_ingEnCurso) return;
+  if(!ING.prov.trim()||!ING.num.trim()){ alert('Completa el proveedor y el número del documento.'); return; }
+  const lin=ING.lineas.filter(l=>(+l.recibido||0)>0&&P.some(p=>String(p.id)===String(l.pid)));
+  const t=ingTotales();
+  if(!lin.length&&!ING.pend.length){ alert('No hay unidades contadas.'); return; }
+  const grandes=lin.filter(l=>+l.recibido>=50).map(l=>{const p=P.find(x=>String(x.id)===String(l.pid));return (p?p.name:'')+': '+l.recibido+' uds';});
+  if(grandes.length&&!confirm('Cantidades grandes. Confirma que son correctas:\n\n'+grandes.join('\n'))) return;
+  if(!confirm('Registrar el ingreso de '+t.suman+' unidad(es) en '+lin.length+' producto(s)'+(ING.pend.length?' y '+t.espera+' unidad(es) en espera de alta':'')+'?\n\n'+ING.prov+' · '+ING.tipo+' '+ING.num)) return;
+  _ingEnCurso=true;
+  try{
+    const detalle=[];
+    for(const l of lin){
+      const p=P.find(x=>String(x.id)===String(l.pid)); const antes=+p.stock||0, n=+l.recibido;
+      await ajustarStock(p.id,n);
+      detalle.push({productoId:String(p.id),nombre:p.name||'',codigo:String(p.code||''),guia:(l.guia===''||l.guia==null)?null:+l.guia,recibido:n,antes,despues:antes+n});
+    }
+    const bid=await bitacora('ingreso_mercaderia',{accion:'Ingreso de mercaderia: '+t.suman+' uds · '+ING.prov+' · '+ING.tipo+' '+ING.num,
+      proveedor:ING.prov.trim(), tipoDoc:ING.tipo, numeroDoc:ING.num.trim(), fechaDoc:ING.fecha, modalidad:ING.modalidad,
+      lineas:detalle, pendientesAlta:ING.pend.filter(x=>+x.cantidad>0).map(x=>({codigo:x.codigo,cantidad:+x.cantidad,guia:x.guia===''?null:+x.guia})),
+      nota:ING.nota||'', unidades:t.suman});
+    if(!bid) alert('El stock se actualizó, pero el registro en la Bitácora falló. Avisa a la administración.');
+    ING=ingNuevo(); try{localStorage.removeItem(ING_KEY);}catch(e){}
+    invModo='lista'; render();
+    alert('✓ Ingreso registrado: '+t.suman+' unidad(es).'+(t.espera?'\n'+t.espera+' unidad(es) quedan en espera de alta.':''));
+  } finally { _ingEnCurso=false; }
 }
 
 // ── MONITOR ──────────────────────────────────────────────────
@@ -6296,6 +6929,7 @@ let selectedCancelMotivo = '';
         ? (document.getElementById('cancel-obs').value.trim() || 'Otro')
         : selectedCancelMotivo;
       var lid=cancelModal.lid, item=cancelModal.item, table=cancelModal.table;
+      cocinaAnular(table.id, lid, item, motivo);
       // Register cancellation
       var cancRec={id:'canc'+Date.now(), esCancelacion:true, prodName:item.name,
         qty:item.qty, motivo:motivo, mesa:table.name,
@@ -7779,6 +8413,7 @@ onAuthStateChanged(auth,async user=>{
   const lg=document.getElementById('login-screen');
   if(user){
     await _cargarRol(user);
+    if(MI_ROL==='cocina'){ location.replace('cocina/'); return; }
     _prepararBitacora(user);
     if(lg)lg.style.display='none';
     if(!_initDone){_initDone=true;init();}
