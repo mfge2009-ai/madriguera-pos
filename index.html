@@ -983,6 +983,7 @@ const BIT_ETIQUETAS={
   cierre_caja_sin_conteo:'CIERRE DE CAJA SIN CONTEO',
   accion_admin:'Accion de administracion',
   producto_eliminado:'PRODUCTO ELIMINADO',
+  precios_actualizados:'Actualización de precios por lista del proveedor',
   ingreso_mercaderia:'Ingreso de mercaderia',
   ajuste_stock:'Ajuste de stock',
   ingreso_revisado:'Ingreso de mercaderia revisado',
@@ -1237,13 +1238,30 @@ async function _retryBackups(){
   // Productos pendientes (documentos individuales en la coleccion productos)
   try{
     const pendP=JSON.parse(localStorage.getItem('madu_bk_prod')||'{}');
+    // FIX 22-oct: si el servidor RECHAZA un producto pendiente (la cuenta de caja
+    // no puede cambiar ficha/precio), reintentarlo nunca va a funcionar y dejaba
+    // el aviso rojo para siempre. Se descarta, dejando constancia en la bitacora.
+    // Solo los fallos de red siguen pendientes.
+    const descartados=[];
     for(const id of Object.keys(pendP)){
-      await setDoc(doc(db,PRODUCTOS_COL,id),_marca(pendP[id]));
-      _lastPSync.set(id,JSON.stringify(pendP[id]));
-      delete pendP[id]; recovered++;
+      try{
+        await conLimite(setDoc(doc(db,PRODUCTOS_COL,id),_marca(pendP[id])));
+        _lastPSync.set(id,JSON.stringify(pendP[id]));
+        recovered++;
+      }catch(e1){
+        const c1=(e1&&e1.code)||'';
+        if(!c1.includes('permission-denied')&&!c1.includes('invalid-argument')) throw e1;
+        descartados.push(id+' '+((pendP[id]&&pendP[id].name)||''));
+      }
+      delete pendP[id];
       localStorage.setItem('madu_bk_prod',JSON.stringify(pendP));
     }
     if(Object.keys(pendP).length===0)localStorage.removeItem('madu_bk_prod');
+    if(descartados.length){
+      console.warn('Productos pendientes descartados (sin permiso):',descartados);
+      bitacora('pendientes_descartados',{accion:'Se descartaron '+descartados.length+' cambio(s) de producto guardados en este equipo que el servidor no permite a esta cuenta',
+        detalle:descartados.slice(0,50).join(' | ')});
+    }
   }catch(e){ console.error('Retry productos pendientes fallo',e);
     avisoError('No se pudieron subir los cambios de productos que quedaron pendientes. Siguen guardados en este dispositivo; no cierres la sesion.'); }
   // Ajustes de stock pendientes (transacciones que no llegaron a confirmarse)
@@ -1346,6 +1364,11 @@ async function saveProductos(list,dbX){
 // existente se conserva el stock del servidor para no pisar ventas simultaneas
 // de otra caja. El stock se mueve unicamente con ajustarStock()/fijarStock().
 async function sP(dbX){
+  // FIX 22-oct: la cuenta de caja (rol pos) no puede escribir la ficha de un
+  // producto con su propia sesion (las reglas solo le dejan el stock, que va por
+  // ajustarStock/fijarStock). Sin sesion de administrador no se intenta: antes
+  // fallaba, quedaba "pendiente" y el aviso rojo no se iba nunca.
+  if(!dbX && MI_ROL!=='admin'){ console.warn('sP: omitido con rol',MI_ROL||'(sin rol)'); return true; }
   const dirty=[];
   P.forEach(p=>{
     if(!p||!p.id||p.esConsignado)return;
@@ -3238,7 +3261,8 @@ function rProductos(){
       <div style="display:flex;gap:7px">
         <button class="btn btn-g" onclick="resincronizarCatalogo()" style="font-size:11px" title="Relee el catalogo completo desde la nube (unas 1.800 lecturas). Normalmente no hace falta: se sincroniza solo.">🔄 Resincronizar</button>
         <button class="btn btn-g" id="bpexportcat" style="font-size:11px">↓ Exportar</button>
-        <button class="btn btn-g" id="bpimport" style="font-size:11px">↑ Importar CSV</button>
+        ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpprecios" style="font-size:11px" title="Actualiza precios de venta desde la lista Excel/CSV del proveedor, cruzando por ISBN">💲 Actualizar precios</button>':''}
+        ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpimport" style="font-size:11px">↑ Importar CSV</button>':''}
         <button class="btn btn-acc" id="bpn">+ Agregar</button>
       </div>
     </div>
@@ -3372,8 +3396,12 @@ function attachProd(){
     return P.find(p=>!p.esConsignado&&p.name.toLowerCase()===r.name.toLowerCase());
   };
 
+  // Actualizar precios desde lista del proveedor
+  mc.querySelector('#bpprecios')?.addEventListener('click',()=>abrirActualizarPrecios());
+  if(PRC){ const pp=document.getElementById('import-panel'); if(pp){ pp.style.display='block'; prcRender(); } }
   // CSV Import
   mc.querySelector('#bpimport')?.addEventListener('click',()=>{
+    PRC=null;
     const panel=document.getElementById('import-panel');
     if(!panel)return;
     if(panel.style.display==='block'){panel.style.display='none';return;}
@@ -3470,6 +3498,8 @@ function attachProd(){
 
     // Do import
     document.getElementById('bpimportdo')?.addEventListener('click',async()=>{
+      // FIX 22-oct: la importacion reescribe fichas y precios: solo administracion
+      if(MI_ROL!=='admin'){ alert('La importacion de productos solo la puede hacer administracion.'); return; }
       const btn=document.getElementById('bpimportdo');
       const rows=JSON.parse(btn.dataset.rows||'[]');
       if(rows.length===0)return;
@@ -3512,6 +3542,326 @@ function attachProd(){
     });
   });
 }
+
+// ── ACTUALIZAR PRECIOS DESDE LISTA DEL PROVEEDOR (solo administración) ──
+// Lee la lista del proveedor (.xlsx/.xls/.csv), cruza por ISBN con el catálogo,
+// muestra una vista previa y escribe SOLO el precio de los productos que
+// cambian (update de {price, updatedAt}: no toca stock, costo ni nombre).
+// Las ventas pasadas no cambian: cada venta guarda el precio con que se cobró.
+const PRECIOS_XLSX_URL='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+let PRC=null; // estado del panel
+
+function prcNormIsbn(v){
+  if(v===null||v===undefined)return '';
+  let s=(typeof v==='number')?String(Math.round(v)):String(v).trim();
+  if(/e\+/i.test(s)){ const n=parseFloat(s.replace(',','.')); if(!isNaN(n))s=String(Math.round(n)); }
+  s=s.replace(/[^0-9Xx]/g,'').toUpperCase();
+  if(/^\d{9}$/.test(s))s='0'+s;                       // ISBN-10 que perdió el cero inicial
+  if(/^\d{9}[\dX]$/.test(s)){                           // ISBN-10 → ISBN-13
+    const b='978'+s.slice(0,9); let t=0;
+    for(let i=0;i<12;i++)t+=(+b[i])*(i%2?3:1);
+    s=b+((10-t%10)%10);
+  }
+  return s;
+}
+function prcNum(v){
+  if(typeof v==='number')return v;
+  if(v===null||v===undefined)return NaN;
+  let s=String(v).replace(/[^\d,.\-]/g,'');
+  if(s.includes(',')&&!s.includes('.'))s=s.replace(',','.');
+  else if(s.includes(',')&&s.includes('.'))s=s.replace(/,/g,'');
+  return s===''?NaN:parseFloat(s);
+}
+const prcR2=n=>Math.round(n*100)/100;
+const prcNormH=h=>String(h??'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().trim();
+
+function prcCargarXLSX(){
+  if(window.XLSX)return Promise.resolve(window.XLSX);
+  return new Promise((ok,ko)=>{
+    const s=document.createElement('script'); s.src=PRECIOS_XLSX_URL;
+    s.onload=()=>window.XLSX?ok(window.XLSX):ko(new Error('lector de Excel no disponible'));
+    s.onerror=()=>ko(new Error('no se pudo cargar el lector de Excel (¿sin internet?). Guarda el archivo como CSV y vuelve a intentar.'));
+    document.head.appendChild(s);
+  });
+}
+function prcParseCSV(text){
+  const lines=text.replace(/^﻿/,'').split(/\r?\n/).filter(l=>l.trim());
+  if(!lines.length)return [];
+  const sep=(lines[0].split(';').length>=lines[0].split(',').length)?';':',';
+  return lines.map(l=>{
+    const out=[];let cur='',q=false;
+    for(let i=0;i<l.length;i++){const c=l[i];
+      if(c==='"'){ if(q&&l[i+1]==='"'){cur+='"';i++;} else q=!q; }
+      else if(c===sep&&!q){out.push(cur);cur='';}
+      else cur+=c;}
+    out.push(cur);
+    return out.map(v=>{v=v.trim();const m=v.match(/^="?(.*?)"?$/);return m?m[1]:v;});
+  });
+}
+async function prcLeerArchivo(file){
+  const nombre=file.name||'';
+  if(/\.csv$|\.txt$/i.test(nombre)) return prcParseCSV(await file.text());
+  const X=await prcCargarXLSX();
+  const wb=X.read(await file.arrayBuffer(),{type:'array'});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  return X.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
+}
+// Ubica la fila de encabezados y propone las columnas
+function prcDetectar(aoa){
+  let hr=-1;
+  for(let i=0;i<Math.min(aoa.length,20);i++){
+    const r=(aoa[i]||[]).map(prcNormH);
+    if(r.some(h=>/ISBN|EAN|CODIGO/.test(h))){hr=i;break;}
+  }
+  if(hr<0)return null;
+  const H=(aoa[hr]||[]).map(prcNormH);
+  const find=f=>H.findIndex(f);
+  const cIsbn=find(h=>/ISBN/.test(h))>=0?find(h=>/ISBN/.test(h)):find(h=>/EAN|CODIGO/.test(h));
+  let cNuevo=find(h=>/NUEVO|NUEVA/.test(h)&&/PRECIO|PVP/.test(h));
+  if(cNuevo<0)cNuevo=find(h=>/PRECIO NUEVO|PVP NUEVO/.test(h));
+  if(cNuevo<0){ for(let i=H.length-1;i>=0;i--) if(/PVP|PRECIO/.test(H[i])&&!/ANTERIOR|NETO|COSTO/.test(H[i])){cNuevo=i;break;} }
+  const cAnt=find(h=>/ANTERIOR/.test(h));
+  const cTit=find(h=>/TITULO|NOMBRE|DESCRIPCION/.test(h));
+  return {hr,headers:(aoa[hr]||[]).map(h=>String(h??'')),cIsbn,cNuevo,cAnt,cTit};
+}
+
+function prcAnalizar(){
+  const {aoa,det}=PRC;
+  const umbral=Math.max(1,+PRC.umbral||40)/100;
+  // Índice del catálogo por ISBN normalizado (consignados aparte: su precio vive en la consignación)
+  const idx=new Map();
+  P.forEach(p=>{ if(!p||!p.id||p.esConsignado||!p.code)return;
+    const k=prcNormIsbn(p.code); if(k.length<8)return;
+    if(!idx.has(k))idx.set(k,[]); idx.get(k).push(p); });
+  // Filas de la lista; ISBN repetido con precios distintos = conflicto
+  const lista=new Map(), conflictos=[], invalidas=[];
+  for(let i=det.hr+1;i<aoa.length;i++){
+    const r=aoa[i]||[]; const raw=r[det.cIsbn];
+    if(raw===null||raw===undefined||String(raw).trim()==='')continue;
+    const k=prcNormIsbn(raw);
+    const nuevo=prcNum(r[det.cNuevo]);
+    const ant=det.cAnt>=0?prcNum(r[det.cAnt]):NaN;
+    const tit=det.cTit>=0?String(r[det.cTit]??''):'';
+    const fila={fila:i+1,isbnLista:String(raw),k,nuevo,ant,tit};
+    if(k.length<8||isNaN(nuevo)||nuevo<=0){invalidas.push(fila);continue;}
+    fila.nuevo=prcR2(nuevo);
+    if(lista.has(k)){ const o=lista.get(k); if(o.nuevo!==fila.nuevo){o.conflicto=true;conflictos.push(fila);} continue; }
+    lista.set(k,fila);
+  }
+  const cambios=[], iguales=[], noPOS=[];
+  lista.forEach((f,k)=>{
+    if(f.conflicto)return;
+    const ps=idx.get(k);
+    if(!ps){noPOS.push(f);return;}
+    ps.forEach(p=>{
+      const actual=prcR2(+p.price||0);
+      if(Math.abs(actual-f.nuevo)<0.005){iguales.push({f,p});return;}
+      const pct=actual>0?(f.nuevo-actual)/actual:Infinity;
+      const alerta=Math.abs(pct)>umbral;
+      const difLista=!isNaN(f.ant)&&Math.abs(prcR2(f.ant)-actual)>=0.005;
+      cambios.push({id:String(p.id),p,f,actual,nuevo:f.nuevo,pct,alerta,difLista,
+        dup:ps.length>1,inactivo:p.active===false,sel:!alerta});
+    });
+  });
+  cambios.sort((a,b)=>(b.alerta-a.alerta)||(Math.abs(b.pct)-Math.abs(a.pct)));
+  Object.assign(PRC,{cambios,iguales,noPOS,conflictos,invalidas,listaN:lista.size,
+    conflictoK:[...lista.values()].filter(f=>f.conflicto)});
+}
+
+function prcCSV(nombre,cab,filas){
+  const q=v=>{v=String(v??'');return /[;"\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const csv=[cab,...filas].map(r=>r.map(q).join(';')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'}));
+  a.download=nombre; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+const prcFmt=n=>'$'+(+n).toFixed(2);
+const prcPct=x=>isFinite(x)?((x>0?'+':'')+(x*100).toFixed(1)+'%'):'—';
+
+function prcRender(){
+  const panel=document.getElementById('import-panel'); if(!panel||!PRC)return;
+  const S=PRC;
+  let h=`<div class="card" style="margin-bottom:14px;background:var(--bbg);border-color:var(--bbrd)" id="prc-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-weight:700;font-size:13px;color:var(--blu)">💲 Actualizar precios desde lista del proveedor</div>
+      <button class="btn btn-g btn-sm" id="prc-cerrar">Cerrar</button></div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px">
+      Carga el Excel o CSV del proveedor. Se cruza por <b>ISBN</b> y solo cambia el <b>precio de venta</b>: no toca stock, costo ni nombre.
+      Las ventas ya hechas conservan su precio. Los libros en consignación (Segunda Vida) no se modifican.</div>`;
+  if(S.paso==='archivo'||!S.aoa){
+    h+=`<input type="file" id="prc-file" accept=".xlsx,.xls,.csv" style="font-size:12px;display:block;margin-bottom:6px">
+      <div id="prc-msg" style="font-size:12px;color:var(--text2)">${esc(S.msg||'')}</div></div>`;
+    panel.innerHTML=h; prcBind(); return;
+  }
+  const opts=sel=>S.det.headers.map((t,i)=>`<option value="${i}"${i===sel?' selected':''}>${esc(t||('Columna '+(i+1)))}</option>`).join('');
+  h+=`<div style="font-size:12px;margin-bottom:8px">Archivo: <b>${esc(S.archivo)}</b> · ${S.aoa.length-S.det.hr-1} filas</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px">
+      <div class="fg" style="margin:0"><label>Columna ISBN</label><select id="prc-cisbn">${opts(S.det.cIsbn)}</select></div>
+      <div class="fg" style="margin:0"><label>Columna precio NUEVO</label><select id="prc-cnuevo">${opts(S.det.cNuevo)}</select></div>
+      <div class="fg" style="margin:0"><label>Precio anterior (referencia)</label><select id="prc-cant"><option value="-1">— ninguna —</option>${opts(S.det.cAnt)}</select></div>
+      <div class="fg" style="margin:0"><label>Revisar si cambia más de (%)</label><input id="prc-umbral" type="number" min="1" value="${esc(S.umbral)}"></div>
+    </div>`;
+  if(S.paso==='hecho'){
+    h+=`<div style="padding:10px;border-radius:8px;background:var(--gbg,#ecfdf5);color:var(--grn);font-weight:600;margin-bottom:8px">✓ ${S.hecho.ok} precio(s) actualizados${S.hecho.fallo?` · <span style="color:var(--red)">${S.hecho.fallo} no se pudieron guardar (vuelve a analizar y aplica de nuevo)</span>`:''}</div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap"><button class="btn btn-b btn-sm" id="prc-acta">↓ Descargar acta de cambios</button>
+      <button class="btn btn-g btn-sm" id="prc-otro">Cargar otra lista</button></div></div>`;
+    panel.innerHTML=h; prcBind(); return;
+  }
+  const sube=S.cambios.filter(c=>c.nuevo>c.actual).length, baja=S.cambios.length-sube;
+  const nAl=S.cambios.filter(c=>c.alerta).length, nSel=S.cambios.filter(c=>c.sel).length;
+  const kpi=(t,v,c,f)=>`<div data-f="${f}" class="prc-kpi" style="cursor:pointer;padding:8px;border-radius:8px;background:var(--bg2,#fff);border:1px solid ${S.filtro===f?'var(--blu)':'var(--border)'}"><div style="font-size:18px;font-weight:700;color:${c}">${v}</div><div style="font-size:10.5px;color:var(--text3)">${t}</div></div>`;
+  h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:6px;margin-bottom:10px">
+      ${kpi('Cambian de precio',S.cambios.length,'var(--text)','cambios')}
+      ${kpi('Suben',sube,'var(--red)','sube')}
+      ${kpi('Bajan',baja,'var(--grn)','baja')}
+      ${kpi('Para revisar (>'+S.umbral+'%)',nAl,'var(--amber)','alerta')}
+      ${kpi('Sin cambio',S.iguales.length,'var(--text3)','igual')}
+      ${kpi('No están en el POS',S.noPOS.length,'var(--text3)','nopos')}
+      ${(S.conflictoK.length+S.invalidas.length)?kpi('Con error en la lista',S.conflictoK.length+S.invalidas.length,'var(--red)','error'):''}
+    </div>`;
+  const q=(S.busca||'').toLowerCase();
+  const mq=(t,i)=>!q||String(t||'').toLowerCase().includes(q)||String(i||'').toLowerCase().includes(q);
+  let rows='', lista=[];
+  if(['cambios','sube','baja','alerta'].includes(S.filtro)){
+    lista=S.cambios.filter(c=>(S.filtro==='cambios')||(S.filtro==='sube'&&c.nuevo>c.actual)||(S.filtro==='baja'&&c.nuevo<c.actual)||(S.filtro==='alerta'&&c.alerta))
+      .filter(c=>mq(c.p.name,c.p.code));
+    rows=lista.map(c=>`<tr style="${c.alerta?'background:rgba(245,158,11,.08)':''}">
+      <td style="padding:4px"><input type="checkbox" class="prc-ck" data-id="${esc(c.id)}"${c.sel?' checked':''} style="width:auto"></td>
+      <td style="padding:4px;font-family:monospace;font-size:10.5px">${esc(c.p.code)}</td>
+      <td style="padding:4px">${esc(c.p.name)}${c.inactivo?' <span style="font-size:10px;color:var(--text3)">(inactivo)</span>':''}${c.dup?' <span title="Hay más de un producto con este ISBN; se actualizan todos" style="font-size:10px;color:var(--amber)">ISBN repetido</span>':''}${c.difLista?` <span title="El precio del POS no coincide con el «precio anterior» de la lista (${prcFmt(c.f.ant)})" style="font-size:10px;color:var(--amber)">POS≠lista ant. ${prcFmt(c.f.ant)}</span>`:''}</td>
+      <td style="padding:4px;text-align:right">${prcFmt(c.actual)}</td>
+      <td style="padding:4px;text-align:right;font-weight:600">${prcFmt(c.nuevo)}</td>
+      <td style="padding:4px;text-align:right;color:${c.nuevo>c.actual?'var(--red)':'var(--grn)'}">${prcPct(c.pct)}</td></tr>`);
+  } else if(S.filtro==='igual'){
+    lista=S.iguales.filter(x=>mq(x.p.name,x.p.code));
+    rows=lista.map(x=>`<tr><td></td><td style="padding:4px;font-family:monospace;font-size:10.5px">${esc(x.p.code)}</td><td style="padding:4px">${esc(x.p.name)}</td><td style="padding:4px;text-align:right">${prcFmt(x.p.price)}</td><td></td><td></td></tr>`);
+  } else if(S.filtro==='nopos'){
+    lista=S.noPOS.filter(f=>mq(f.tit,f.isbnLista));
+    rows=lista.map(f=>`<tr><td></td><td style="padding:4px;font-family:monospace;font-size:10.5px">${esc(f.isbnLista)}</td><td style="padding:4px">${esc(f.tit)}</td><td></td><td style="padding:4px;text-align:right">${prcFmt(f.nuevo)}</td><td></td></tr>`);
+  } else if(S.filtro==='error'){
+    lista=[...S.conflictoK.map(f=>({...f,mot:'ISBN repetido en la lista con precios distintos'})),
+           ...S.invalidas.map(f=>({...f,mot:isNaN(f.nuevo)||f.nuevo<=0?'Precio nuevo vacío o en cero':'ISBN no válido'}))];
+    rows=lista.map(f=>`<tr><td></td><td style="padding:4px;font-family:monospace;font-size:10.5px">${esc(f.isbnLista)}</td><td style="padding:4px">${esc(f.tit)} <span style="font-size:10px;color:var(--red)">fila ${f.fila}: ${esc(f.mot)}</span></td><td></td><td></td><td></td></tr>`);
+  }
+  const MAX=400, mas=rows.length>MAX;
+  h+=`<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <input id="prc-busca" type="text" placeholder="Filtrar por título o ISBN…" value="${esc(S.busca||'')}" style="flex:1;min-width:160px">
+      ${['cambios','sube','baja','alerta'].includes(S.filtro)?`<button class="btn btn-g btn-sm" id="prc-todos">Marcar visibles</button><button class="btn btn-g btn-sm" id="prc-ninguno">Desmarcar visibles</button>`:''}
+      ${S.filtro==='nopos'?`<button class="btn btn-g btn-sm" id="prc-dlnopos">↓ CSV no encontrados</button>`:''}
+    </div>
+    <div style="max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg2,#fff)">
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:var(--bg3)">
+      <th></th><th style="text-align:left;padding:5px">ISBN</th><th style="text-align:left;padding:5px">Título</th><th style="text-align:right;padding:5px">Precio POS</th><th style="text-align:right;padding:5px">Nuevo</th><th style="text-align:right;padding:5px">Cambio</th></tr></thead>
+    <tbody>${rows.slice(0,MAX).join('')||'<tr><td colspan="6" style="padding:12px;color:var(--text3);text-align:center">Nada que mostrar</td></tr>'}</tbody></table></div>
+    ${mas?`<div style="font-size:11px;color:var(--text3);margin-top:4px">Se muestran ${MAX} de ${rows.length}. Usa el filtro para ubicar uno en particular.</div>`:''}
+    ${nAl?`<div style="font-size:11.5px;color:var(--amber);margin-top:8px">⚠ ${nAl} cambio(s) superan el ${esc(S.umbral)}% y quedaron <b>sin marcar</b>. Revísalos y márcalos si están bien.</div>`:''}
+    <div style="display:flex;gap:7px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap">
+      <button class="btn btn-g btn-sm" id="prc-otro">Cargar otra lista</button>
+      <button class="btn btn-b" id="prc-aplicar"${nSel?'':' disabled'}>Aplicar ${nSel} cambio(s) de precio</button></div></div>`;
+  panel.innerHTML=h; prcBind();
+}
+
+function prcBind(){
+  const $=id=>document.getElementById(id);
+  $('prc-cerrar')?.addEventListener('click',()=>{PRC=null;const p=$('import-panel');if(p){p.style.display='none';p.innerHTML='';}});
+  $('prc-file')?.addEventListener('change',async e=>{
+    const file=e.target.files[0]; if(!file)return;
+    PRC.msg='Leyendo '+file.name+'…'; prcRender();
+    try{
+      const aoa=await prcLeerArchivo(file);
+      const det=prcDetectar(aoa);
+      if(!det||det.cIsbn<0){PRC.msg='No encontré una columna de ISBN en las primeras 20 filas.';PRC.aoa=null;prcRender();return;}
+      if(det.cNuevo<0)det.cNuevo=det.cIsbn;
+      Object.assign(PRC,{aoa,det,archivo:file.name,paso:'vista',filtro:'cambios',busca:''});
+      prcAnalizar(); prcRender();
+    }catch(err){ console.error('precios:',err); PRC.msg='✘ '+(err.message||err); PRC.aoa=null; prcRender(); }
+  });
+  const reAn=()=>{ if(!PRC.det)return;
+    PRC.det.cIsbn=+$('prc-cisbn').value; PRC.det.cNuevo=+$('prc-cnuevo').value; PRC.det.cAnt=+$('prc-cant').value;
+    PRC.umbral=Math.max(1,+$('prc-umbral').value||40); PRC.paso='vista'; prcAnalizar(); prcRender(); };
+  ['prc-cisbn','prc-cnuevo','prc-cant','prc-umbral'].forEach(id=>$(id)?.addEventListener('change',reAn));
+  document.querySelectorAll('.prc-kpi').forEach(el=>el.addEventListener('click',()=>{PRC.filtro=el.dataset.f;prcRender();}));
+  $('prc-busca')?.addEventListener('input',e=>{PRC.busca=e.target.value;clearTimeout(PRC._t);
+    PRC._t=setTimeout(()=>{prcRender();const b=$('prc-busca');if(b){b.focus();b.setSelectionRange(b.value.length,b.value.length);}},250);});
+  document.querySelectorAll('.prc-ck').forEach(ck=>ck.addEventListener('change',()=>{
+    PRC.cambios.filter(c=>c.id===ck.dataset.id).forEach(c=>c.sel=ck.checked);
+    const n=PRC.cambios.filter(c=>c.sel).length, b=$('prc-aplicar');
+    if(b){b.textContent='Aplicar '+n+' cambio(s) de precio';b.disabled=!n;} }));
+  const marcar=v=>{ const ids=new Set([...document.querySelectorAll('.prc-ck')].map(c=>c.dataset.id));
+    PRC.cambios.forEach(c=>{if(ids.has(c.id))c.sel=v;}); prcRender(); };
+  $('prc-todos')?.addEventListener('click',()=>marcar(true));
+  $('prc-ninguno')?.addEventListener('click',()=>marcar(false));
+  $('prc-otro')?.addEventListener('click',()=>{PRC={paso:'archivo',umbral:PRC.umbral};prcRender();});
+  $('prc-dlnopos')?.addEventListener('click',()=>prcCSV('no_encontrados_en_POS_'+today()+'.csv',
+    ['ISBN','Titulo','Precio nuevo','Fila en la lista'],PRC.noPOS.map(f=>[f.isbnLista,f.tit,f.nuevo.toFixed(2),f.fila])));
+  $('prc-acta')?.addEventListener('click',prcDescargarActa);
+  $('prc-aplicar')?.addEventListener('click',prcAplicar);
+}
+
+function prcDescargarActa(){
+  const H=PRC.hecho; if(!H)return;
+  prcCSV('acta_precios_'+H.fecha.slice(0,10)+'.csv',
+    ['ISBN','Titulo','Precio anterior','Precio nuevo','Cambio %','Id producto','Fecha','Usuario','Lista'],
+    H.items.map(c=>[c.code,c.name,c.actual.toFixed(2),c.nuevo.toFixed(2),isFinite(c.pct)?(c.pct*100).toFixed(1):'',c.id,H.fecha,H.usuario,H.archivo]));
+}
+
+async function prcAplicar(){
+  if(MI_ROL!=='admin'){alert('Solo administración puede cambiar precios.');return;}
+  const sel=PRC.cambios.filter(c=>c.sel);
+  if(!sel.length)return;
+  const sube=sel.filter(c=>c.nuevo>c.actual).length;
+  if(!confirm('Se actualizará el precio de '+sel.length+' producto(s) ('+sube+' suben, '+(sel.length-sube)+' bajan).\n\nNo se toca stock ni costo. Las ventas ya hechas no cambian.\n¿Continuar?'))return;
+  const btn=document.getElementById('prc-aplicar'); if(btn){btn.disabled=true;btn.textContent='Guardando…';}
+  const ok=[]; let fallo=0, errMsg='';
+  for(let i=0;i<sel.length;i+=400){
+    const lote=sel.slice(i,i+400);
+    try{
+      const batch=writeBatch(db);
+      lote.forEach(c=>batch.update(doc(db,PRODUCTOS_COL,c.id),{price:c.nuevo,updatedAt:serverTimestamp()}));
+      await conLimite(batch.commit(),20000);
+      lote.forEach(c=>{
+        const lp=P.find(x=>String(x.id)===c.id); if(lp)lp.price=c.nuevo;
+        if(typeof _catMap!=='undefined'&&_catMap.get(c.id))_catMap.get(c.id).price=c.nuevo;
+        const prev=_lastPSync.get(c.id);
+        if(prev){try{const o=JSON.parse(prev);o.price=c.nuevo;_lastPSync.set(c.id,JSON.stringify(o));}catch(e){}}
+        ok.push(c);
+      });
+      if(btn)btn.textContent='Guardando… '+ok.length+'/'+sel.length;
+    }catch(e){
+      console.error('precios lote',e); fallo+=lote.length; errMsg=msgError(e,'guardar precios');
+      registrarFallo('actualizar precios',e);
+    }
+  }
+  const fecha=localISO(), usuario=authUser();
+  // Bitácora: resumen + detalle en tramos (ISBN|precio anterior|precio nuevo)
+  try{
+    for(let i=0;i<ok.length||i===0;i+=500){
+      const tramo=ok.slice(i,i+500);
+      await bitacora('precios_actualizados',{
+        accion:'Actualizó '+ok.length+' precio(s) desde la lista «'+PRC.archivo+'»'+(ok.length>500?' (tramo '+(i/500+1)+' de '+Math.ceil(ok.length/500)+')':''),
+        archivo:PRC.archivo, total:ok.length, fallidos:fallo,
+        detalle:tramo.map(c=>(c.p.code||'')+'|'+c.actual.toFixed(2)+'|'+c.nuevo.toFixed(2)).join(';')});
+      if(!ok.length)break;
+    }
+  }catch(e){console.error('bitacora precios',e);}
+  if(fallo)avisoError(errMsg||('No se pudieron guardar '+fallo+' precio(s)'));
+  PRC.hecho={ok:ok.length,fallo,fecha,usuario,archivo:PRC.archivo,
+    items:ok.map(c=>({code:c.p.code,name:c.p.name,actual:c.actual,nuevo:c.nuevo,pct:c.pct,id:c.id}))};
+  PRC.paso='hecho';
+  try{ if(typeof _catProgramarGuardado==='function')_catProgramarGuardado(); }catch(e){}
+  prcRender();
+}
+
+function abrirActualizarPrecios(){
+  if(MI_ROL!=='admin'){alert('Solo administración puede actualizar precios.');return;}
+  const panel=document.getElementById('import-panel'); if(!panel)return;
+  if(panel.style.display==='block'&&PRC){panel.style.display='none';PRC=null;return;}
+  panel.style.display='block';
+  PRC={paso:'archivo',umbral:40};
+  prcRender();
+}
+// Acceso de solo lectura para diagnóstico desde la consola (no permite escribir)
+window.__prc={estado:()=>PRC,precioLocal:id=>(P.find(p=>String(p.id)===String(id))||{}).price,abrir:()=>abrirActualizarPrecios()};
 
 // ── DASHBOARD ─────────────────────────────────────────────────
 function rDash(){
@@ -9129,6 +9479,7 @@ async function init(){
 
 // ── Patch: fix Americano variants after subRT loads ────────────
 function patchProducts(){
+  if(MI_ROL!=='admin') return;   // FIX 22-oct: las correcciones de datos solo las graba administracion
   // Fix scientific notation ISBNs
   let isbnFixed=false;
   P.forEach(p=>{
