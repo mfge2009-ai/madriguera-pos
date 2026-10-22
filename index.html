@@ -209,8 +209,8 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 .ing-in{width:52px;padding:5px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:13px;text-align:center;font-family:inherit}
 .ing-aviso{border-radius:var(--rs);padding:8px 10px;font-size:11px;margin:6px 0;line-height:1.5}
 .ing-res{position:sticky;top:10px}
-#inv-q,#ing-scan{width:100%;box-sizing:border-box;padding:9px 10px 9px 32px;border:1.5px solid var(--b2);border-radius:var(--rs);font-family:inherit;font-size:13px;background:var(--bg2);outline:none}
-#inv-q:focus{border-color:var(--acc)}
+#inv-q,#ing-scan,#sri-q{width:100%;box-sizing:border-box;padding:9px 10px 9px 32px;border:1.5px solid var(--b2);border-radius:var(--rs);font-family:inherit;font-size:13px;background:var(--bg2);outline:none}
+#inv-q:focus,#sri-q:focus{border-color:var(--acc)}
 #ing-scan{border:2px solid var(--acc);font-size:14px;padding:11px 10px 11px 34px}
 @media(max-width:900px){.ing-grid{grid-template-columns:1fr}.ing-res{position:static}.sg4{grid-template-columns:1fr 1fr}}
 @media(max-width:760px){.inv-head{display:none}.inv-row,.inv-pos .inv-row{display:flex;flex-wrap:wrap;gap:6px 10px}.inv-prod{flex:1 1 100%}.inv-cat,.inv-adm{display:none}.inv-acc{flex:1;justify-content:flex-end}
@@ -298,6 +298,43 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
 .cj-den-r input:focus{border-color:var(--acc);outline:none}
 .cj-den-r b{text-align:right;font-size:13px}
 .cj-den-t{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--acl);color:var(--acc);font-size:13px;font-weight:700}.cj-den-t b{font-size:18px}
+/* ── Rediseño fase 4 (22-oct-2026): facturación SRI y revisión de ingresos ── */
+.sri-franja{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:10px}
+.sri-amb{display:flex;align-items:center;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:800;letter-spacing:.03em;background:var(--bg3);color:var(--text2)}
+.sri-amb.prod{background:var(--gbg);color:var(--grn)}.sri-amb.prue{background:var(--abg);color:var(--amb)}
+.sri-fi{display:flex;flex-direction:column;justify-content:center;padding:3px 10px;border-left:1px solid var(--border);min-width:0}
+.sri-fi span{font-size:9.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.04em}.sri-fi b{font-size:12.5px;white-space:nowrap}
+.sri-fbtn{display:flex;gap:6px;align-items:center;margin-left:auto;flex-wrap:wrap}
+.sri-alerta{font-size:12px;margin-bottom:8px;padding:8px 11px;border-radius:8px;background:var(--abg);color:var(--amb)}.sri-alerta.mal{background:var(--rbg);color:var(--red)}
+.sri-prueba{font-size:12px;margin-bottom:10px;padding:8px 11px;border-radius:8px;background:var(--bbg);color:var(--blu);display:flex;gap:10px;flex-wrap:wrap}
+.sri-prueba.ok{background:var(--gbg);color:var(--grn)}.sri-prueba.mal{background:var(--rbg);color:var(--red)}
+.sri-row{display:grid;grid-template-columns:150px minmax(0,1fr) 90px 230px 18px;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--border);font-size:12.5px;cursor:pointer}
+.sri-row:hover{background:var(--bg3)}.sri-row.sel{background:var(--acl)}.sri-row.mal{box-shadow:inset 3px 0 0 var(--red)}
+.sri-row:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+.sri-head{cursor:default;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;background:var(--bg3);padding:7px 14px}.sri-head:hover{background:var(--bg3)}
+.sri-c3{text-align:right;font-weight:700;color:var(--acc)}.sri-c4{display:flex;gap:4px;flex-wrap:wrap}.sri-c5{color:var(--text3)}
+.sri-tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sri-sub{font-size:10.5px;color:var(--text3)}.sri-mot{font-size:11px;color:var(--red);margin-top:2px}
+.sri-det{padding:8px 14px 12px;background:var(--acl);border-top:1px dashed var(--b2)}.sri-det .card{margin:0!important}
+.sri-vacio{padding:18px;text-align:center;color:var(--text3);font-size:12.5px;border-top:1px solid var(--border)}
+.sri-pie{padding:8px 14px;font-size:10.5px;color:var(--text3);border-top:1px solid var(--border);background:var(--bg3)}
+.sri-ecu{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;font-size:13px;padding:9px 12px;background:var(--bg3);border-radius:var(--rs)}
+.sri-ecu b{font-size:15px}.sri-ecu .mal{color:var(--red)}.sri-ecu .ok{color:var(--grn)}
+.sri-sec{font-size:12px;font-weight:700;color:var(--text2);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.04em}
+.rev-grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:1100px){.rev-grid{grid-template-columns:minmax(300px,380px) minmax(0,1fr);align-items:start}}
+.rev-fila{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--border);cursor:pointer}
+.rev-fila:hover{background:var(--bg3)}.rev-fila.sel{background:var(--acl);box-shadow:inset 3px 0 0 var(--acc)}
+.rev-fila:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+.rev-tab{border:1px solid var(--border);border-radius:var(--rs);overflow:hidden}
+.rev-tr{display:grid;grid-template-columns:minmax(0,1fr) 56px 70px 84px 84px;gap:8px;align-items:center;padding:7px 10px;border-top:1px solid var(--border);font-size:12px}
+.rev-tr:first-child{border-top:none}.rev-th{background:var(--bg3);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase}
+.rev-sec{font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px}
+.rev-caso{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--abrd,var(--border));background:var(--abg);border-radius:var(--rs);margin-bottom:6px;font-size:12.5px}
+.rev-caso select,#rev-fac,#rev-nota{padding:7px 9px;border-radius:var(--rs);border:1.5px solid var(--b2);font-family:inherit;font-size:12.5px;background:var(--bg2)}
+.rev-caja{margin-top:12px;padding:10px 12px;border-radius:var(--rs);font-size:12.5px;line-height:1.6}.rev-caja.ok{background:var(--gbg);color:var(--text)}
+@media(max-width:700px){.sri-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}.sri-c2{grid-column:1/-1;order:3}.sri-c4{grid-column:1/-1;order:4}.sri-c5{display:none}.sri-head{display:none}
+  .sri-fi{border-left:none;padding:2px 6px}.sri-fbtn{margin-left:0;width:100%}.rev-tr{grid-template-columns:minmax(0,1fr) 44px 56px;}.rev-tr>div:nth-child(4){display:none}.rev-tr>div:nth-child(5){grid-column:1/-1}}
 </style>
 </head>
 <body>
@@ -933,6 +970,8 @@ async function pedirAutorizacionAdmin(accion, extra){
 // ═══════════════════════════════════════════════════════════════
 let MI_ROL='';
 let BIT=[], bitDesde='', bitPersona='Todas', bitEvento='Todos', bitCargado=false;
+// Fase 4: revision de ingresos (ingresos_revision/)
+let REV={}, revCargado=false, revCargando=false, revError='', revSel=null, revFiltro='pendientes', REV_FAC={}, revFacCargando=false, revBorr={}, revBitPedida=false;
 
 const BIT_ETIQUETAS={
   inicio_sesion:'Inicio de sesion',
@@ -945,7 +984,9 @@ const BIT_ETIQUETAS={
   accion_admin:'Accion de administracion',
   producto_eliminado:'PRODUCTO ELIMINADO',
   ingreso_mercaderia:'Ingreso de mercaderia',
-  ajuste_stock:'Ajuste de stock'
+  ajuste_stock:'Ajuste de stock',
+  ingreso_revisado:'Ingreso de mercaderia revisado',
+  ingreso_alta_sumada:'Unidades sin alta sumadas al stock'
 };
 
 // ses (opcional) = {db, uid, email} de la sesion temporal del administrador.
@@ -3236,7 +3277,7 @@ function attachProd(){
     if(ns){ns.focus();ns.setSelectionRange(pos,pos);}
   });
   mc.querySelector('#bpn')?.addEventListener('click',()=>{editP='new';render();});
-  mc.querySelector('#bpc')?.addEventListener('click',()=>{editP=null;render();});
+  mc.querySelector('#bpc')?.addEventListener('click',()=>{editP=null;window._prefillCodigo='';if(window._revVolver){window._revVolver=false;irA('inventario',()=>{invModo='revision';});return;}render();});
   mc.querySelector('#bps')?.addEventListener('click',async()=>{
     const name=document.getElementById('fn').value.trim();
     const category=document.getElementById('fcat').value;
@@ -3288,6 +3329,8 @@ function attachProd(){
     }
     if(editP==='new') await registrarCambioPrecio(null,{name,price},'alta');
     else if(cambioPrecio){ const p=P.find(x=>x.id===editP); await registrarCambioPrecio(p,{name,price,precioAnterior},'cambio'); }
+    window._prefillCodigo='';
+    if(window._revVolver){ window._revVolver=false; editP=null; irA('inventario',()=>{invModo='revision';}); return; }
     editP=null;render();
   });
   mc.querySelectorAll('[data-pe]').forEach(el=>el.addEventListener('click',()=>{editP=el.dataset.pe;render();}));
@@ -4612,27 +4655,19 @@ function invFila(p,admin){
 }
 function invIngresosRecientes(){
   if(MI_ROL!=='admin'||typeof BIT==='undefined') return '';
-  const ing=BIT.filter(b=>b.evento==='ingreso_mercaderia').slice(0,8);
-  if(!ing.length) return '';
-  return `<div class="card" style="margin-top:14px">
-    <div class="rb" style="margin-bottom:8px"><b style="font-size:13px">Ingresos de mercadería recientes</b>
-      <span style="font-size:11px;color:var(--text3)">Crúcelos con la guía o factura del proveedor</span></div>
-    ${ing.map(b=>{
-      const lin=Array.isArray(b.lineas)?b.lineas:[], pend=Array.isArray(b.pendientesAlta)?b.pendientesAlta:[];
-      const dif=lin.filter(l=>l.guia!=null&&+l.guia!==+l.recibido);
-      const est=(dif.length||pend.length)?`<span class="badge ba">${dif.length?dif.length+' diferencia'+(dif.length>1?'s':''):''}${dif.length&&pend.length?' · ':''}${pend.length?pend.length+' sin alta':''}</span>`:'<span class="badge bg">Cuadra</span>';
-      return `<div class="mrow" style="align-items:flex-start;flex-wrap:wrap;gap:6px">
-        <div style="min-width:0;flex:1"><div style="font-weight:600;font-size:12px">${esc(b.proveedor||'')} · ${esc(b.tipoDoc||'')} ${esc(b.numeroDoc||'')}</div>
-          <div style="font-size:11px;color:var(--text3)">${esc((b.fecha||'').slice(0,16).replace('T',' '))} · ${esc(b.usuario||'')} · ${+b.unidades||0} uds${b.modalidad?' · '+esc(b.modalidad):''}</div>
-          ${dif.map(l=>`<div style="font-size:11px;color:var(--amb)">${esc(l.nombre)}: guía ${l.guia} · contado ${l.recibido}</div>`).join('')}
-          ${pend.map(x=>`<div style="font-size:11px;color:var(--red);display:flex;gap:6px;align-items:center;margin-top:3px">Código ${esc(x.codigo)} · ${+x.cantidad||0} uds sin alta
-            <button class="btn btn-g btn-sm" style="padding:2px 8px;font-size:10px" data-ingalta="${esc(x.codigo)}">Crear producto</button></div>`).join('')}
-        </div>${est}</div>`;
-    }).join('')}
-  </div>`;
+  if(!revCargado&&!revCargando&&!revError) setTimeout(revCargar,0);
+  const ing=revIngresos(); if(!ing.length) return '';
+  const sinRev=ing.filter(b=>!REV[b.id]);
+  const casos=sinRev.filter(b=>revDifs(b).length||revPend(b).length).length;
+  return `<div class="card" style="margin-top:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <div style="flex:1;min-width:220px"><b style="font-size:13px">Revisión de ingresos de mercadería</b>
+      <div style="font-size:12px;color:var(--text2)">${ing.length} ingreso(s) en 30 días · <b style="color:${sinRev.length?'var(--blu)':'var(--grn)'}">${sinRev.length} por revisar</b>${casos?' · <b style="color:var(--amb)">'+casos+' con diferencias o códigos sin alta</b>':''}</div>
+      <div style="font-size:11px;color:var(--text3)">Cruce cada ingreso con la factura del proveedor o el corte de consignación.</div></div>
+    <button class="btn ${sinRev.length?'btn-acc':'btn-g'}" id="brev">Abrir revisión →</button></div>`;
 }
 function rInv(){
   if(invModo==='ingreso') return rIngreso();
+  if(invModo==='revision'){ if(MI_ROL==='admin') return rRevIngresos(); invModo='lista'; }
   const admin=MI_ROL==='admin';
   const reales=P.filter(esProdReal), activos=reales.filter(p=>p.active);
   const nSin=activos.filter(p=>stockTipo(p)==='cero').length, nBajo=activos.filter(p=>stockTipo(p)==='bajo').length;
@@ -4680,6 +4715,7 @@ function rInv(){
 }
 function attachInv(){
   if(invModo==='ingreso') return attachIngreso();
+  if(invModo==='revision') return attachRevIngresos();
   const mc=document.getElementById('mc');
   const q=mc.querySelector('#inv-q');
   q?.addEventListener('input',e=>{ invQ=e.target.value; invPag=0; const pos=e.target.selectionStart; render(); const n=document.getElementById('inv-q'); if(n){ n.focus(); try{n.setSelectionRange(pos,pos);}catch(_){} } });
@@ -4687,6 +4723,7 @@ function attachInv(){
   mc.querySelectorAll('[data-iv]').forEach(el=>el.addEventListener('click',()=>{ invVista=el.dataset.iv; invPag=0; render(); }));
   mc.querySelectorAll('[data-ipag]').forEach(el=>el.addEventListener('click',()=>{ invPag=Math.max(0,invPag+(+el.dataset.ipag)); render(); }));
   mc.querySelector('#binging')?.addEventListener('click',()=>{ invModo='ingreso'; if(!ING) ING=ingCargar(); render(); });
+  mc.querySelector('#brev')?.addEventListener('click',()=>{ invModo='revision'; revSel=null; render(); });
   // Ajustar / fijar stock: igual que antes, con autorizacion de administracion (queda en bitacora)
   mc.querySelectorAll('[data-es]').forEach(el=>el.addEventListener('click',async()=>{
     const _p=P.find(x=>String(x.id)===el.dataset.es);
@@ -5827,7 +5864,10 @@ function attachReportes(){
 
 // ── FACTURAS ─────────────────────────────────────────────────
 function rFacturas(){
-  return rFacturasSri()+rFacturasManual();
+  const pend=S.filter(s=>s.esFactura&&s.estado==='pendiente').length;
+  const man=rFacturasManual();
+  const tit='<div style="font-size:12px;font-weight:700;color:var(--text2);margin:6px 0 10px">Solicitudes manuales (sistema anterior)</div>';
+  return rFacturasSri()+(pend?tit+man:`<details class="card" style="padding:10px 12px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text2)">Solicitudes manuales (sistema anterior) · sin pendientes</summary><div style="margin-top:10px">${man}</div></details>`);
 }
 function rFacturasManual(){
   const facturas=S.filter(s=>s.esFactura).sort((a,b)=>b.fecha.localeCompare(a.fecha));
@@ -7125,8 +7165,11 @@ function iniAlertas(){
     }catch(e){}
     try{
       const ing=(BIT||[]).filter(b=>b.evento==='ingreso_mercaderia');
-      const casos=ing.filter(b=>(Array.isArray(b.pendientesAlta)&&b.pendientesAlta.length)||(Array.isArray(b.lineas)&&b.lineas.some(l=>l.guia!=null&&+l.guia!==+l.recibido)));
-      if(casos.length) add('media',casos.length+' ingreso(s) de mercadería con diferencias o códigos sin alta','Crúcelos con la guía o factura del proveedor y cree los productos que faltan.','Revisar',()=>irA('inventario',()=>{invModo='lista';}),'inventario');
+      if(!revCargado&&!revCargando&&!revError) setTimeout(revCargar,0);
+      const sinRev=ing.filter(b=>b.id&&!REV[b.id]);
+      const casos=sinRev.filter(b=>revDifs(b).length||revPend(b).length);
+      if(casos.length) add('media',casos.length+' ingreso(s) de mercadería con diferencias o códigos sin alta','Resuélvalos en la revisión: reclamo o aceptación, alta de productos y factura del proveedor.','Revisar',()=>irA('inventario',()=>{invModo='revision';revSel=casos[0].id;}),'inventario');
+      else if(sinRev.length) add('baja',sinRev.length+' ingreso(s) de mercadería sin revisar','Vincúlelos con la factura del proveedor o el corte de consignación.','Revisar',()=>irA('inventario',()=>{invModo='revision';revSel=sinRev[0].id;}),'inventario');
     }catch(e){}
   }
   try{
@@ -7735,6 +7778,436 @@ async function sriControlAnulacion(venta){
   return {ok:true, referencia:ref.trim(), factura:f.numero};
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  FASE 4 (22-oct-2026) · FACTURACION SRI REDISEÑADA
+//  Solo cambia la PRESENTACION de la pestaña Facturas. La emision, la
+//  reemision, las notas de credito y la cola siguen siendo las mismas
+//  funciones de antes (sriEmitir, sriReemitir, sriAbrirNC, sriProcesarCola).
+// ═══════════════════════════════════════════════════════════════════════
+const SRI_RECHAZO=['DEVUELTA','NO_AUTORIZADA'];
+const sriCent=x=>Math.round((+x||0)*100);
+const sriUSD=c=>'$'+(c/100).toFixed(2);
+function sriHoyDMY(){ const d=today(); return d.slice(8,10)+'/'+d.slice(5,7)+'/'+d.slice(0,4); }
+function sriPorResolver(f){ return SRI_RECHAZO.includes(f.estado)||SRI_EN_CURSO.includes(f.estado)||(f.estado==='AUTORIZADA'&&f.estadoCorreo==='FALLIDO'); }
+function sriMascaraRuc(r){ r=String(r||''); return r.length>=13 ? r.slice(0,4)+'•••••'+r.slice(-4) : r; }
+function sriNumCorto(n){ n=String(n||''); if(!n) return '—'; const p=n.split('-'); return p.length===3 ? p[0]+'-'+p[1]+'-'+(p[2].replace(/^0+/,'')||'0') : n; }
+// ventaId → tiene comprobante vigente (autorizado o en tramite, o en la cola de este equipo)
+function sriComprobantesPorVenta(){
+  const vig=new Set(), rech=new Map();
+  SRI_F.forEach(f=>{ if(f.tipoDoc==='04') return; const id=String(f.ventaId); if(SRI_RECHAZO.includes(f.estado)) rech.set(id,f); else vig.add(id); });
+  sriCola().forEach(c=>vig.add(String(c.ventaId)));
+  rech.forEach((f,id)=>{ if(vig.has(id)) rech.delete(id); });
+  return {vig, rech};
+}
+function sriKpis(amb){
+  const hoy=sriHoyDMY(), a=amb||'2';
+  const aut=SRI_F.filter(f=>f.fechaEmision===hoy && (f.ambiente||'2')===a && f.estado==='AUTORIZADA');
+  const fac=aut.filter(f=>f.tipoDoc!=='04'), nc=aut.filter(f=>f.tipoDoc==='04');
+  const {vig}=sriComprobantesPorVenta();
+  const vHoy=S.filter(s=>isVenta(s)&&(s.date||'').slice(0,10)===today());
+  const vendido=vHoy.reduce((s,v)=>s+sriCent(v.total),0);
+  const sinL=vHoy.filter(v=>!vig.has(String(v.id)));
+  return { facHoy:fac.reduce((s,f)=>s+sriCent(f.importeTotal),0), nFac:fac.length,
+    ncHoy:nc.reduce((s,f)=>s+sriCent(f.importeTotal),0), nNc:nc.length,
+    vendido, sin:sinL.reduce((s,v)=>s+sriCent(v.total),0), nSin:sinL.length,
+    rech:SRI_F.filter(f=>SRI_RECHAZO.includes(f.estado)).length,
+    tram:SRI_F.filter(f=>SRI_EN_CURSO.includes(f.estado)).length,
+    corr:SRI_F.filter(f=>f.estado==='AUTORIZADA'&&f.comprador&&f.comprador.email&&(f.estadoCorreo==='FALLIDO'||f.estadoCorreo==='PENDIENTE')).length };
+}
+let sriFiltro=null, sriQ='', sriSel=null, sriBrechaDias=2;
+
+function sriFranjaHTML(amb){
+  const admin=MI_ROL==='admin';
+  if(admin && !sriEst && !sriEstCargando && !sriEstError) setTimeout(sriCargarEstado,0);
+  const e=admin?sriEst:null;
+  const it=(k,v,c,t)=>`<div class="sri-fi"${t?` title="${esc(t)}"`:''}><span>${k}</span><b${c?` style="color:${c}"`:''}>${v}</b></div>`;
+  let h=`<div class="sri-amb ${amb==='2'?'prod':amb==='1'?'prue':''}">${amb==='2'?'● PRODUCCIÓN':amb==='1'?'⚠ PRUEBAS · sin validez':'Ambiente —'}</div>`;
+  if(e){
+    const f=e.firma||{}, d=f.diasRestantes, nt=(e.enTramite||[]).length;
+    const cf=(!f.ok||d<=15)?'var(--red)':d<=45?'var(--amb)':'var(--grn)';
+    h+=it('Emisor',esc(sriMascaraRuc(e.emisor&&e.emisor.ruc)),'',e.emisor&&e.emisor.razonSocial)
+      +it('Serie',esc(e.serie||'—'))
+      +it('Próx. factura',esc(sriNumCorto(e.factura&&e.factura.proximo)))
+      +it('Próx. NC',esc(sriNumCorto(e.notaCredito&&e.notaCredito.proximo)))
+      +it('Firma',f.ok?(d+' días'):'Con problemas',cf,f.ok?('Vence '+(f.validoHasta||'')):(f.error||''))
+      +it('Envío',e.envio&&e.envio.puente?'Mac del local':'Directo')
+      +it('En trámite',String(nt),nt?'var(--amb)':'');
+  } else if(admin){
+    h+=it('Servicio',sriEstCargando?'Leyendo estado…':esc(sriEstError||'—'),sriEstError?'var(--red)':'');
+  }
+  const alertas=e?(e.alertas||[]):[];
+  let prueba='';
+  if(sriProbando) prueba='<div class="sri-prueba">Probando la conexión con el SRI… (no se envía ningún comprobante)</div>';
+  else if(sriPrueba) prueba=`<div class="sri-prueba ${sriPrueba.ok?'ok':'mal'}"><b>${sriPrueba.ok?'✔':'✘'} ${esc(sriPrueba.conclusion||'')}</b>
+      ${(sriPrueba.pruebas||[]).map(p=>`<span>${p.ok?'✔':'✘'} ${esc(p.nombre)} · ${p.ms} ms</span>`).join('')}</div>`;
+  return `<div class="sri-franja">${h}
+      <div class="sri-fbtn">${admin?`<button class="btn btn-g btn-sm" id="sri-probar2"${sriProbando?' disabled':''}>🔌 Probar conexión</button>`:''}
+        <button class="btn btn-g btn-sm" id="sri-recargar">↻ Actualizar</button>
+        <button class="btn btn-acc btn-sm" id="sri-ir-brecha">🧾 Facturar una venta</button></div></div>
+    ${alertas.map(a=>`<div class="sri-alerta ${a.nivel==='red'?'mal':''}">${a.nivel==='red'?'⛔':'⚠'} ${esc(a.texto)}</div>`).join('')}${prueba}`;
+}
+function sriKpisHTML(k){
+  const pct=k.vendido?Math.round(k.sin*100/k.vendido):0;
+  const c=(t,v,s,col)=>`<div class="scard"><div class="slbl">${t}</div><div class="sval"${col?` style="color:${col}"`:''}>${v}</div><div class="ssub">${s}</div></div>`;
+  return `<div class="sg4" style="margin-bottom:12px">
+    ${c('Facturado hoy',sriUSD(k.facHoy),k.nFac+' factura(s) autorizada(s)'+(k.nNc?' · NC −'+sriUSD(k.ncHoy):''))}
+    ${c('Ventas sin comprobante hoy',sriUSD(k.sin),k.nSin?(k.nSin+' venta(s) · '+pct+'% de lo vendido'):'Todo lo vendido hoy tiene comprobante',k.nSin?'var(--red)':'var(--grn)')}
+    ${c('Devueltas o no autorizadas',String(k.rech),k.tram?(k.tram+' en trámite con el SRI'):'Ninguna en trámite',k.rech?'var(--red)':'')}
+    ${c('Correo (RIDE) sin entregar',String(k.corr),'Facturas autorizadas con correo pendiente o fallido',k.corr?'var(--amb)':'')}
+  </div>`;
+}
+function sriListaHTML(tarjeta){
+  const pr=SRI_F.filter(sriPorResolver);
+  if(sriFiltro===null && sriCargado) sriFiltro=pr.length?'resolver':'todos';
+  const fl=sriFiltro||'todos', q=sriQ.trim().toLowerCase();
+  let l = fl==='resolver'?pr : fl==='fac'?SRI_F.filter(f=>f.tipoDoc!=='04') : fl==='nc'?SRI_F.filter(f=>f.tipoDoc==='04') : SRI_F;
+  if(q) l=l.filter(f=>[f.numero,f.comprador&&f.comprador.razonSocial,f.comprador&&f.comprador.identificacion,f.facturaNumero].some(x=>String(x||'').toLowerCase().includes(q)));
+  const tabs=[['resolver','Por resolver · '+pr.length],['todos','Todos · '+SRI_F.length],['fac','Facturas'],['nc','Notas de crédito']];
+  const filas=l.slice(0,80).map(f=>{
+    const [etq,tono]=SRI_ETQ[f.estado]||[f.estado||'—','gris'];
+    const corr=SRI_CORREO[f.estadoCorreo]||[f.estadoCorreo||'—','gris'];
+    const esNC=f.tipoDoc==='04', m=(f.mensajes||[]).find(x=>x.tipo!=='INFORMATIVO'), sel=sriSel===f.id;
+    const motivo = m ? (m.explicacion||m.mensaje||'') : (f.ultimoError&&SRI_RECHAZO.includes(f.estado)?f.ultimoError.mensaje:'');
+    return `<div class="sri-row${sel?' sel':''}${SRI_RECHAZO.includes(f.estado)?' mal':''}" data-sri-sel="${esc(f.id)}" tabindex="0" role="button" aria-expanded="${sel}">
+      <div class="sri-c1"><b>${esNC?'NC ':''}${esc(sriNumCorto(f.numero))}</b>${f.ambiente==='1'?' '+sriChip('PRUEBAS','amb'):''}<div class="sri-sub">${esc(f.fechaEmision||'')}</div></div>
+      <div class="sri-c2"><div class="sri-tx">${esc((f.comprador&&f.comprador.razonSocial)||'')}</div><div class="sri-sub">${esc((f.comprador&&f.comprador.identificacion)||'')}${esNC&&f.facturaNumero?' · factura '+esc(sriNumCorto(f.facturaNumero)):''}</div>
+        ${motivo?`<div class="sri-mot">${esc(motivo.slice(0,140))}</div>`:''}</div>
+      <div class="sri-c3"${esNC?' style="color:#7a3fa0"':''}>${esNC?'−':''}$${esc(f.importeTotal||'')}</div>
+      <div class="sri-c4">${sriChip(etq,tono)}${f.estado==='AUTORIZADA'&&f.comprador&&f.comprador.email?' '+sriChip(corr[0],corr[1]):''}</div>
+      <div class="sri-c5" aria-hidden="true">${sel?'▾':'▸'}</div>
+    </div>${sel?`<div class="sri-det">${tarjeta(f)}</div>`:''}`;
+  }).join('');
+  return `<div class="card" style="padding:0;overflow:hidden;margin-bottom:12px">
+    <div class="inv-tools"><div class="inv-vistas">${tabs.map(([k,t])=>`<button class="inv-vista${fl===k?' on':''}" data-sri-f="${k}">${t}</button>`).join('')}</div>
+      <div class="swr" style="flex:1;min-width:200px;margin:0"><span class="sic">🔍</span><input id="sri-q" type="text" placeholder="Número, comprador o identificación…" value="${esc(sriQ)}" autocomplete="off"></div></div>
+    <div class="sri-row sri-head"><div>Comprobante</div><div>Comprador</div><div style="text-align:right">Total</div><div>Estado SRI · correo</div><div></div></div>
+    ${sriCargando&&!sriCargado?'<div class="sri-vacio">Cargando comprobantes…</div>':''}
+    ${sriCargado&&!l.length?`<div class="sri-vacio">${fl==='resolver'&&!q?'✓ No hay comprobantes por resolver.':'Sin comprobantes'+(q?' para «'+esc(sriQ)+'»':'')+' en los últimos 45 días.'}</div>`:''}
+    ${filas}
+    ${l.length>80?`<div class="sri-vacio">Se muestran 80 de ${l.length}. Use la búsqueda para encontrar uno en particular.</div>`:''}
+    <div class="sri-pie">Últimos 45 días · Toque una fila para ver el detalle, el historial y las acciones (reemitir, nota de crédito, PDF, XML, correo).</div>
+  </div>`;
+}
+function sriBrechaHTML(){
+  const {vig,rech}=sriComprobantesPorVenta();
+  const d=new Date(); d.setDate(d.getDate()-(sriBrechaDias-1)); const desde=localISO(d).slice(0,10);
+  const ventas=S.filter(s=>isVenta(s)&&(s.date||'').slice(0,10)>=desde);
+  const vendido=ventas.reduce((a,v)=>a+sriCent(v.total),0);
+  const sinL=ventas.filter(v=>!vig.has(String(v.id))).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const sin=sinL.reduce((a,v)=>a+sriCent(v.total),0), con=vendido-sin, pct=vendido?Math.round(sin*1000/vendido)/10:0;
+  const per=[[1,'Hoy'],[2,'2 días'],[7,'7 días']];
+  return `<div class="card" id="sri-brecha" style="margin-bottom:12px">
+    <div class="rb" style="gap:8px;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:14px">Ventas cobradas sin comprobante</b>
+      <div class="inv-vistas">${per.map(([n,t])=>`<button class="inv-vista${sriBrechaDias===n?' on':''}" data-sri-dias="${n}">${t}</button>`).join('')}</div></div>
+    <div class="sri-ecu"><span>Vendido <b>${sriUSD(vendido)}</b></span><span>−</span><span>con comprobante <b>${sriUSD(con)}</b></span><span>=</span>
+      <span class="${sin?'mal':'ok'}">sin comprobante <b>${sriUSD(sin)}</b>${vendido?' ('+pct.toString().replace('.',',')+'%)':''}</span></div>
+    <div style="font-size:11.5px;color:var(--text2);margin:4px 0 8px">Toda venta cobrada debe tener factura. Se emite como consumidor final (hasta $${sriLimiteCF()}) o con los datos del cliente; la venta ya está cobrada y no se vuelve a cobrar.</div>
+    ${sinL.length?sinL.slice(0,60).map(s=>{ const fr=rech.get(String(s.id));
+      return `<div class="mrow" style="margin-top:5px;gap:8px"><div style="min-width:0;flex:1;font-size:12px"><b>${esc(s.tableName||'Venta')}</b> · ${esc((s.date||'').replace('T',' ').slice(0,16))}
+        <div style="font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((s.items||[]).map(i=>(i.qty||1)+'× '+i.name).join(', '))}</div></div>
+        <span style="font-weight:700;font-size:13px">${fmt(s.total)}</span>
+        ${fr?`<button class="btn btn-w btn-sm" data-sri-verf="${esc(fr.id)}">Factura ${esc((SRI_ETQ[fr.estado]||[fr.estado])[0]).toLowerCase()} · ver</button>`:`<button class="btn btn-b btn-sm" data-sri-facturar="${esc(s.id)}">Facturar</button>`}</div>`; }).join('')
+      :`<div style="padding:12px;text-align:center;color:var(--grn);font-size:13px">✓ Todas las ventas del período tienen comprobante.</div>`}
+    ${sinL.length>60?`<div style="font-size:11px;color:var(--text3);margin-top:6px">Se muestran 60 de ${sinL.length}.</div>`:''}
+  </div>`;
+}
+function sriEnlazarRediseno(mc){
+  mc.querySelectorAll('[data-sri-f]').forEach(b=>b.addEventListener('click',()=>{ sriFiltro=b.dataset.sriF; sriSel=null; render(); }));
+  const q=mc.querySelector('#sri-q');
+  q?.addEventListener('input',e=>{ sriQ=e.target.value; const pos=e.target.selectionStart; render(); const n=document.getElementById('sri-q'); if(n){ n.focus(); try{n.setSelectionRange(pos,pos);}catch(_){} } });
+  const abrir=id=>{ sriSel = sriSel===id?null:id; render(); };
+  mc.querySelectorAll('[data-sri-sel]').forEach(r=>{
+    r.addEventListener('click',()=>abrir(r.dataset.sriSel));
+    r.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); abrir(r.dataset.sriSel); } });
+  });
+  mc.querySelectorAll('[data-sri-dias]').forEach(b=>b.addEventListener('click',()=>{ sriBrechaDias=+b.dataset.sriDias; render(); }));
+  mc.querySelector('#sri-ir-brecha')?.addEventListener('click',()=>{ const x=document.getElementById('sri-brecha'); if(x) x.scrollIntoView({behavior:'smooth',block:'start'}); });
+  mc.querySelector('#sri-probar2')?.addEventListener('click',()=>sriProbarConexion());
+  mc.querySelectorAll('[data-sri-verf]').forEach(b=>b.addEventListener('click',()=>{ sriFiltro='todos'; sriQ=''; sriSel=b.dataset.sriVerf; render();
+    setTimeout(()=>{ const r=document.querySelector('.sri-row.sel'); if(r) r.scrollIntoView({behavior:'smooth',block:'center'}); },30); }));
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FASE 4 · REVISION DE INGRESOS DE MERCADERIA (solo administracion)
+//  La Bitacora es inmutable, asi que la revision se guarda aparte, en
+//  ingresos_revision/{idDelIngreso}. Tambien es inmutable: una vez marcado
+//  como revisado no se cambia ni se borra (regla de Firestore).
+//  Las unidades "sin alta" se suman con una transaccion que crea el
+//  documento ingresos_revision/alta_<ingreso>_<codigo>: si ya existe, la
+//  transaccion se cancela, por lo que no se pueden sumar dos veces.
+// ═══════════════════════════════════════════════════════════════════════
+const REV_ALTA_RES={devuelto:'Devuelto al proveedor · no se da de alta', incluido:'Ya incluido en el stock al crear el producto'};
+const REV_FACT={consig:'Consignación · se cruza con el corte del consignante', sinfac:'Sin factura de compra (explicar en la nota)'};
+async function revCargar(){
+  if(revCargando || MI_ROL!=='admin') return;
+  revCargando=true; revError='';
+  try{
+    const s=await conLimite(getDocs(collection(db,'ingresos_revision')), ESPERA_BITACORA_MS);
+    const m={}; s.docs.forEach(d=>m[d.id]=d.data()); REV=m; revCargado=true;
+  }catch(e){
+    console.error('ingresos_revision',e);
+    revError=msgError(e,'leer la revisión de ingresos');
+  }finally{
+    revCargando=false;
+    if(view==='inventario') render(); else { try{ actualizarNavBadges(); }catch(_){} }
+  }
+}
+const revIngresos=()=>(BIT||[]).filter(b=>b&&b.evento==='ingreso_mercaderia'&&b.id);
+const revDifs=b=>(Array.isArray(b.lineas)?b.lineas:[]).map((l,i)=>Object.assign({i},l)).filter(l=>l.guia!=null&&+l.guia!==+l.recibido);
+const revPend=b=>(Array.isArray(b.pendientesAlta)?b.pendientesAlta:[]).filter(x=>+x.cantidad>0);
+const revAltaId=(b,c)=>'alta_'+b.id+'_'+String(c).replace(/[^\w-]/g,'_').slice(0,80);
+function revProdPorCodigo(c){ const v=String(c||'').trim().toLowerCase(); return v?P.find(p=>esProdReal(p)&&String(p.code||'').trim().toLowerCase()===v):null; }
+function revBorrador(b){
+  return revBorr[b.id] || (revBorr[b.id]={dif:{}, alta:{}, factura: /consig/i.test(b.modalidad||'')?'consig':'', nota:''});
+}
+function revFaltan(b){
+  const br=revBorrador(b), out=[];
+  const difs=revDifs(b).filter(l=>!br.dif[l.i]);
+  if(difs.length) out.push('Decida reclamar o aceptar '+difs.length+' diferencia(s)');
+  const pend=revPend(b).filter(x=>!REV[revAltaId(b,x.codigo)]&&!REV_ALTA_RES[br.alta[x.codigo]]);
+  if(pend.length) out.push('Resuelva '+pend.length+' código(s) sin alta (sumar al producto, o indicar que se devolvió o que ya se incluyó al crearlo)');
+  if(!br.factura) out.push('Indique la factura del proveedor o el motivo por el que no aplica');
+  if(br.factura==='sinfac' && (br.nota||'').trim().length<5) out.push('Explique en la nota por qué no hay factura');
+  return out;
+}
+function revFacturaDe(br){
+  if(br.factura==='consig'||br.factura==='sinfac') return {tipo:br.factura, descripcion:REV_FACT[br.factura]};
+  const clave=String(br.factura||'').replace(/^iva:/,'');
+  let c=null; Object.values(REV_FAC).forEach(l=>{ const x=(l||[]).find(y=>y.clave===clave); if(x) c=x; });
+  return {tipo:'factura', clave, numero:c?c.numero:'', ruc:c?c.ruc:'', razon:c?(c.razon||''):'', fecha:c?c.fecha:'', total:c?String(c.total||''):'',
+    descripcion:'Factura '+(c?c.numero+' · '+(c.razon||c.ruc)+' · $'+c.total:clave)};
+}
+async function revCargarFacturas(b){
+  const f=(b.fechaDoc||b.fecha||today()).slice(0,10), d=new Date(f.slice(0,7)+'-15');
+  const meses=[f.slice(0,7)]; d.setMonth(d.getMonth()+1); meses.push(localISO(d).slice(0,7));
+  revFacCargando=true; render();
+  try{
+    for(const m of meses){
+      if(REV_FAC[m]) continue;
+      const s=await getDocs(query(collection(db,'iva_compras'), where('mes','==',m)));
+      REV_FAC[m]=s.docs.map(x=>x.data()).filter(c=>c.tipo==='01');
+    }
+  }catch(e){ alert('No se pudieron leer las facturas recibidas: '+msgError(e,'leer las compras')); }
+  finally{ revFacCargando=false; render(); }
+}
+function revOpcionesFactura(b){
+  const f=(b.fechaDoc||b.fecha||today()).slice(0,7), d=new Date(f+'-15'); d.setMonth(d.getMonth()+1);
+  const lista=[...(REV_FAC[f]||[]),...(REV_FAC[localISO(d).slice(0,7)]||[])];
+  const pal=String(b.proveedor||'').toLowerCase().split(/\s+/).filter(w=>w.length>3);
+  const afin=c=>pal.some(w=>String(c.razon||'').toLowerCase().includes(w))?0:1;
+  lista.sort((a,c)=>afin(a)-afin(c)||String(a.fecha).localeCompare(String(c.fecha)));
+  return {lista, cargadas:!!REV_FAC[f]};
+}
+let _revOcupado=false;
+async function revSumarAlta(b,codigo){
+  if(_revOcupado) return;
+  const x=revPend(b).find(y=>String(y.codigo)===String(codigo)), p=revProdPorCodigo(codigo);
+  if(!x||!p) return;
+  if(stockTipo(p)==='sin'){ alert('«'+p.name+'» no tiene control de stock por unidad. Active el control de stock en el producto antes de sumar.'); return; }
+  const n=+x.cantidad||0;
+  if(!confirm('¿Sumar '+n+' unidad(es) a «'+p.name+'»?\nStock actual: '+(+p.stock||0)+' → quedará en '+((+p.stock||0)+n)+'.\nSi al crear el producto ya escribió estas unidades en «Stock», no las sume de nuevo: use «Ya incluido al crear el producto».\n\nCódigo '+codigo+' · ingreso '+(b.proveedor||'')+' '+(b.tipoDoc||'')+' '+(b.numeroDoc||'')+'\n\nSe hace una sola vez: el sistema impide volver a sumarlas.')) return;
+  const mid=revAltaId(b,codigo), uid=(auth.currentUser&&auth.currentUser.uid)||'';
+  let antes=0, despues=0, reg=null;
+  _revOcupado=true;
+  try{
+    await conLimite(runTransaction(db, async tx=>{
+      const mref=doc(db,'ingresos_revision',mid), pref=doc(db,PRODUCTOS_COL,String(p.id));
+      const ms=await tx.get(mref);
+      if(ms.exists()){ const e=new Error('Estas unidades ya se sumaron antes.'); e.code='ya-sumado'; throw e; }
+      const ps=await tx.get(pref);
+      if(!ps.exists()){ const e=new Error('El producto ya no existe.'); e.code='no-prod'; throw e; }
+      const d=ps.data(), cur=(typeof d.stock==='number')?d.stock:0;
+      if(cur>=999){ const e=new Error('El producto no tiene control de stock.'); e.code='sin-control'; throw e; }
+      antes=cur; despues=cur+n; d.stock=despues; d.updatedAt=serverTimestamp();
+      reg={tipo:'alta', ingresoId:b.id, codigo:String(codigo), cantidad:n, productoId:String(p.id), nombre:p.name||'', antes, despues,
+        uid, usuario:authUser(), fecha:localISO(), ts:serverTimestamp()};
+      tx.set(pref,d); tx.set(mref,reg);
+    }), ESPERA_BITACORA_MS);
+  }catch(e){
+    _revOcupado=false;
+    console.error('revSumarAlta',e);
+    if(e&&e.code==='ya-sumado'){ alert('Estas unidades ya se habían sumado. Se actualiza la pantalla.'); revCargado=false; revCargar(); return; }
+    alert('No se sumaron las unidades: '+(e&&e.code&&['no-prod','sin-control'].includes(e.code)?e.message:msgError(e,'sumar las unidades'))+
+      '\n\nSi se cortó la conexión, pulse «Actualizar» antes de reintentar: el sistema no permite sumarlas dos veces.');
+    return;
+  }
+  _revOcupado=false;
+  p.stock=despues; REV[mid]=Object.assign({},reg,{ts:null});
+  await bitacora('ingreso_alta_sumada',{accion:'Sumo '+n+' uds sin alta del ingreso '+(b.proveedor||'')+' '+(b.numeroDoc||'')+' a "'+p.name+'" ('+antes+' → '+despues+')',
+    ingresoId:b.id, productoId:String(p.id), codigo:String(codigo), cantidad:n, antes, despues});
+  render();
+}
+async function revMarcar(b){
+  if(_revOcupado) return;
+  const faltan=revFaltan(b);
+  if(faltan.length){ alert('Antes de marcar como revisado:\n\n• '+faltan.join('\n• ')); return; }
+  const br=revBorrador(b), fac=revFacturaDe(br);
+  const difs=revDifs(b).map(l=>({productoId:l.productoId||'', nombre:l.nombre||'', guia:+l.guia, recibido:+l.recibido, resolucion:br.dif[l.i]}));
+  const altas=revPend(b).map(x=>{ const a=REV[revAltaId(b,x.codigo)]; return {codigo:String(x.codigo), cantidad:+x.cantidad, resolucion:a?'sumada':br.alta[x.codigo], productoId:a?a.productoId:null}; });
+  const recl=difs.filter(d=>d.resolucion==='reclamar');
+  if(!confirm('¿Marcar como revisado el ingreso '+(b.proveedor||'')+' · '+(b.tipoDoc||'')+' '+(b.numeroDoc||'')+'?\n\n'+fac.descripcion+
+    (recl.length?'\nReclamos al proveedor: '+recl.map(d=>d.nombre+' ('+(d.guia-d.recibido>0?'faltan '+(d.guia-d.recibido):'sobran '+(d.recibido-d.guia))+')').join(', '):'')+
+    '\n\nLa revisión queda registrada y no se puede modificar.')) return;
+  const datos={tipo:'revision', ingresoId:b.id, proveedor:b.proveedor||'', tipoDoc:b.tipoDoc||'', numeroDoc:b.numeroDoc||'', fechaIngreso:b.fecha||'',
+    factura:fac, diferencias:difs, altas, nota:(br.nota||'').trim(),
+    uid:(auth.currentUser&&auth.currentUser.uid)||'', usuario:authUser(), fecha:localISO(), ts:serverTimestamp()};
+  _revOcupado=true;
+  try{ await conLimite(setDoc(doc(db,'ingresos_revision',b.id),datos), ESPERA_BITACORA_MS); }
+  catch(e){ _revOcupado=false; console.error('revMarcar',e); alert('No se pudo marcar como revisado: '+msgError(e,'guardar la revisión')+'\n\nSi otro equipo ya lo revisó, pulse «Actualizar».'); return; }
+  _revOcupado=false;
+  REV[b.id]=Object.assign({},datos,{ts:null});
+  await bitacora('ingreso_revisado',{accion:'Reviso el ingreso '+(b.proveedor||'')+' '+(b.tipoDoc||'')+' '+(b.numeroDoc||'')+' · '+fac.descripcion,
+    ingresoId:b.id, factura:fac.descripcion, reclamos:recl.length, devueltos:altas.filter(a=>a.resolucion==='devuelto').length, incluidos:altas.filter(a=>a.resolucion==='incluido').length});
+  const sig=revIngresos().find(x=>!REV[x.id]); revSel=sig?sig.id:b.id;
+  render();
+}
+function revEstadoChip(b){
+  const r=REV[b.id];
+  if(r) return '<span class="badge bg">✓ Revisado</span>';
+  const d=revDifs(b).length, p=revPend(b).filter(x=>!REV[revAltaId(b,x.codigo)]).length;
+  if(d||p) return `<span class="badge ba">${[d?d+' diferencia'+(d>1?'s':''):'',p?p+' sin alta':''].filter(Boolean).join(' · ')}</span>`;
+  return '<span class="badge" style="background:var(--bbg);color:var(--blu)">Cuadra · por revisar</span>';
+}
+function revFacturaChip(b){
+  const r=REV[b.id];
+  if(!r) return /consig/i.test(b.modalidad||'')?'<span class="badge" style="background:var(--bg3);color:var(--text2)">Consignación</span>':'<span class="badge" style="background:var(--bg3);color:var(--text2)">Factura pendiente</span>';
+  const t=r.factura&&r.factura.tipo;
+  return t==='factura'?'<span class="badge bg">Factura vinculada</span>':t==='consig'?'<span class="badge" style="background:var(--bbg);color:var(--blu)">Consignación</span>':'<span class="badge ba">Sin factura</span>';
+}
+function revDetalleHTML(b){
+  const r=REV[b.id], br=revBorrador(b), lin=Array.isArray(b.lineas)?b.lineas:[], pend=revPend(b);
+  const est=l=>{ if(l.guia==null) return '<span style="color:var(--text3)">sin guía</span>'; const d=+l.recibido-(+l.guia);
+    return d===0?'<span style="color:var(--grn)">coincide</span>':d<0?`<span style="color:var(--red)">faltan ${-d}</span>`:`<span style="color:var(--amb)">sobran ${d}</span>`; };
+  const cab=`<div class="rb" style="align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div><div style="font-weight:700;font-size:15px">${esc(b.proveedor||'Proveedor')}</div>
+        <div style="font-size:12px;color:var(--text2)">${esc(b.tipoDoc||'')} ${esc(b.numeroDoc||'')}${b.fechaDoc?' · del '+esc(b.fechaDoc):''}${b.modalidad?' · '+esc(b.modalidad):''}</div>
+        <div style="font-size:11px;color:var(--text3)">Registrado ${esc((b.fecha||'').slice(0,16).replace('T',' '))} por ${esc(b.usuario||'')} · ${+b.unidades||0} uds sumadas</div></div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">${revEstadoChip(b)} ${revFacturaChip(b)}</div></div>`;
+  const tabla=`<div class="rev-tab"><div class="rev-tr rev-th"><div>Producto</div><div>Guía</div><div>Recibido</div><div>Stock</div><div>Estado</div></div>
+    ${lin.map(l=>`<div class="rev-tr"><div><b>${esc(l.nombre||'')}</b><div class="sri-sub">${esc(l.codigo||'')}</div></div><div>${l.guia==null?'—':+l.guia}</div><div>${+l.recibido||0}</div><div>${+l.antes||0} → ${+l.despues||0}</div><div>${est(l)}</div></div>`).join('')}
+    ${pend.map(x=>`<div class="rev-tr" style="background:var(--rbg)"><div><b>Código ${esc(x.codigo)}</b><div class="sri-sub">no existía en el catálogo</div></div><div>${x.guia==null?'—':+x.guia}</div><div>${+x.cantidad}</div><div>en espera</div><div><span style="color:var(--red)">sin alta</span></div></div>`).join('')}
+    ${!lin.length&&!pend.length?'<div class="sri-vacio">Sin líneas registradas.</div>':''}</div>
+    ${b.nota?`<div style="font-size:12px;color:var(--text2);margin:8px 0">Nota de caja: ${esc(b.nota)}</div>`:''}`;
+  if(r){
+    const a=r.altas||[], d=r.diferencias||[];
+    return cab+tabla+`<div class="rev-caja ok">
+      <b>✓ Revisado por ${esc(r.usuario||'')} el ${esc((r.fecha||'').slice(0,16).replace('T',' '))}</b>
+      <div>${esc((r.factura&&r.factura.descripcion)||'')}</div>
+      ${d.map(x=>`<div>${esc(x.nombre)}: guía ${x.guia}, recibido ${x.recibido} → <b>${x.resolucion==='reclamar'?'reclamar al proveedor':'aceptado'}</b></div>`).join('')}
+      ${a.map(x=>`<div>Código ${esc(x.codigo)} (${x.cantidad} uds) → <b>${x.resolucion==='sumada'?'sumado al stock':(REV_ALTA_RES[x.resolucion]||x.resolucion)}</b></div>`).join('')}
+      ${r.nota?`<div>Nota: ${esc(r.nota)}</div>`:''}
+      <div class="sri-sub">La revisión no se puede modificar. Si hay un error, regístrelo con un nuevo ingreso o un ajuste de stock, que también quedan en la Bitácora.</div></div>`;
+  }
+  const difs=revDifs(b);
+  const casos=[];
+  difs.forEach(l=>{ const d=+l.recibido-(+l.guia);
+    casos.push(`<div class="rev-caso"><div style="flex:1;min-width:0"><b>${esc(l.nombre||'')}</b><div class="sri-sub">Guía ${+l.guia} · recibido ${+l.recibido} · ${d<0?'faltan '+(-d):'sobran '+d}. El stock ya suma lo recibido.</div></div>
+      <select data-rev-dif="${l.i}" aria-label="Resolución de ${esc(l.nombre||'')}"><option value="">Decidir…</option>
+        <option value="reclamar"${br.dif[l.i]==='reclamar'?' selected':''}>Reclamar al proveedor</option>
+        <option value="aceptar"${br.dif[l.i]==='aceptar'?' selected':''}>Aceptar lo recibido</option></select></div>`); });
+  pend.forEach(x=>{
+    const a=REV[revAltaId(b,x.codigo)], p=revProdPorCodigo(x.codigo);
+    let acc;
+    if(a) acc=`<span class="badge bg">✓ ${a.cantidad} uds sumadas a «${esc(a.nombre||'')}» (${a.antes} → ${a.despues})</span>`;
+    else if(REV_ALTA_RES[br.alta[x.codigo]]) acc=`<span class="badge ba">${esc(REV_ALTA_RES[br.alta[x.codigo]])}</span> <button class="btn btn-g btn-sm" data-rev-alta="${esc(x.codigo)}" data-v="">Deshacer</button>`;
+    else acc=(p?`<button class="btn btn-acc btn-sm" data-rev-sumar="${esc(x.codigo)}"${_revOcupado?' disabled':''}>Sumar ${+x.cantidad} uds a «${esc(p.name)}» · stock actual ${+p.stock||0}</button>`
+                :`<button class="btn btn-acc btn-sm" data-ingalta="${esc(x.codigo)}">Crear producto</button>`)
+      +` <button class="btn btn-g btn-sm" data-rev-alta="${esc(x.codigo)}" data-v="devuelto">Devuelto al proveedor</button>`
+      +(p?` <button class="btn btn-g btn-sm" data-rev-alta="${esc(x.codigo)}" data-v="incluido">Ya incluido al crear el producto</button>`:'');
+    casos.push(`<div class="rev-caso"><div style="flex:1;min-width:0"><b>Código ${esc(x.codigo)} · ${+x.cantidad} uds sin alta</b>
+      <div class="sri-sub">${a?'Resuelto.':p?'El producto ya existe en el catálogo: sume las unidades en espera.':'Cree el producto con este código; al volver aquí podrá sumar las unidades.'}</div></div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${acc}</div></div>`);
+  });
+  const op=revOpcionesFactura(b);
+  const facSel=`<select id="rev-fac" style="width:100%"><option value="">Elegir…</option>
+      <option value="consig"${br.factura==='consig'?' selected':''}>${esc(REV_FACT.consig)}</option>
+      <option value="sinfac"${br.factura==='sinfac'?' selected':''}>${esc(REV_FACT.sinfac)}</option>
+      ${op.lista.length?`<optgroup label="Facturas recibidas (Control de IVA)">${op.lista.map(c=>`<option value="iva:${esc(c.clave)}"${br.factura==='iva:'+c.clave?' selected':''}>${esc(c.numero)} · ${esc((c.razon||c.ruc||'').slice(0,40))} · ${esc(c.fecha||'')} · $${esc(String(c.total||''))}</option>`).join('')}</optgroup>`:''}
+    </select>`;
+  const faltan=revFaltan(b);
+  return cab+tabla+`
+    <div class="rev-sec">Casos abiertos</div>
+    ${casos.length?casos.join(''):'<div style="font-size:12px;color:var(--grn);margin-bottom:6px">✓ Lo recibido coincide con la guía y todos los códigos existen.</div>'}
+    <div class="rev-sec">Factura del proveedor</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">${facSel}</div>
+      ${op.cargadas?'':`<button class="btn btn-g btn-sm" id="rev-buscar-fac"${revFacCargando?' disabled':''}>${revFacCargando?'Buscando…':'🔍 Buscar facturas recibidas'}</button>`}
+    </div>
+    <div class="sri-sub" style="margin-top:4px">${op.cargadas?(op.lista.length?op.lista.length+' factura(s) recibida(s) en el mes del documento y el siguiente. Si no aparece, cárguela en Facturas → Control de IVA.':'No hay facturas recibidas cargadas para esos meses. Cárguelas en Facturas → Control de IVA.'):'Se buscan en las facturas recibidas cargadas en el Control de IVA.'}</div>
+    <div class="rev-sec">Nota de la revisión</div>
+    <textarea id="rev-nota" rows="2" maxlength="500" placeholder="Ej.: se reclamó el faltante por correo al proveedor el 23-oct." style="width:100%">${esc(br.nota||'')}</textarea>
+    <div id="rev-faltan" class="sri-sub" style="margin:8px 0;color:var(--amb)">${faltan.length?'Falta: '+esc(faltan.join(' · ')):''}</div>
+    <button class="btn btn-acc" id="rev-ok" style="width:100%;padding:11px"${faltan.length?' disabled':''}>✓ Marcar como revisado</button>`;
+}
+function rRevIngresos(){
+  if(!bitCargado && !revBitPedida){ revBitPedida=true; setTimeout(async()=>{ await cargarBitacora(30); if(view==='inventario') render(); },0); }
+  if(!revCargado && !revCargando && !revError) setTimeout(revCargar,0);
+  const ing=revIngresos();
+  const sinRev=ing.filter(b=>!REV[b.id]);
+  const conDif=sinRev.filter(b=>revDifs(b).length).length;
+  const porAlta=ing.reduce((s,b)=>s+(REV[b.id]?0:revPend(b).filter(x=>!REV[revAltaId(b,x.codigo)]).reduce((a,x)=>a+(+x.cantidad||0),0)),0);
+  const revisados=ing.length-sinRev.length;
+  const lista = revFiltro==='pendientes'?sinRev : revFiltro==='revisados'?ing.filter(b=>REV[b.id]) : ing;
+  if(!revSel || !ing.some(b=>b.id===revSel)) revSel=(lista[0]||ing[0]||{}).id||null;
+  const sel=ing.find(b=>b.id===revSel);
+  const kpi=(t,v,s,c)=>`<div class="scard"><div class="slbl">${t}</div><div class="sval"${c?` style="color:${c}"`:''}>${v}</div><div class="ssub">${s}</div></div>`;
+  const tabs=[['pendientes','Por revisar · '+sinRev.length],['revisados','Revisados · '+revisados],['todos','Todos · '+ing.length]];
+  return `<div>
+    <div class="rb" style="margin-bottom:12px;align-items:flex-start;gap:10px;flex-wrap:wrap">
+      <div><button class="btn btn-g btn-sm" id="rev-volver" style="margin-bottom:6px">← Inventario</button>
+        <div class="stitle" style="margin:0">Revisión de ingresos de mercadería</div>
+        <div style="font-size:12px;color:var(--text3)">Cruce cada ingreso con la factura del proveedor o el corte de consignación · últimos 30 días</div></div>
+      <div style="display:flex;gap:7px;align-items:center"><span class="badge" style="background:var(--acl);color:var(--acc);padding:5px 10px">🛡 Solo administración</span>
+        <button class="btn btn-g btn-sm" id="rev-recargar"${revCargando?' disabled':''}>↻ Actualizar</button></div>
+    </div>
+    ${revError?`<div class="sri-alerta mal">⛔ ${esc(revError)}. Si es «permiso», falta publicar la regla de <b>ingresos_revision</b> en Firestore.</div>`:''}
+    <div class="sg4" style="margin-bottom:14px">
+      ${kpi('Ingresos (30 días)',ing.length,ing.reduce((s,b)=>s+(+b.unidades||0),0)+' unidades sumadas')}
+      ${kpi('Con diferencias',conDif,'guía ≠ recibido, sin revisar',conDif?'var(--amb)':'')}
+      ${kpi('Unidades por dar de alta',porAlta,'códigos que no existían',porAlta?'var(--red)':'')}
+      ${kpi('Por revisar',sinRev.length,'sin vincular a factura o corte',sinRev.length?'var(--blu)':'var(--grn)')}
+    </div>
+    <div class="rev-grid">
+      <div class="card" style="padding:0;overflow:hidden;margin:0">
+        <div class="inv-tools"><div class="inv-vistas">${tabs.map(([k,t])=>`<button class="inv-vista${revFiltro===k?' on':''}" data-rev-f="${k}">${t}</button>`).join('')}</div></div>
+        ${!bitCargado?'<div class="sri-vacio">Leyendo la Bitácora…</div>':''}
+        ${bitCargado&&!lista.length?`<div class="sri-vacio">${revFiltro==='pendientes'?'✓ No hay ingresos por revisar.':'Sin ingresos en los últimos 30 días.'}</div>`:''}
+        ${lista.map(b=>`<div class="rev-fila${b.id===revSel?' sel':''}" data-rev-sel="${esc(b.id)}" tabindex="0" role="button">
+          <div style="min-width:0;flex:1"><div style="font-weight:600;font-size:12.5px">${esc(b.proveedor||'')} · ${esc(b.tipoDoc||'')} ${esc(b.numeroDoc||'')}</div>
+            <div class="sri-sub">${esc((b.fecha||'').slice(0,10))} · ${esc(b.usuario||'')} · ${+b.unidades||0} uds</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${revEstadoChip(b)} ${revFacturaChip(b)}</div></div></div>`).join('')}
+      </div>
+      <div class="card" style="margin:0">${sel?revDetalleHTML(sel):'<div class="sri-vacio">Elija un ingreso de la lista.</div>'}</div>
+    </div>
+  </div>`;
+}
+function attachRevIngresos(){
+  const mc=document.getElementById('mc'); if(!mc) return;
+  const b=revIngresos().find(x=>x.id===revSel);
+  mc.querySelector('#rev-volver')?.addEventListener('click',()=>{ invModo='lista'; render(); });
+  mc.querySelector('#rev-recargar')?.addEventListener('click',async()=>{ revCargado=false; revError=''; await cargarBitacora(30); revCargar(); });
+  mc.querySelectorAll('[data-rev-f]').forEach(x=>x.addEventListener('click',()=>{ revFiltro=x.dataset.revF; revSel=null; render(); }));
+  mc.querySelectorAll('[data-rev-sel]').forEach(x=>{ const go=()=>{ revSel=x.dataset.revSel; render(); };
+    x.addEventListener('click',go); x.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go(); } }); });
+  if(!b) return;
+  const br=revBorrador(b);
+  const refrescar=()=>{ const f=revFaltan(b), t=document.getElementById('rev-faltan'), k=document.getElementById('rev-ok');
+    if(t) t.textContent=f.length?'Falta: '+f.join(' · '):''; if(k) k.disabled=!!f.length; };
+  mc.querySelectorAll('[data-rev-dif]').forEach(s=>s.addEventListener('change',()=>{ br.dif[+s.dataset.revDif]=s.value; render(); }));
+  mc.querySelectorAll('[data-rev-alta]').forEach(x=>x.addEventListener('click',()=>{ br.alta[x.dataset.revAlta]=x.dataset.v; render(); }));
+  mc.querySelector('#rev-fac')?.addEventListener('change',e=>{ br.factura=e.target.value; render(); });
+  mc.querySelector('#rev-nota')?.addEventListener('input',e=>{ br.nota=e.target.value; refrescar(); });
+  mc.querySelector('#rev-buscar-fac')?.addEventListener('click',()=>revCargarFacturas(b));
+  mc.querySelectorAll('[data-rev-sumar]').forEach(x=>x.addEventListener('click',()=>revSumarAlta(b,x.dataset.revSumar)));
+  mc.querySelector('#rev-ok')?.addEventListener('click',()=>revMarcar(b));
+  mc.querySelectorAll('[data-ingalta]').forEach(el=>el.addEventListener('click',()=>{
+    window._prefillCodigo=el.dataset.ingalta; window._revVolver=true; editP='new'; view='productos';
+    document.querySelectorAll('nav button[data-v]').forEach(x=>x.classList.toggle('active',x.dataset.v==='productos')); render(); window.scrollTo(0,0);
+  }));
+}
+
+
 // ── Pestaña Facturas: seccion electronica ────────────────────────────────
 async function sriCargarFacturas(){
   if(sriCargando) return;
@@ -7761,7 +8234,7 @@ function rFacturasSri(){
   const sinFactura = S.filter(s=>isVenta(s) && (s.date||'')>=desdeTxt && !idsFacturados.has(String(s.id)) && !cola.some(c=>c.ventaId===String(s.id)))
     .sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,25);
   const ventaDe = id => S.find(s=>String(s.id)===String(id));
-  const filas = SRI_F.slice(0,60).map(f=>{
+  const _tarjeta = f=>{
     if(f.tipoDoc==='04') return sriTarjetaNC(f);
     const v = ventaDe(f.ventaId);
     const ncsF = sriNCLocales(f), ncVig = ncsF.filter(n=>!SRI_NC_NO_VIGENTES.includes(n.estado));
@@ -7801,14 +8274,13 @@ function rFacturasSri(){
         <div style="margin-top:4px">${(f.historial||[]).slice().reverse().map(h=>`<div>${esc(h.fecha?new Date(h.fecha).toLocaleString('es-EC',{dateStyle:'short',timeStyle:'medium'}):'')} · <b>${esc(h.evento)}</b> · ${esc(h.detalle||'')} · <span style="color:#888">${esc(h.usuario||'')}</span></div>`).join('')}</div>
       </div>`:''}
     </div>`;
-  }).join('');
+  };
+  const admin = MI_ROL==='admin';
   return `<div style="margin-bottom:18px">
-    <div class="rb" style="margin-bottom:10px">
-      <span class="stitle" style="margin:0">Facturación electrónica SRI ${amb==='1'?sriChip('AMBIENTE DE PRUEBAS — sin validez tributaria','amb'):amb==='2'?sriChip('PRODUCCIÓN','grn'):''}</span>
-      <button class="btn btn-g btn-sm" id="sri-recargar">↻ Actualizar</button>
-    </div>
-    ${MI_ROL==='admin'?sriPanelEstadoHTML():''}
-    ${MI_ROL==='admin'?ivaPanelHTML():''}
+    <div class="rb" style="margin-bottom:10px;align-items:flex-end;gap:8px;flex-wrap:wrap"><div><div class="stitle" style="margin:0">Facturación electrónica SRI</div>
+      <div style="font-size:12px;color:var(--text3)">Comprobantes de los últimos 45 días · lo pendiente primero</div></div></div>
+    ${sriFranjaHTML(amb)}
+    ${sriKpisHTML(sriKpis(amb))}
     ${cola.length?`<div class="card" style="margin-bottom:10px;background:#fff7e0;border:1px solid #e8c96a">
       <div style="font-weight:700;margin-bottom:5px">Pendientes de enviar desde este equipo (${cola.length})</div>
       ${cola.map(c=>`<div class="rb" style="font-size:11.5px;margin-bottom:4px;gap:6px">
@@ -7817,15 +8289,10 @@ function rFacturasSri(){
       </div>`).join('')}
       <button class="btn btn-b btn-sm" id="sri-reintentar-cola" style="margin-top:4px">Reintentar ahora</button>
     </div>`:''}
-    ${sriCargando&&!sriCargado?'<div style="color:var(--text3);font-size:12px">Cargando facturas…</div>':''}
-    ${sriCargado&&!SRI_F.length?'<div style="color:var(--text3);font-size:12px;margin-bottom:8px">Aún no hay facturas electrónicas en los últimos 45 días.</div>':''}
-    ${filas}
-    ${sinFactura.length?`<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;font-weight:700">Ventas recientes sin factura electrónica (${sinFactura.length})</summary>
-      ${sinFactura.map(s=>`<div class="mrow" style="margin-top:5px"><div style="min-width:0;flex:1;font-size:12px">${esc(s.tableName||'')} · ${esc((s.date||'').replace('T',' ').slice(0,16))} · ${esc((s.items||[]).map(i=>i.qty+'× '+i.name).join(', ').slice(0,80))}</div>
-        <span style="font-weight:700;font-size:12px">${fmt(s.total)}</span><button class="btn btn-b btn-sm" data-sri-facturar="${esc(s.id)}" style="margin-left:6px">Emitir factura</button></div>`).join('')}
-    </details>`:''}
-  </div>
-  <div style="font-size:12px;font-weight:700;color:var(--text2);margin:6px 0 10px">Solicitudes manuales (sistema anterior)</div>`;
+    ${sriListaHTML(_tarjeta)}
+    ${sriBrechaHTML()}
+    ${admin?`<div class="sri-sec">Configuración del servicio y control de IVA</div>${sriPanelEstadoHTML()}${ivaPanelHTML()}`:''}
+  </div>`;
 }
 function attachFacturasSri(){
   const mc=document.getElementById('mc'); if(!mc) return;
@@ -7833,6 +8300,7 @@ function attachFacturasSri(){
   mc.querySelector('#sri-recargar')?.addEventListener('click',()=>{ sriCargado=false; sriCargarFacturas(); });
   sriEnlazarPanelEstado(mc);
   ivaEnlazar(mc);
+  sriEnlazarRediseno(mc);
   mc.querySelector('#sri-reintentar-cola')?.addEventListener('click',()=>sriProcesarCola());
   mc.querySelectorAll('[data-sri-quitar-cola]').forEach(b=>b.addEventListener('click',()=>{
     if(confirm('¿Quitar este pedido de la cola? La venta NO se anula; solo deja de intentarse la factura desde este equipo.')){ sriQuitarCola(b.dataset.sriQuitarCola); render(); }
