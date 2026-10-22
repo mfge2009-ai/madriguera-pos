@@ -282,6 +282,22 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
   .payb{padding:12px 4px;font-size:12px}
   .tot{font-size:18px}
 }
+
+/* ── Rediseño fase 3 (22-oct-2026): caja por turno ── */
+.cj-pasos{display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;margin-bottom:12px;overflow-x:auto}
+.cj-paso{display:flex;align-items:center;gap:8px;min-width:150px;color:var(--text3)}
+.cj-paso b{display:block;font-size:12px;color:var(--text3)}.cj-paso small{font-size:10.5px}
+.cj-pn{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:1.5px solid var(--b2);background:var(--bg2);flex-shrink:0}
+.cj-paso.ok .cj-pn{background:var(--grn);border-color:var(--grn);color:#fff}.cj-paso.ok b{color:var(--text)}
+.cj-paso.act .cj-pn{background:var(--acc);border-color:var(--acc);color:#fff}.cj-paso.act b{color:var(--acc)}
+.cj-pl{flex:1;min-width:16px;height:2px;background:var(--border)}
+.cj-den{max-width:620px;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:12px;overflow:hidden}
+.cj-den-h{display:flex;flex-direction:column;padding:9px 12px;background:var(--bg3)}.cj-den-h b{font-size:12px}.cj-den-h span{font-size:11px;color:var(--text3)}
+.cj-den-r{display:grid;grid-template-columns:minmax(0,1fr) 84px 86px;gap:10px;align-items:center;padding:6px 12px;border-top:1px solid var(--border);font-size:13px}
+.cj-den-r input{width:100%;padding:6px 8px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:14px;font-weight:700;text-align:center;font-family:inherit}
+.cj-den-r input:focus{border-color:var(--acc);outline:none}
+.cj-den-r b{text-align:right;font-size:13px}
+.cj-den-t{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--acl);color:var(--acc);font-size:13px;font-weight:700}.cj-den-t b{font-size:18px}
 </style>
 </head>
 <body>
@@ -597,14 +613,15 @@ const db=(()=>{
 // despues, y el reintento vuelve a escribir el MISMO documento con el MISMO
 // contenido, asi que repetirla no duplica ni pisa nada.
 const ESPERA_SERVIDOR_MS=6000;
-function conLimite(promesa){
+const ESPERA_BITACORA_MS=20000;   // FIX 22-oct: la bitacora espera mas (ver bitacora())
+function conLimite(promesa,ms){
   const norm=Promise.resolve(promesa).then(v=>({ok:true,v}),e=>({ok:false,e}));
   return new Promise((res,rej)=>{
     const t=setTimeout(()=>{
       const e=new Error('El servidor no confirmo la escritura');
       e.code='unavailable';
       rej(e);
-    },ESPERA_SERVIDOR_MS);
+    },ms||ESPERA_SERVIDOR_MS);
     norm.then(r=>{ clearTimeout(t); r.ok?res(r.v):rej(r.e); });
   });
 }
@@ -946,7 +963,27 @@ async function bitacora(evento, datos, ses){
     reg.uid     = ses ? (ses.uid||'')   : ((auth.currentUser&&auth.currentUser.uid)||'');
     reg.cajero  = authUser();
     reg.turno   = (typeof turnoUser!=='undefined'&&turnoUser)||'';
-    await conLimite(setDoc(doc(ses?ses.db:db,'bitacora',id),Object.assign({},reg,{ts:serverTimestamp()})));
+    // FIX 22-oct: la bitacora se confirmaba con el limite general de 6 s. Al abrir
+    // el POS o cerrar la caja (cuando bajan catalogo, ventas y mesas a la vez) el
+    // servidor tarda 10-25 s y salia «Sin conexion» aunque el registro SI llegaba
+    // (verificado en Firestore: cierre_caja 21-oct, 13 s; inicio_sesion, 23 s).
+    // Ahora: limite propio de 20 s; y en la sesion principal, que guarda en el
+    // disco del navegador, si aun asi no confirma, la escritura queda ENCOLADA y
+    // sube sola: no se alarma. Si el servidor la RECHAZA despues, si sale el aviso.
+    const pend=setDoc(doc(ses?ses.db:db,'bitacora',id),Object.assign({},reg,{ts:serverTimestamp()}));
+    try{
+      await conLimite(pend, ESPERA_BITACORA_MS);
+    }catch(e0){
+      const c0=(e0&&e0.code)||'';
+      if(!ses && CACHE_LOCAL && (c0.includes('unavailable')||c0.includes('network'))){
+        console.warn('bitacora: pendiente de confirmar, quedo en cola local',id);
+        pend.catch(e1=>{ console.error('bitacora rechazada:',e1);
+          avisoError(msgError(e1,'registrar la accion en la bitacora')); });
+        if(bitCargado) BIT.unshift(reg);
+        return id;
+      }
+      throw e0;
+    }
     if(bitCargado) BIT.unshift(reg);
     return id;
   }catch(e){
@@ -4155,6 +4192,38 @@ function cjFila(lbl,val,extra){ return `<div style="display:flex;justify-content
 const _cjHora=iso=>new Date(iso).toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'});
 const _cjFecha=d=>new Date(d.slice(0,10)+'T12:00:00').toLocaleDateString('es-EC',{weekday:'long',day:'numeric',month:'long'});
 
+// ── Rediseño fase 3 (22-oct-2026): conteo por denominación y pasos del turno ──
+// El conteo sigue siendo CIEGO: el «debería haber» solo aparece después de
+// guardar el conteo. Las cantidades por billete/moneda solo ayudan a sumar y
+// quedan guardadas en el cierre (desglose) como respaldo del arqueo.
+const CJ_DENOM=[[50,'Billete $50'],[20,'Billete $20'],[10,'Billete $10'],[5,'Billete $5'],[1,'$1 (billete o moneda)'],[0.5,'Moneda $0,50'],[0.25,'Moneda $0,25'],[0.1,'Moneda $0,10'],[0.05,'Moneda $0,05'],[0.01,'Moneda $0,01']];
+function cjDesglose(){
+  const d=cjD.den||{}, o={}; let usado=false;
+  CJ_DENOM.forEach(([v])=>{ const n=parseInt(d[v]); if(n>0){ o[String(v)]=n; usado=true; } });
+  return usado?o:null;
+}
+function cjDenomTotal(){ const d=cjD.den||{}; return _r2(CJ_DENOM.reduce((a,[v])=>a+(parseInt(d[v])||0)*v,0)); }
+function cjDenomHTML(){
+  const d=cjD.den||{};
+  return `<div class="cj-den"><div class="cj-den-h"><b>Cuenta por billete y moneda</b><span>Escribe cuántos hay de cada uno · el total se suma solo</span></div>
+    ${CJ_DENOM.map(([v,l])=>{ const n=parseInt(d[v])||0; return `<div class="cj-den-r"><span>${l}</span>
+      <input type="number" min="0" step="1" inputmode="numeric" data-den="${v}" value="${n||''}" placeholder="0" aria-label="Cantidad de ${l}">
+      <b data-densub="${v}">${n?fmt(_r2(n*v)):'—'}</b></div>`; }).join('')}
+    <div class="cj-den-t"><span>Total contado</span><b id="cj-den-total">${fmt(cjDenomTotal())}</b></div></div>`;
+}
+function cjDenomAttach(mc){
+  mc.querySelectorAll('[data-den]').forEach(inp=>inp.addEventListener('input',()=>{
+    cjD.den=cjD.den||{}; const v=inp.dataset.den, n=Math.max(0,parseInt(inp.value)||0);
+    cjD.den[v]=n; const s=mc.querySelector(`[data-densub="${v}"]`); if(s) s.textContent=n?fmt(_r2(n*(+v))):'—';
+    const tot=cjDenomTotal(); const t=mc.querySelector('#cj-den-total'); if(t) t.textContent=fmt(tot);
+    const c=mc.querySelector('#cj-conteo'); if(c){ c.value=tot.toFixed(2); cjD.conteo=c.value; }
+  }));
+}
+function cjPasosHTML(est){
+  const res=cjD.fase==='resultado';
+  const p=[['Apertura',est.ap?'Fondo '+fmt(+est.ap.fondo||0):'Turno anterior',1],['Movimientos','Ventas y gastos del turno',1],['Conteo de efectivo',res?'Contado '+fmt(_cjNum(cjD.conteo)||0):'Cuenta billetes y monedas',res?1:2],['Cuadre y cierre','Confirma y bloquea el turno',res?2:0]];
+  return `<div class="cj-pasos">${p.map(([t,d,s],i)=>`<div class="cj-paso ${s===1?'ok':s===2?'act':''}"><span class="cj-pn">${s===1?'✓':i+1}</span><div><b>${t}</b><small>${esc(d)}</small></div></div>`).join('<i class="cj-pl"></i>')}</div>`;
+}
 function rCuadre(){
   const est=estadoCaja();
   if(est.e==='cerrada') return rCjApertura();
@@ -4179,9 +4248,10 @@ function rCuadre(){
     body=`${fondoHTML}
       <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px;font-size:12px;line-height:1.55">
         <b>1.</b> Cuenta <b>todo</b> el efectivo de la caja: billetes, monedas y el fondo.<br>
-        <b>2.</b> Escribe el total. No verás cuánto "debería haber" hasta guardar tu conteo.<br>
+        <b>2.</b> Anota cuántos billetes y monedas hay de cada valor (o escribe el total). No verás cuánto "debería haber" hasta guardar tu conteo.<br>
         <span style="color:var(--text3)">${nV} venta(s) y ${nG} gasto(s) en efectivo entran en este cierre.</span>
       </div>
+      ${cjDenomHTML()}
       <div class="fg" style="margin-bottom:12px"><label>Efectivo contado ($)</label>
         <input id="cj-conteo" type="number" step="0.01" min="0" value="${esc(cjD.conteo)}" placeholder="Total contado" style="font-size:16px;font-weight:700"></div>
       <button class="btn btn-acc btn-full" style="padding:10px" id="cj-ver">Ver resultado →</button>
@@ -4226,7 +4296,7 @@ function rCuadre(){
         <button class="btn btn-w" style="flex:2;padding:10px" id="cj-cerrar">Confirmar cierre</button>
       </div>`;
   }
-  return `${avisoSinCierre()}<div class="card"><div style="font-weight:700;font-size:13px;margin-bottom:12px">Cerrar caja</div>${cab}${body}</div>`;
+  return `${avisoSinCierre()}${cjPasosHTML(est)}<div class="card"><div style="font-weight:700;font-size:13px;margin-bottom:12px">${cjD.fase==='resultado'?'Paso 4 · Cuadre y cierre':'Paso 3 · Conteo de efectivo'}</div>${cab}${body}</div>`;
 }
 
 function rCjApertura(){
@@ -4269,6 +4339,7 @@ function attachCuadre(mc){
     if(distinto!==!!mc.querySelector('#cj-obs-ap')) render();
   });
   mc.querySelector('#cj-det')?.addEventListener('click',e=>{e.preventDefault();cjD.verDetalle=!cjD.verDetalle;render();});
+  cjDenomAttach(mc);
   mc.querySelector('#cj-ver')?.addEventListener('click',()=>{
     const est=estadoCaja();
     if(!est.ap&&isNaN(_cjNum(cjD.fondoDia))){ alert('Escribe el fondo con el que se abrió la caja ese día (0 si no hubo).'); return; }
@@ -4345,6 +4416,7 @@ async function cjCerrar(sinConteo){
       inicio:fondo,sueltos:0,conteo,conteoInicial:(cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo)?cjD.conteoInicial:null,
       efectivoEsperado:c.efV,gastosEfectivo:c.efG,esperadoEnCaja:esperado,diferencia:dif,
       retiro,fondoSiguiente:sinConteo?null:_r2(conteo-retiro),
+      desglose:sinConteo?null:cjDesglose(),
       porMetodo:Object.fromEntries(Object.entries(c.porMetodo).map(([k,v])=>[k,_r2(v)])),
       ventasTotal:c.tot,nVentas:c.ventas.length,nGastosEf:c.gastos.length,ids:c.ids,
       sinConteo:!!sinConteo,autorizadoPor:autor?autor.email:null,motivoSinConteo:motivo||null,
