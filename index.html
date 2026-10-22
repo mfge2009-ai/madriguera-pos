@@ -252,6 +252,36 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
 .ini-qb:hover{border-color:var(--acc)}
 .ini-qb kbd{font-family:inherit;font-size:10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--text2);font-weight:600}
 @media(max-width:900px){.ini-grid{grid-template-columns:1fr}}
+
+/* ── Rediseño fase 2 (22-oct-2026): salón, pedido y cobro ── */
+.mchip.ocupada{background:#fffbe6;border-color:#f5c842;color:#7a5c00;font-weight:600}
+.mchip.sel{background:var(--acc)!important;border-color:var(--acc)!important;color:#fff!important}
+.mc-n{overflow-wrap:anywhere}
+.mc-n{display:block}.mc-t,.mc-m{font-size:10px;display:inline-block;margin-right:6px}
+.ms-head,.ms-ley{display:none}
+.osec{font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3);padding:8px 10px 3px}
+.osec-new{color:var(--amb)}
+#cash-box{background:var(--bg3);border-radius:var(--rs);padding:8px 10px;margin-bottom:8px}
+.cash-row{display:flex;align-items:center;gap:8px}.cash-row label{font-size:11px;font-weight:700;color:var(--text2)}
+.cash-row input{flex:1;padding:7px 9px;border-radius:var(--rs);border:1.5px solid var(--acc);font-size:15px;font-weight:700;text-align:right;font-family:inherit;min-width:0}
+.cash-q{display:flex;gap:4px;margin-top:6px}.cash-q button{flex:1;padding:6px 2px;border-radius:6px;border:1px solid var(--b2);background:var(--bg2);font-size:11px;font-weight:600;cursor:pointer;font-family:inherit}
+.cash-res{display:none}.cash-res.ok,.cash-res.falta{display:flex;justify-content:space-between;align-items:center;margin-top:7px;padding:7px 9px;border-radius:6px;font-size:12px}
+.cash-res.ok{background:var(--gbg);color:var(--grn)}.cash-res.falta{background:var(--rbg);color:var(--red)}.cash-res b{font-size:17px}
+@media(min-width:1100px){
+  .pos-root{display:grid!important;grid-template-columns:300px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+  #mesa-strip{grid-column:1;grid-row:1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-content:start;gap:8px;overflow-y:auto;overflow-x:hidden;padding:14px;border-bottom:none;border-right:1px solid var(--border)}
+  #pos-wrap{grid-column:2;grid-row:1}
+  .ms-head{display:flex;flex-direction:column;grid-column:1/-1;margin-bottom:4px}.ms-head b{font-size:17px}.ms-head span{font-size:11px;color:var(--text3)}
+  .ms-ley{display:flex;flex-wrap:wrap;gap:6px 12px;grid-column:1/-1;margin-top:8px;padding:9px 10px;border-radius:var(--rs);background:var(--bg);font-size:11px;color:var(--text2)}
+  .ms-ley i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+  .mchip{border-radius:10px;padding:9px 10px;white-space:normal;text-align:left;min-height:66px;display:flex;flex-direction:column;justify-content:flex-start;gap:1px;font-size:13px;font-weight:600}
+  .mc-t{font-size:12px;font-weight:700}.mc-m{font-size:11px;font-weight:400}
+  .mc-libre{opacity:.7}
+  #opanel{width:340px;min-width:340px}
+  .oinn{font-size:13px}.oiv{font-size:11px}.oip{font-size:13px}
+  .payb{padding:12px 4px;font-size:12px}
+  .tot{font-size:18px}
+}
 </style>
 </head>
 <body>
@@ -1926,6 +1956,33 @@ function showTurnoModal(){
 }
 
 // ── POS ───────────────────────────────────────────────────────
+// Pedido agrupado (rediseño fase 2): primero lo ya enviado a cocina y luego lo
+// nuevo. Solo cambia el ORDEN en pantalla; t.order no se modifica.
+function ordenAgrupada(t,fila){
+  const env=i=>t.comandas&&t.comandas.length>0&&t.comandas.some(c=>c.items&&c.items.some(ci=>ci.lid===i.lid));
+  const enviados=t.order.filter(env), nuevos=t.order.filter(i=>!env(i));
+  if(!enviados.length) return nuevos.map(fila).join('');
+  return `<div class="osec">Enviado a cocina</div>${enviados.map(fila).join('')}`
+    +(nuevos.length?`<div class="osec osec-new">Nuevo · aún no se envía</div>${nuevos.map(fila).join('')}`:'');
+}
+// Efectivo recibido y cambio (solo pantalla: no altera el cobro ni la venta).
+function cajaCambioHTML(tot){
+  const r2=x=>Math.round(x*100)/100;
+  const sug=[...new Set([r2(tot),Math.ceil(tot/5)*5,Math.ceil(tot/10)*10,Math.ceil(tot/20)*20].filter(v=>v>=tot))].slice(0,4);
+  return `<div id="cash-box"><div class="cash-row"><label for="cash-in">Recibe</label><input id="cash-in" type="number" step="0.01" min="0" inputmode="decimal" placeholder="${tot.toFixed(2)}"></div>
+    <div class="cash-q">${sug.map((v,i)=>`<button type="button" data-cash="${v.toFixed(2)}">${i===0?'Exacto':fmt(v)}</button>`).join('')}</div>
+    <div id="cash-res" class="cash-res"></div></div>`;
+}
+function cajaCambioAttach(ftr,tot){
+  const inp=ftr.querySelector('#cash-in'), res=ftr.querySelector('#cash-res'); if(!inp||!res) return;
+  const calc=()=>{ const v=parseFloat(inp.value);
+    if(isNaN(v)){ res.className='cash-res'; res.innerHTML=''; return; }
+    const d=Math.round((v-tot)*100)/100;
+    if(d>=0){ res.className='cash-res ok'; res.innerHTML=`<span>Cambio a entregar</span><b>${fmt(d)}</b>`; }
+    else { res.className='cash-res falta'; res.innerHTML=`<span>Falta</span><b>${fmt(-d)}</b>`; } };
+  inp.addEventListener('input',calc);
+  ftr.querySelectorAll('[data-cash]').forEach(b=>b.addEventListener('click',()=>{ inp.value=b.dataset.cash; calc(); }));
+}
 function rPOS(){
   const active=P.filter(p=>p.active);
   const t=selT?T.find(x=>x.id===selT):null;
@@ -1935,10 +1992,15 @@ function rPOS(){
   const chips=T.map(tb=>{
     const s=tb.status,sel=tb.id===selT;
     const tbT=tb.order.reduce((a,i)=>a+i.price*i.qty,0);
+    const _min=tb.openedAt?Math.max(0,Math.floor((Date.now()-new Date(tb.openedAt).getTime())/60000)):0;
+    const _tiempo=_min>=60?Math.floor(_min/60)+' h '+String(_min%60).padStart(2,'0'):_min+' min';
     return `<button class="mchip ${s}${sel?' sel':''}" data-tid="${tb.id}">
-      ${esc(tb.name)}${cocinaChip(tb)}${s!=='libre'?`<br><span style="font-size:10px">${fmt(tbT)}</span>`:''}
+      <span class="mc-n"${tb.name.length>11?' style="font-size:11.5px"':''}>${esc(tb.name)}${cocinaChip(tb)}</span>${s!=='libre'?`<span class="mc-t">${fmt(tbT)}</span>${tb.openedAt?`<span class="mc-m">⏱ ${_tiempo}</span>`:''}`:'<span class="mc-m mc-libre">Libre</span>'}
     </button>`;
   }).join('');
+  const _conPedido=T.filter(x=>x.status!=='libre').length;
+  const salonHead=`<div class="ms-head"><b>Salón</b><span>${_conPedido} de ${T.length} con pedido</span></div>`;
+  const salonLey=`<div class="ms-ley"><span><i style="background:var(--b2)"></i>Libre</span><span><i style="background:#f5c842"></i>Sin enviar</span><span><i style="background:#93bfee"></i>En cocina</span><span><i style="background:var(--gbrd)"></i>Por cobrar</span></div>`;
 
   // Category tabs
   const cats=['Todos','Café','Bebidas','Bubble Tea','Platos fuertes','Postres','Bebidas con alcohol','Taller & Merch','Libros','Consignados'];
@@ -1990,7 +2052,7 @@ function rPOS(){
 
   // Order items
   const items=t&&t.order.length>0
-    ?t.order.map(i=>{
+    ?ordenAgrupada(t,i=>{
       const wasSent=t.comandas&&t.comandas.length>0&&t.comandas.some(cmd=>cmd.items&&cmd.items.some(ci=>ci.lid===i.lid));
       const selQty=splitMode?(splitItems[i.lid]||0):0;
       const hasAny=splitMode&&selQty>0;
@@ -2024,7 +2086,7 @@ function rPOS(){
           </div>
           <span class="oip">${fmt(i.price*i.qty)}</span>`}
       </div>`;
-    }).join('')
+    })
     :`<div class="oempty">${t?'Busca y agrega productos →':'← Selecciona una mesa'}</div>`;
 
   // Footer: comanda or cobro
@@ -2106,8 +2168,8 @@ function rPOS(){
     }
   }
 
-  return `<div style="display:flex;flex-direction:column;height:100%;overflow:hidden;min-height:0">
-    <div id="mesa-strip">${chips}</div>
+  return `<div class="pos-root" style="display:flex;flex-direction:column;height:100%;overflow:hidden;min-height:0">
+    <div id="mesa-strip">${salonHead}${chips}${salonLey}</div>
     <div id="pos-wrap">
       <div id="scol">
         <div id="stop">
@@ -3026,6 +3088,7 @@ function rFooter(){
       </div>
       <div style="font-size:11px;font-weight:700;margin-bottom:7px">Método de pago</div>
       <div class="pgrid">${PAY.map(m=>`<button class="payb${selPay===m?' on':''}" data-pay="${m}">${m}</button>`).join('')}</div>
+      ${selPay==='Efectivo'?cajaCambioHTML(totalConDesc):''}
       <div style="display:flex;gap:6px;margin-bottom:6px">
         <button class="btn btn-g btn-sm" id="bccc">Atrás</button>
         <button class="btn" style="padding:9px;font-size:11px;background:#dbeafe;color:#1a3f8b;border:1px solid #93c5fd" id="bfactura2">🧾 Factura</button>
@@ -3037,6 +3100,7 @@ function rFooter(){
     ftr.querySelector('#bccc')?.addEventListener('click',()=>{cobConf=false;modoParcial=false;pagosParciales=[];render();});
     ftr.querySelector('#bconf')?.addEventListener('click',async()=>await confirmarCobro(),{once:true});
     ftr.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];rFooter();});
+    cajaCambioAttach(ftr,totalConDesc);
     ftr.querySelector('#bfactura2')?.addEventListener('click',()=>{window.openFacturaModal();});
     ftr.querySelector('#bcobrar-fac')?.addEventListener('click',()=>sriCobrarYFacturar(totalConDesc));
     // Discount handlers
