@@ -984,6 +984,7 @@ const BIT_ETIQUETAS={
   accion_admin:'Accion de administracion',
   producto_eliminado:'PRODUCTO ELIMINADO',
   precios_actualizados:'Actualización de precios por lista del proveedor',
+  inventario_inicial:'Inventario inicial: conteo físico aplicado al POS',
   ingreso_mercaderia:'Ingreso de mercaderia',
   ajuste_stock:'Ajuste de stock',
   ingreso_revisado:'Ingreso de mercaderia revisado',
@@ -3262,6 +3263,7 @@ function rProductos(){
         <button class="btn btn-g" onclick="resincronizarCatalogo()" style="font-size:11px" title="Relee el catalogo completo desde la nube (unas 1.800 lecturas). Normalmente no hace falta: se sincroniza solo.">🔄 Resincronizar</button>
         <button class="btn btn-g" id="bpexportcat" style="font-size:11px">↓ Exportar</button>
         ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpprecios" style="font-size:11px" title="Actualiza precios de venta desde la lista Excel/CSV del proveedor, cruzando por ISBN">💲 Actualizar precios</button>':''}
+        ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpinvini" style="font-size:11px" title="Concilia el conteo físico con el POS: fija el stock contado, pone en 0 e inactivo lo no contado y lista las altas">📦 Inventario inicial</button>':''}
         ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpimport" style="font-size:11px">↑ Importar CSV</button>':''}
         <button class="btn btn-acc" id="bpn">+ Agregar</button>
       </div>
@@ -3397,11 +3399,13 @@ function attachProd(){
   };
 
   // Actualizar precios desde lista del proveedor
-  mc.querySelector('#bpprecios')?.addEventListener('click',()=>abrirActualizarPrecios());
+  mc.querySelector('#bpprecios')?.addEventListener('click',()=>{INV=null;abrirActualizarPrecios();});
+  mc.querySelector('#bpinvini')?.addEventListener('click',()=>abrirInventarioInicial());
+  if(INV){ const pp=document.getElementById('import-panel'); if(pp){ pp.style.display='block'; invRender(); } }
   if(PRC){ const pp=document.getElementById('import-panel'); if(pp){ pp.style.display='block'; prcRender(); } }
   // CSV Import
   mc.querySelector('#bpimport')?.addEventListener('click',()=>{
-    PRC=null;
+    PRC=null; INV=null;
     const panel=document.getElementById('import-panel');
     if(!panel)return;
     if(panel.style.display==='block'){panel.style.display='none';return;}
@@ -3862,6 +3866,384 @@ function abrirActualizarPrecios(){
 }
 // Acceso de solo lectura para diagnóstico desde la consola (no permite escribir)
 window.__prc={estado:()=>PRC,precioLocal:id=>(P.find(p=>String(p.id)===String(id))||{}).price,abrir:()=>abrirActualizarPrecios()};
+
+// ── INVENTARIO INICIAL: CONCILIAR EL CONTEO FÍSICO CON EL POS (solo administración) ──
+// Carga uno o varios archivos de conteo (.xlsx/.xls/.csv: código/ISBN + cantidad,
+// o un registro de escaneos sin cantidad = 1 unidad por fila), los suma y los cruza
+// con el catálogo. Tres resultados, cada uno con UNA acción:
+//   · Contado y existe en el POS  → fijar el stock contado (y reactivar si estaba inactivo)
+//   · En el POS, dentro del ámbito, y no se contó → stock 0 y desactivar (no se borra)
+//   · Contado y no existe en el POS → lista de altas (CSV en el formato de «Importar CSV»)
+// Solo escribe {stock, active, stockControl, ultimoConteo, updatedAt}. No toca precio,
+// costo ni nombre. Las ventas, la caja y los cierres no cambian.
+let INV=null;
+
+// Clave de cruce: ISBN normalizado (guiones, ISBN-10→13, notación científica) o,
+// si el código no es numérico, el código en mayúsculas sin espacios.
+function invClave(v){
+  if(v===null||v===undefined)return '';
+  const s=(typeof v==='number')?String(v):String(v).trim();
+  if(!s)return '';
+  if(typeof v==='number'||/^[\d\s\-.,]+[xX]?$/.test(s)||/^\d[\d.,]*e\+\d+$/i.test(s)){
+    const k=prcNormIsbn(v); return k.length>=3?k:'';
+  }
+  return s.toUpperCase().replace(/\s+/g,'');
+}
+
+// Lee el archivo; en Excel usa la primera hoja que tenga columna de ISBN/código
+// (la plantilla trae una hoja de instrucciones además de la de conteo)
+async function invLeerArchivo(file){
+  if(/\.csv$|\.txt$/i.test(file.name||'')){ const aoa=prcParseCSV(await file.text()); return {aoa,det:invDetectar(aoa)}; }
+  const X=await prcCargarXLSX();
+  const wb=X.read(await file.arrayBuffer(),{type:'array'});
+  let prim=null;
+  // Primero la hoja «Conteo» (la plantilla trae también catálogo y listas de precios)
+  const hojas=[...wb.SheetNames].sort((a,b)=>(/conteo/i.test(b)?1:0)-(/conteo/i.test(a)?1:0));
+  for(const n of hojas){
+    const aoa=X.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null}), det=invDetectar(aoa);
+    if(!prim)prim={aoa,det};
+    if(det&&det.cCod>=0)return {aoa,det,hoja:n};
+  }
+  return prim||{aoa:[],det:null};
+}
+function invDetectar(aoa){
+  let hr=-1;
+  for(let i=0;i<Math.min(aoa.length,20);i++){
+    const r=(aoa[i]||[]).map(prcNormH);
+    // Encabezado: celda corta con ISBN/código y al menos otra columna con texto
+    if(r.filter(Boolean).length>=2&&r.some(h=>h.length<=40&&/ISBN|EAN|CODIGO|COD\.?$|BARRAS|SKU/.test(h))){hr=i;break;}
+  }
+  if(hr<0)return null;
+  const H=(aoa[hr]||[]).map(prcNormH), find=f=>H.findIndex(f);
+  let cCod=find(h=>/ISBN/.test(h)); if(cCod<0)cCod=find(h=>/EAN|CODIGO|COD\.?$|BARRAS|SKU/.test(h));
+  let cCant=find(h=>/^CONTADO|CONTADA|CANTIDAD|^CANT\.?$|QTY|UNIDADES|EJEMPLARES/.test(h));
+  if(cCant<0)cCant=find(h=>/STOCK|EXISTENCIA/.test(h));
+  const cTit=find(h=>/TITULO|NOMBRE|DESCRIPCION/.test(h));
+  const cEd=find(h=>/EDITORIAL|PROVEEDOR|SELLO/.test(h));
+  return {hr,headers:(aoa[hr]||[]).map(h=>String(h??'')),cCod,cCant,cTit,cEd};
+}
+
+// Suma de todos los archivos cargados (cada archivo = una zona/estante o sesión)
+function invSumar(){
+  const tot=new Map(), invalidas=[];
+  INV.archivos.forEach(a=>{
+    const d=a.det;
+    for(let i=d.hr+1;i<a.aoa.length;i++){
+      const r=a.aoa[i]||[], raw=r[d.cCod];
+      if(raw===null||raw===undefined||String(raw).trim()==='')continue;
+      const k=invClave(raw);
+      // Celda de cantidad vacía = 1 unidad (escaneo por fila en la plantilla)
+      const cq=d.cCant>=0?r[d.cCant]:null;
+      let q=(cq===null||cq===undefined||String(cq).trim()==='')?1:prcNum(cq);
+      const tit=d.cTit>=0?String(r[d.cTit]??''):'', ed=d.cEd>=0?String(r[d.cEd]??''):'';
+      if(!k||isNaN(q)||q<0||Math.round(q)!==q){invalidas.push({archivo:a.nombre,fila:i+1,raw:String(raw),tit,
+        mot:!k?'Código no válido':'Cantidad no válida ('+String(r[d.cCant]??'vacía')+')'});continue;}
+      if(!tot.has(k))tot.set(k,{k,raw:String(raw),tit,ed,q:0,origen:[]});
+      const t=tot.get(k); t.q+=q; if(!t.tit&&tit)t.tit=tit; if(!t.ed&&ed)t.ed=ed;
+      if(!t.origen.includes(a.nombre))t.origen.push(a.nombre);
+    }
+  });
+  return {tot,invalidas};
+}
+
+// Unidades vendidas de cada producto DESPUÉS de la hora de corte (ventas no anuladas)
+function invVendidosDesde(corte){
+  const m=new Map(); if(!corte)return m;
+  (S||[]).forEach(s=>{
+    if(!isVenta(s)||!(String(s.date)>corte))return;
+    (s.items||[]).forEach(i=>{ if(i&&i.productId&&i.stockControl==='unidad')
+      m.set(String(i.productId),(m.get(String(i.productId))||0)+(+i.qty||0)); });
+  });
+  return m;
+}
+
+function invAnalizar(){
+  const {tot,invalidas}=invSumar();
+  const vend=INV.descontar?invVendidosDesde(INV.corte):new Map();
+  const idx=new Map(), cons=new Set();
+  P.forEach(p=>{ if(!p||!p.id||!p.code)return;
+    const k=invClave(p.code); if(!k)return;
+    if(p.esConsignado||String(p.id).startsWith('cg_')){cons.add(k);return;}
+    if(!idx.has(k))idx.set(k,[]); idx.get(k).push(p); });
+  const fijar=[], iguales=[], altas=[], revisar=[], contadosIds=new Set();
+  tot.forEach((t,k)=>{
+    const ps=idx.get(k);
+    if(!ps&&cons.has(k)){revisar.push({t,ps:[],mot:'Es un libro en consignación (Segunda Vida): su stock se controla en Consignación, no aquí'});return;}
+    if(!ps){altas.push(t);return;}
+    ps.forEach(p=>contadosIds.add(String(p.id)));
+    if(ps.length>1){revisar.push({t,ps,mot:'Hay '+ps.length+' productos con este código en el POS: decide cuál conserva el stock'});return;}
+    const p=ps[0], antes=(+p.stock>=999)?null:(+p.stock||0), v=vend.get(String(p.id))||0;
+    const final=Math.max(0,t.q-v);
+    const reactivar=p.active===false, ctrl=p.stockControl!=='unidad';
+    const fila={id:String(p.id),p,t,antes,vend:v,final,dif:final-(antes||0),reactivar,ctrl,sel:true};
+    if(antes===final&&!reactivar&&!ctrl)iguales.push(fila); else fijar.push(fila);
+  });
+  // No contados: productos del ámbito que no aparecieron en ningún archivo
+  const cats=INV.cats;
+  const nocont=P.filter(p=>p&&p.id&&!p.esConsignado&&!String(p.id).startsWith('cg_')
+      &&cats.has(p.category||'')&&!contadosIds.has(String(p.id))
+      &&(p.active!==false||((+p.stock||0)>0&&(+p.stock)<999)))
+    .map(p=>{const antes=(+p.stock>=999)?null:(+p.stock||0);
+      return {id:String(p.id),p,antes,final:0,dif:-(antes||0),sel:true,ed:p.subcategory||'(sin editorial)'};});
+  fijar.sort((a,b)=>Math.abs(b.dif)-Math.abs(a.dif));
+  nocont.sort((a,b)=>(b.antes||0)-(a.antes||0));
+  Object.assign(INV,{fijar,iguales,altas,revisar,nocont,invalidas,totUnid:[...tot.values()].reduce((s,t)=>s+t.q,0),totCod:tot.size});
+}
+
+const invVal=(f)=>(+f.p.price||0)*Math.abs(f.dif);
+
+function invRender(){
+  const panel=document.getElementById('import-panel'); if(!panel||!INV)return;
+  const S2=INV;
+  let h=`<div class="card" style="margin-bottom:14px;background:var(--bbg);border-color:var(--bbrd)" id="inv-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-weight:700;font-size:13px;color:var(--blu)">📦 Inventario inicial · conciliar el conteo físico con el POS</div>
+      <button class="btn btn-g btn-sm" id="inv-cerrar">Cerrar</button></div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px">
+      Carga el archivo del conteo (o varios, uno por estante o zona: se suman). Se cruza por <b>ISBN o código</b>.
+      Solo cambia <b>stock</b> y <b>activo/inactivo</b>: no toca precio, costo ni nombre, ni ventas, caja o cierres.
+      Lo que no se contó <b>no se borra</b>: queda inactivo con stock 0. Los consignados de Segunda Vida no participan.</div>`;
+  if(S2.paso==='hecho'){
+    const H=S2.hecho;
+    h+=`<div style="padding:10px;border-radius:8px;background:var(--gbg,#ecfdf5);color:var(--grn);font-weight:600;margin-bottom:8px">
+      ✓ Inventario aplicado: ${H.nFijar} producto(s) con stock contado · ${H.nCero} en 0 e inactivos${H.fallo?` · <span style="color:var(--red)">${H.fallo} no se pudieron guardar (vuelve a analizar y aplica de nuevo)</span>`:''}</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Descarga el acta y guárdala con la fecha de corte: es la base contra la que se medirán los faltantes desde hoy.</div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap"><button class="btn btn-b btn-sm" id="inv-acta">↓ Acta del inventario inicial</button>
+      ${S2.altas.length?`<button class="btn btn-g btn-sm" id="inv-dlaltas">↓ Altas pendientes (${S2.altas.length})</button>`:''}
+      <button class="btn btn-g btn-sm" id="inv-otro">Nuevo conteo</button></div></div>`;
+    panel.innerHTML=h; invBind(); return;
+  }
+  // Paso 1: archivos, ámbito y corte
+  const catsAll=[...new Set(P.filter(p=>p&&!p.esConsignado).map(p=>p.category||''))].filter(Boolean).sort();
+  h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-bottom:10px">
+    <div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:4px">1 · Archivos del conteo</div>
+      <input type="file" id="inv-file" accept=".xlsx,.xls,.csv,.txt" multiple style="font-size:12px;display:block;margin-bottom:4px">
+      ${S2.archivos.length?S2.archivos.map((a,i)=>`<div style="font-size:11.5px;display:flex;gap:6px;align-items:center">📄 ${esc(a.nombre)} · ${a.aoa.length-a.det.hr-1} filas${a.det.cCant<0?' <span style="color:var(--amber)">(sin columna de cantidad: 1 unidad por fila)</span>':''} <a href="#" data-i="${i}" class="inv-quitar" style="color:var(--red);font-size:11px">quitar</a></div>`).join(''):''}
+      <div id="inv-msg" style="font-size:12px;color:var(--text2)">${esc(S2.msg||'')}</div></div>
+    <div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:4px">2 · Ámbito contado (lo no contado aquí pasa a 0)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px">${catsAll.map(c=>`<label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer"><input type="checkbox" class="inv-cat" value="${esc(c)}"${S2.cats.has(c)?' checked':''} style="width:auto;margin:0">${esc(c)}</label>`).join('')}</div></div>
+    <div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:4px">3 · Fecha y hora de corte del conteo</div>
+      <input type="datetime-local" id="inv-corte" value="${esc(S2.corte||'')}" style="font-size:12px">
+      <label style="display:flex;gap:6px;align-items:flex-start;font-size:11.5px;font-weight:400;margin-top:4px;cursor:pointer"><input type="checkbox" id="inv-desc"${S2.descontar?' checked':''} style="width:auto;margin:2px 0 0">Descontar lo vendido en el POS después del corte</label></div>
+  </div>`;
+  if(!S2.archivos.length||!S2.fijar){ h+=`</div>`; panel.innerHTML=h; invBind(); return; }
+
+  const nCero=S2.nocont.filter(f=>f.sel).length, nFij=S2.fijar.filter(f=>f.sel).length;
+  const uPOS=S2.fijar.concat(S2.iguales).reduce((s,f)=>s+(f.antes||0),0)+S2.nocont.reduce((s,f)=>s+(f.antes||0),0);
+  const falt=S2.fijar.filter(f=>f.dif<0).reduce((s,f)=>s+invVal(f),0)+S2.nocont.reduce((s,f)=>s+invVal(f),0);
+  const sobr=S2.fijar.filter(f=>f.dif>0).reduce((s,f)=>s+invVal(f),0);
+  const kpi=(t,v,c,f,sub)=>`<div data-f="${f}" class="inv-kpi" style="cursor:pointer;padding:8px;border-radius:8px;background:var(--bg2,#fff);border:1px solid ${S2.filtro===f?'var(--blu)':'var(--border)'}"><div style="font-size:18px;font-weight:700;color:${c}">${v}</div><div style="font-size:10.5px;color:var(--text3)">${t}</div>${sub?`<div style="font-size:10px;color:var(--text3)">${sub}</div>`:''}</div>`;
+  h+=`<div style="font-size:12px;margin-bottom:8px">Contado: <b>${S2.totCod}</b> códigos · <b>${S2.totUnid}</b> unidades · Stock que decía el POS en el ámbito: <b>${uPOS}</b> unidades
+      ${S2.descontar&&S2.corte?` · descontando ventas desde ${esc(S2.corte.replace('T',' '))}`:''}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:6px;margin-bottom:10px">
+      ${kpi('Contados: se fija el stock',S2.fijar.length,'var(--text)','fijar',S2.fijar.filter(f=>f.reactivar).length?S2.fijar.filter(f=>f.reactivar).length+' se reactivan':'')}
+      ${kpi('Contados sin cambio',S2.iguales.length,'var(--text3)','igual')}
+      ${kpi('No contados: 0 e inactivo',S2.nocont.length,'var(--red)','cero')}
+      ${kpi('Contados que no están en el POS',S2.altas.length,'var(--amber)','alta')}
+      ${(S2.revisar.length+S2.invalidas.length)?kpi('Para revisar',S2.revisar.length+S2.invalidas.length,'var(--red)','revisar'):''}
+      ${kpi('Faltante valorizado (PVP)','$'+falt.toFixed(2),'var(--red)','fijar','sobrante $'+sobr.toFixed(2))}
+    </div>`;
+  const q=(S2.busca||'').toLowerCase();
+  const mq=(...xs)=>!q||xs.some(x=>String(x||'').toLowerCase().includes(q));
+  const td='padding:4px', mono='padding:4px;font-family:monospace;font-size:10.5px', r='padding:4px;text-align:right';
+  let cab='', rows=[];
+  if(S2.filtro==='fijar'||S2.filtro==='igual'){
+    const L=(S2.filtro==='fijar'?S2.fijar:S2.iguales).filter(f=>mq(f.p.name,f.p.code,f.p.subcategory));
+    cab=`<th></th><th style="text-align:left;padding:5px">Código</th><th style="text-align:left;padding:5px">Título</th><th style="${r}">POS</th><th style="${r}">Contado</th>${S2.descontar?`<th style="${r}">Vend. desp.</th>`:''}<th style="${r}">Queda</th><th style="${r}">Dif.</th>`;
+    rows=L.map(f=>`<tr><td style="${td}">${S2.filtro==='fijar'?`<input type="checkbox" class="inv-ck" data-g="fijar" data-id="${esc(f.id)}"${f.sel?' checked':''} style="width:auto">`:''}</td>
+      <td style="${mono}">${esc(f.p.code)}</td>
+      <td style="${td}">${esc(f.p.name)} <span style="font-size:10px;color:var(--text3)">${esc(f.p.subcategory||'')}</span>${f.reactivar?' <span style="font-size:10px;color:var(--grn)">se reactiva</span>':''}${f.ctrl?' <span style="font-size:10px;color:var(--amber)" title="Estaba sin control de stock; pasa a control por unidad">pasa a control por unidad</span>':''}</td>
+      <td style="${r}">${f.antes===null?'s/c':f.antes}</td><td style="${r}">${f.t.q}</td>${S2.descontar?`<td style="${r}">${f.vend||''}</td>`:''}
+      <td style="${r};font-weight:600">${f.final}</td><td style="${r};color:${f.dif<0?'var(--red)':f.dif>0?'var(--grn)':'var(--text3)'}">${f.dif>0?'+':''}${f.dif}</td></tr>`);
+  } else if(S2.filtro==='cero'){
+    const eds=[...new Set(S2.nocont.map(f=>f.ed))].sort();
+    const L=S2.nocont.filter(f=>(!S2.ed||f.ed===S2.ed)&&mq(f.p.name,f.p.code,f.ed));
+    cab=`<th></th><th style="text-align:left;padding:5px">Código</th><th style="text-align:left;padding:5px">Título</th><th style="text-align:left;padding:5px">Editorial</th><th style="${r}">Stock POS</th><th style="${r}">PVP</th>`;
+    rows=L.map(f=>`<tr><td style="${td}"><input type="checkbox" class="inv-ck" data-g="cero" data-id="${esc(f.id)}"${f.sel?' checked':''} style="width:auto"></td>
+      <td style="${mono}">${esc(f.p.code||'')}</td><td style="${td}">${esc(f.p.name)}${f.p.active===false?' <span style="font-size:10px;color:var(--text3)">(ya inactivo)</span>':''}</td>
+      <td style="${td};font-size:11px">${esc(f.ed)}</td><td style="${r}">${f.antes===null?'s/c':f.antes}</td><td style="${r}">${prcFmt(+f.p.price||0)}</td></tr>`);
+    S2._eds=eds;
+  } else if(S2.filtro==='alta'){
+    const L=S2.altas.filter(t=>mq(t.tit,t.raw,t.ed));
+    cab=`<th></th><th style="text-align:left;padding:5px">Código</th><th style="text-align:left;padding:5px">Título (del archivo)</th><th style="text-align:left;padding:5px">Editorial</th><th style="${r}">Contado</th><th></th>`;
+    rows=L.map(t=>`<tr><td></td><td style="${mono}">${esc(t.raw)}</td><td style="${td}">${esc(t.tit||'—')}</td><td style="${td};font-size:11px">${esc(t.ed||'')}</td><td style="${r}">${t.q}</td><td></td></tr>`);
+  } else if(S2.filtro==='revisar'){
+    cab=`<th></th><th style="text-align:left;padding:5px">Código</th><th style="text-align:left;padding:5px">Detalle</th><th></th><th style="${r}">Contado</th><th></th>`;
+    rows=S2.revisar.filter(x=>mq(x.t.raw,...x.ps.map(p=>p.name))).map(x=>`<tr><td></td><td style="${mono}">${esc(x.t.raw)}</td>
+      <td style="${td}">${x.ps.length?'':esc(x.t.tit||'')}${x.ps.map(p=>esc(p.name)+' <span style="font-size:10px;color:var(--text3)">(stock '+esc(p.stock)+(p.active===false?', inactivo':'')+')</span>').join('<br>')}<div style="font-size:10px;color:var(--red)">${esc(x.mot)} · no se aplica</div></td><td></td><td style="${r}">${x.t.q}</td><td></td></tr>`)
+     .concat(S2.invalidas.map(f=>`<tr><td></td><td style="${mono}">${esc(f.raw)}</td><td style="${td}">${esc(f.tit)} <span style="font-size:10px;color:var(--red)">${esc(f.archivo)} fila ${f.fila}: ${esc(f.mot)}</span></td><td></td><td></td><td></td></tr>`));
+  }
+  const MAX=400;
+  h+=`<div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <input id="inv-busca" type="text" placeholder="Filtrar por título, código o editorial…" value="${esc(S2.busca||'')}" style="flex:1;min-width:160px">
+      ${S2.filtro==='cero'?`<select id="inv-ed" style="max-width:220px"><option value="">Todas las editoriales</option>${(S2._eds||[]).map(e=>`<option value="${esc(e)}"${S2.ed===e?' selected':''}>${esc(e)} (${S2.nocont.filter(f=>f.ed===e).length})</option>`).join('')}</select>`:''}
+      ${['fijar','cero'].includes(S2.filtro)?`<button class="btn btn-g btn-sm" id="inv-todos">Marcar visibles</button><button class="btn btn-g btn-sm" id="inv-ninguno">Desmarcar visibles</button>`:''}
+      ${S2.filtro==='alta'?`<button class="btn btn-g btn-sm" id="inv-dlaltas">↓ CSV para dar de alta</button>`:''}
+    </div>
+    <div style="max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:8px;background:var(--bg2,#fff)">
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr style="position:sticky;top:0;background:var(--bg3)">${cab}</tr></thead>
+    <tbody>${rows.slice(0,MAX).join('')||'<tr><td colspan="8" style="padding:12px;color:var(--text3);text-align:center">Nada que mostrar</td></tr>'}</tbody></table></div>
+    ${rows.length>MAX?`<div style="font-size:11px;color:var(--text3);margin-top:4px">Se muestran ${MAX} de ${rows.length}. Usa el filtro para ubicar uno en particular.</div>`:''}
+    ${S2.filtro==='cero'?`<div style="font-size:11.5px;color:var(--text2);margin-top:6px">Desmarca las editoriales o secciones que <b>no</b> recorriste por completo: lo desmarcado queda intacto.</div>`:''}
+    ${!S2.corte?`<div style="font-size:11.5px;color:var(--amber);margin-top:8px">⚠ Indica la fecha y hora de corte: queda en el acta y permite descontar lo vendido después.</div>`:''}
+    <div style="display:flex;gap:7px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-g btn-sm" id="inv-respaldo">↓ Respaldo del stock actual${S2.respaldo?' ✓':''}</button>
+      <button class="btn btn-b" id="inv-aplicar"${(nFij+nCero)&&S2.respaldo?'':' disabled'} title="${S2.respaldo?'':'Descarga primero el respaldo'}">Aplicar: ${nFij} con stock contado · ${nCero} a 0</button></div>
+    ${S2.respaldo?'':'<div style="font-size:11px;color:var(--text3);text-align:right;margin-top:4px">El botón Aplicar se activa después de descargar el respaldo.</div>'}
+    </div>`;
+  panel.innerHTML=h; invBind();
+}
+
+function invBind(){
+  const $=id=>document.getElementById(id);
+  $('inv-cerrar')?.addEventListener('click',()=>{INV=null;const p=$('import-panel');if(p){p.style.display='none';p.innerHTML='';}});
+  $('inv-file')?.addEventListener('change',async e=>{
+    const files=[...e.target.files]; if(!files.length)return;
+    const msgs=[];
+    for(const file of files){
+      if(INV.archivos.some(a=>a.nombre===file.name&&a.size===file.size)){msgs.push('«'+file.name+'» ya estaba cargado: no se suma dos veces.');continue;}
+      try{
+        INV.msg='Leyendo '+file.name+'…'; invRender();
+        const {aoa,det}=await invLeerArchivo(file);
+        if(!det||det.cCod<0){msgs.push('✘ «'+file.name+'»: no encontré una columna de ISBN o código en las primeras 20 filas.');continue;}
+        INV.archivos.push({nombre:file.name,size:file.size,aoa,det});
+      }catch(err){ console.error('inventario:',err); msgs.push('✘ «'+file.name+'»: '+(err.message||err)); }
+    }
+    INV.msg=msgs.join(' ');
+    if(INV.archivos.length){INV.paso='vista';INV.filtro=INV.filtro||'fijar';invAnalizar();}
+    invRender();
+  });
+  document.querySelectorAll('.inv-quitar').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();
+    INV.archivos.splice(+a.dataset.i,1); INV.respaldo=false;
+    if(INV.archivos.length)invAnalizar(); else Object.assign(INV,{fijar:null}); invRender();}));
+  document.querySelectorAll('.inv-cat').forEach(ck=>ck.addEventListener('change',()=>{
+    ck.checked?INV.cats.add(ck.value):INV.cats.delete(ck.value); INV.respaldo=false;
+    if(INV.archivos.length)invAnalizar(); invRender();}));
+  $('inv-corte')?.addEventListener('change',async e=>{
+    INV.corte=e.target.value||'';
+    if(INV.corte&&INV.corte.slice(0,10)<VENTAS_DESDE){ try{ await cargarMeses(INV.corte.slice(0,7),today().slice(0,7)); }catch(x){} }
+    if(INV.archivos.length)invAnalizar(); invRender();});
+  $('inv-desc')?.addEventListener('change',e=>{INV.descontar=e.target.checked; if(INV.archivos.length)invAnalizar(); invRender();});
+  document.querySelectorAll('.inv-kpi').forEach(el=>el.addEventListener('click',()=>{INV.filtro=el.dataset.f;invRender();}));
+  $('inv-ed')?.addEventListener('change',e=>{INV.ed=e.target.value;invRender();});
+  $('inv-busca')?.addEventListener('input',e=>{INV.busca=e.target.value;clearTimeout(INV._t);
+    INV._t=setTimeout(()=>{invRender();const b=$('inv-busca');if(b){b.focus();b.setSelectionRange(b.value.length,b.value.length);}},250);});
+  const grupo=g=>g==='cero'?INV.nocont:INV.fijar;
+  const contar=()=>{ const b=$('inv-aplicar'); if(!b)return;
+    const nF=INV.fijar.filter(f=>f.sel).length, nC=INV.nocont.filter(f=>f.sel).length;
+    b.textContent='Aplicar: '+nF+' con stock contado · '+nC+' a 0'; b.disabled=!(nF+nC)||!INV.respaldo; };
+  document.querySelectorAll('.inv-ck').forEach(ck=>ck.addEventListener('change',()=>{
+    grupo(ck.dataset.g).filter(f=>f.id===ck.dataset.id).forEach(f=>f.sel=ck.checked); contar(); }));
+  const marcar=v=>{ document.querySelectorAll('.inv-ck').forEach(ck=>{
+    grupo(ck.dataset.g).filter(f=>f.id===ck.dataset.id).forEach(f=>f.sel=v);}); invRender(); };
+  $('inv-todos')?.addEventListener('click',()=>marcar(true));
+  $('inv-ninguno')?.addEventListener('click',()=>marcar(false));
+  $('inv-otro')?.addEventListener('click',()=>{INV=invNuevo();invRender();});
+  $('inv-dlaltas')?.addEventListener('click',invDescargarAltas);
+  $('inv-respaldo')?.addEventListener('click',invDescargarRespaldo);
+  $('inv-acta')?.addEventListener('click',invDescargarActa);
+  $('inv-aplicar')?.addEventListener('click',invAplicar);
+}
+
+// Altas en el formato de «Importar CSV»: falta poner el PRECIO verificado (sin precio, no se importa)
+function invDescargarAltas(){
+  prcCSV('altas_inventario_'+today()+'.csv',
+    ['Nombre','Categoria','Subcategoria','Precio','Stock','Codigo','Autor','ControlStock','Variantes','Costo'],
+    INV.altas.map(t=>[t.tit||('(sin título) '+t.raw),'Libros',t.ed||'','',t.q,'="'+t.raw+'"','','unidad','no','']));
+}
+// Respaldo: estado actual de todo lo que esta herramienta puede tocar
+function invDescargarRespaldo(){
+  const L=[...INV.fijar,...INV.iguales,...INV.nocont];
+  prcCSV('respaldo_stock_antes_inventario_'+localISO().replace(/[:T]/g,'-').slice(0,16)+'.csv',
+    ['Id producto','Codigo','Titulo','Categoria','Editorial','Stock','Activo','ControlStock','PVP'],
+    L.map(f=>[f.id,f.p.code?'="'+f.p.code+'"':'',f.p.name,f.p.category||'',f.p.subcategory||'',f.p.stock??'',f.p.active===false?'no':'si',f.p.stockControl||'',(+f.p.price||0).toFixed(2)]));
+  INV.respaldo=true; invRender();
+}
+function invDescargarActa(){
+  const H=INV.hecho; if(!H)return;
+  const fil=[];
+  H.items.forEach(x=>fil.push([x.tipo,x.code?'="'+x.code+'"':'',x.name,x.cat,x.ed,x.antes,x.contado,x.vend,x.final,x.final-(+x.antes||0),
+    x.pvp.toFixed(2),((x.final-(+x.antes||0))*x.pvp).toFixed(2),x.actAntes,x.actDesp,x.id]));
+  INV.altas.forEach(t=>fil.push(['Contado, no está en el POS (alta pendiente)','="'+t.raw+'"',t.tit,'',t.ed,'',t.q,'','','','','','','','']));
+  INV.revisar.forEach(x=>fil.push(['Para revisar — no aplicado: '+x.mot,'="'+x.t.raw+'"',x.ps.length?x.ps.map(p=>p.name).join(' / '):x.t.tit,'','','',x.t.q,'','','','','','','',x.ps.map(p=>p.id).join(' / ')]));
+  INV.invalidas.forEach(f=>fil.push(['Fila no válida — no aplicada',f.raw,f.tit,'','','','','','','','','','','',f.archivo+' fila '+f.fila+': '+f.mot]));
+  fil.push([]); fil.push(['Fecha de aplicación',H.fecha]); fil.push(['Corte del conteo',H.corte||'(no indicado)']);
+  fil.push(['Ventas descontadas después del corte',H.descontar?'sí':'no']); fil.push(['Usuario',H.usuario]);
+  fil.push(['Archivos',H.archivos.join(' | ')]); fil.push(['Ámbito (categorías)',H.cats.join(', ')]);
+  fil.push(['Fijados',H.nFijar]); fil.push(['Puestos en 0 e inactivos',H.nCero]); fil.push(['No guardados',H.fallo]);
+  prcCSV('acta_inventario_inicial_'+H.fecha.slice(0,10)+'.csv',
+    ['Resultado','Codigo','Titulo','Categoria','Editorial','Stock POS antes','Contado','Vendido después del corte','Stock final','Diferencia','PVP','Diferencia valorizada (PVP)','Activo antes','Activo después','Id producto'],fil);
+}
+
+async function invAplicar(){
+  if(MI_ROL!=='admin'){alert('Solo administración puede aplicar el inventario.');return;}
+  if(!INV.respaldo){alert('Descarga primero el respaldo del stock actual.');return;}
+  const fij=INV.fijar.filter(f=>f.sel), cero=INV.nocont.filter(f=>f.sel);
+  if(!fij.length&&!cero.length)return;
+  const r=prompt('Se fijará el stock contado en '+fij.length+' producto(s) y se pondrán en 0 e INACTIVOS '+cero.length+' producto(s) no contados.\n\n'
+    +'No se borra nada; precios, costos y ventas no cambian.\nEscribe CONFIRMO para continuar:');
+  if(r===null)return;
+  if(String(r).trim().toUpperCase()!=='CONFIRMO'){alert('No se aplicó: había que escribir CONFIRMO.');return;}
+  const btn=document.getElementById('inv-aplicar'); if(btn){btn.disabled=true;btn.textContent='Guardando…';}
+  const dia=(INV.corte||localISO()).slice(0,10);
+  const ops=[...fij.map(f=>({f,tipo:'fijar',actAntes:f.p.active!==false,upd:{stock:f.final,active:true,stockControl:'unidad',ultimoConteo:dia}})),
+             ...cero.map(f=>({f,tipo:'cero',actAntes:f.p.active!==false,upd:{stock:0,active:false,ultimoConteo:dia}}))];
+  const ok=[]; let fallo=0, errMsg='';
+  for(let i=0;i<ops.length;i+=400){
+    const lote=ops.slice(i,i+400);
+    try{
+      const batch=writeBatch(db);
+      lote.forEach(o=>batch.update(doc(db,PRODUCTOS_COL,o.f.id),{...o.upd,updatedAt:serverTimestamp()}));
+      await conLimite(batch.commit(),20000);
+      lote.forEach(o=>{
+        const lp=P.find(x=>String(x.id)===o.f.id); if(lp)Object.assign(lp,o.upd);
+        if(typeof _catMap!=='undefined'&&_catMap.get(o.f.id))Object.assign(_catMap.get(o.f.id),o.upd);
+        const prev=_lastPSync.get(o.f.id);
+        if(prev){try{const ob=JSON.parse(prev);Object.assign(ob,o.upd);_lastPSync.set(o.f.id,JSON.stringify(ob));}catch(e){}}
+        ok.push(o);
+      });
+      if(btn)btn.textContent='Guardando… '+ok.length+'/'+ops.length;
+    }catch(e){
+      console.error('inventario lote',e); fallo+=lote.length; errMsg=msgError(e,'aplicar el inventario');
+      registrarFallo('aplicar inventario inicial',e);
+    }
+  }
+  const fecha=localISO(), usuario=authUser();
+  const nFijar=ok.filter(o=>o.tipo==='fijar').length, nCero=ok.length-nFijar;
+  try{
+    for(let i=0;i<ok.length||i===0;i+=500){
+      const tramo=ok.slice(i,i+500);
+      await bitacora('inventario_inicial',{
+        accion:'Aplicó el conteo físico: '+nFijar+' con stock contado, '+nCero+' en 0 e inactivos'+(ok.length>500?' (tramo '+(i/500+1)+' de '+Math.ceil(ok.length/500)+')':''),
+        archivos:INV.archivos.map(a=>a.nombre).join(' | '), corte:INV.corte||'', ambito:[...INV.cats].join(', '),
+        total:ok.length, fijados:nFijar, enCero:nCero, fallidos:fallo,
+        detalle:tramo.map(o=>(o.f.p.code||o.f.id)+'|'+(o.f.antes===null?'s/c':o.f.antes)+'|'+o.upd.stock+'|'+(o.upd.active?'activo':'inactivo')).join(';')});
+      if(!ok.length)break;
+    }
+  }catch(e){console.error('bitacora inventario',e);}
+  if(fallo)avisoError(errMsg||('No se pudieron guardar '+fallo+' producto(s) del inventario'));
+  INV.hecho={nFijar,nCero,fallo,fecha,usuario,corte:INV.corte?INV.corte.replace('T',' '):'',descontar:INV.descontar,
+    archivos:INV.archivos.map(a=>a.nombre),cats:[...INV.cats],
+    items:ok.map(o=>({tipo:o.tipo==='fijar'?(o.f.reactivar?'Contado: stock fijado y reactivado':'Contado: stock fijado'):'No contado: 0 e inactivo',
+      code:o.f.p.code||'',name:o.f.p.name,cat:o.f.p.category||'',ed:o.f.p.subcategory||'',
+      antes:o.f.antes===null?'s/c':o.f.antes,contado:o.tipo==='fijar'?o.f.t.q:0,vend:o.f.vend||0,final:o.upd.stock,
+      pvp:+o.f.p.price||0,actAntes:o.actAntes?'si':'no',
+      actDesp:o.upd.active?'si':'no',id:o.f.id}))};
+  INV.paso='hecho';
+  try{ if(typeof _catProgramarGuardado==='function')_catProgramarGuardado(); }catch(e){}
+  invRender();
+}
+
+const invNuevo=()=>({paso:'archivo',archivos:[],cats:new Set(['Libros']),corte:'',descontar:true,filtro:'fijar',busca:'',ed:'',respaldo:false,fijar:null});
+function abrirInventarioInicial(){
+  if(MI_ROL!=='admin'){alert('Solo administración puede aplicar el inventario.');return;}
+  const panel=document.getElementById('import-panel'); if(!panel)return;
+  if(panel.style.display==='block'&&INV){panel.style.display='none';INV=null;return;}
+  PRC=null; panel.style.display='block'; INV=invNuevo(); invRender();
+}
+// Acceso de solo lectura para diagnóstico desde la consola (no permite escribir)
+window.__inv={estado:()=>INV,abrir:()=>abrirInventarioInicial(),
+  local:id=>{const p=P.find(x=>String(x.id)===String(id));return p?{stock:p.stock,active:p.active}:null;}};
 
 // ── DASHBOARD ─────────────────────────────────────────────────
 function rDash(){
