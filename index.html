@@ -2167,6 +2167,7 @@ function rPOS(){
         <div class="oin">
           <div class="oinn">${esc(i.name)}${pTag}${personaMode&&!splitMode?`<span style="font-size:9px;color:var(--text3);margin-left:4px">${i.persona?'':'← toca para asignar'}</span>`:''}</div>
           ${i.variant?`<div class="oiv">${i.variant}</div>`:''}
+          ${(()=>{const av=precioAvisoDe(P.find(x=>x.id===i.productId));return av&&Math.abs(+i.price-av.nuevo)<0.005?`<div class="oiv" style="color:#b45309;font-weight:600">⚠ Precio actualizado (antes $${av.antes.toFixed(2)}) · revisa la etiqueta</div>`:'';})()}
           ${i.nota?`<div class="oiv" style="color:#b45309;font-weight:600">📝 ${esc(i.nota)}</div>`:''}
         </div>
         ${splitMode?`<div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
@@ -2583,12 +2584,57 @@ async function addItem(p,variant){
   const persona=personaMode?personaActual:null;
   const lid=p.id+'_'+(variant||'base')+(persona?'_p'+persona:'');
   const ex=t.order.find(i=>i.lid===lid);
+  const nuevaLinea=!ex;
   if(ex){ex.qty++;}
   else{t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:1,variant:variant||null,stockControl:p.stockControl||'sin_control',persona:persona});}
   t.status='ocupada';
   if(!t.openedAt)t.openedAt=localISO();
   render(); // instant UI feedback
   sT();     // async write, no await needed here
+  if(nuevaLinea){ const av=precioAvisoDe(p); if(av)mostrarAvisoPrecio(p,av); }
+}
+
+// ── AVISO «PRECIO ACTUALIZADO» AL VENDER (24-oct-2026) ─────────────────
+// Cuando «💲 Actualizar precios» sube el precio de un libro, guarda en la ficha
+// precioAvisoAntes / precioAvisoNuevo / precioAvisoFecha. Durante PRECIO_AVISO_DIAS
+// días, al agregar ese libro a una cuenta sale un aviso para que el mesero revise
+// la etiqueta física (puede tener el precio viejo). Se cobra siempre el precio
+// del POS. Si después se cambia el precio a mano, el aviso deja de salir solo.
+const PRECIO_AVISO_DIAS=60;
+function precioAvisoDe(p){
+  if(!p||p.esConsignado)return null;
+  const antes=+p.precioAvisoAntes, nuevo=+p.precioAvisoNuevo, precio=+p.price;
+  if(!(antes>0)||!(nuevo>0)||!p.precioAvisoFecha)return null;
+  if(Math.abs(precio-nuevo)>=0.005||!(precio>antes))return null;
+  const f=new Date(String(p.precioAvisoFecha).slice(0,10)+'T00:00:00');
+  if(isNaN(f))return null;
+  if((Date.now()-f.getTime())/86400000>PRECIO_AVISO_DIAS)return null;
+  return {antes,nuevo,fecha:String(p.precioAvisoFecha).slice(0,10)};
+}
+function mostrarAvisoPrecio(p,av){
+  try{
+    document.getElementById('aviso-precio')?.remove();
+    const o=document.createElement('div');
+    o.id='aviso-precio';
+    o.style.cssText='position:fixed;inset:0;z-index:11500;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px';
+    o.innerHTML=`<div role="alertdialog" aria-labelledby="ap-t" style="background:var(--bg2,#fff);color:var(--text,#111);max-width:380px;width:100%;border-radius:14px;padding:18px;border-top:6px solid #d97706;box-shadow:0 10px 30px rgba(0,0,0,.3);font-family:inherit">
+      <div id="ap-t" style="font-size:16px;font-weight:700;color:#b45309;margin-bottom:6px">⚠ Precio actualizado</div>
+      <div style="font-size:13px;margin-bottom:10px;line-height:1.4">${esc(p.name||'')}</div>
+      <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-bottom:10px">
+        <div style="text-align:center"><div style="font-size:10.5px;color:var(--text3,#666)">Antes</div><div style="font-size:17px;text-decoration:line-through;color:var(--text3,#666)">$${av.antes.toFixed(2)}</div></div>
+        <div style="font-size:18px">→</div>
+        <div style="text-align:center"><div style="font-size:10.5px;color:var(--text3,#666)">Se cobra</div><div style="font-size:22px;font-weight:800;color:#b45309">$${av.nuevo.toFixed(2)}</div></div>
+      </div>
+      <div style="font-size:12px;line-height:1.5;color:var(--text2,#333);margin-bottom:12px">Revisa la etiqueta del libro: si tiene el precio anterior, cámbiala o avisa al cliente antes de cobrar. Precio actualizado el ${esc(av.fecha)}.</div>
+      <button id="ap-ok" class="btn btn-b" style="width:100%">Entendido</button></div>`;
+    document.body.appendChild(o);
+    const cerrar=()=>{o.remove();document.removeEventListener('keydown',tecla,true);};
+    const tecla=e=>{ if(e.key==='Enter'||e.key==='Escape'){e.preventDefault();e.stopPropagation();cerrar();} };
+    o.querySelector('#ap-ok').addEventListener('click',cerrar);
+    o.addEventListener('click',e=>{if(e.target===o)cerrar();});
+    setTimeout(()=>document.addEventListener('keydown',tecla,true),300); // que el Enter del escáner no lo cierre
+    o.querySelector('#ap-ok').focus();
+  }catch(e){console.error('aviso precio',e);}
 }
 
 function sanitize(str){
@@ -3663,8 +3709,9 @@ function prcAnalizar(){
       const pct=actual>0?(f.nuevo-actual)/actual:Infinity;
       const alerta=Math.abs(pct)>umbral;
       const difLista=!isNaN(f.ant)&&Math.abs(prcR2(f.ant)-actual)>=0.005;
-      cambios.push({id:String(p.id),p,f,actual,nuevo:f.nuevo,pct,alerta,difLista,
-        dup:ps.length>1,inactivo:p.active===false,sel:!alerta});
+      const bloq=PRC.soloSuben!==false&&f.nuevo<actual; // baja: se mantiene el precio del POS
+      cambios.push({id:String(p.id),p,f,actual,nuevo:f.nuevo,pct,alerta,difLista,bloq,
+        dup:ps.length>1,inactivo:p.active===false,sel:!alerta&&!bloq});
     });
   });
   cambios.sort((a,b)=>(b.alerta-a.alerta)||(Math.abs(b.pct)-Math.abs(a.pct)));
@@ -3693,8 +3740,11 @@ function prcRender(){
       Carga el Excel o CSV del proveedor. Se cruza por <b>ISBN</b> y solo cambia el <b>precio de venta</b>: no toca stock, costo ni nombre.
       Las ventas ya hechas conservan su precio. Los libros en consignación (Segunda Vida) no se modifican.</div>`;
   if(S.paso==='archivo'||!S.aoa){
+    const nAv=P.filter(p=>precioAvisoDe(p)).length;
     h+=`<input type="file" id="prc-file" accept=".xlsx,.xls,.csv" style="font-size:12px;display:block;margin-bottom:6px">
-      <div id="prc-msg" style="font-size:12px;color:var(--text2)">${esc(S.msg||'')}</div></div>`;
+      <label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:6px 0;cursor:pointer"><input type="checkbox" id="prc-solosuben"${S.soloSuben!==false?' checked':''} style="width:auto"> <span><b>Solo subir precios</b> (los que bajan conservan el precio del POS)</span></label>
+      <div id="prc-msg" style="font-size:12px;color:var(--text2)">${esc(S.msg||'')}</div>
+      ${nAv?`<div style="font-size:11.5px;color:var(--text3);margin-top:8px">${nAv} libro(s) muestran hoy el aviso «Precio actualizado» al venderse. <button class="btn btn-g btn-sm" id="prc-quitaravisos">Quitar avisos</button></div>`:''}</div>`;
     panel.innerHTML=h; prcBind(); return;
   }
   const opts=sel=>S.det.headers.map((t,i)=>`<option value="${i}"${i===sel?' selected':''}>${esc(t||('Columna '+(i+1)))}</option>`).join('');
@@ -3704,20 +3754,24 @@ function prcRender(){
       <div class="fg" style="margin:0"><label>Columna precio NUEVO</label><select id="prc-cnuevo">${opts(S.det.cNuevo)}</select></div>
       <div class="fg" style="margin:0"><label>Precio anterior (referencia)</label><select id="prc-cant"><option value="-1">— ninguna —</option>${opts(S.det.cAnt)}</select></div>
       <div class="fg" style="margin:0"><label>Revisar si cambia más de (%)</label><input id="prc-umbral" type="number" min="1" value="${esc(S.umbral)}"></div>
-    </div>`;
+    </div>
+    <label style="display:flex;gap:7px;align-items:flex-start;font-size:12px;margin-bottom:10px;cursor:pointer;line-height:1.45">
+      <input type="checkbox" id="prc-solosuben"${S.soloSuben!==false?' checked':''} style="width:auto;margin-top:2px">
+      <span><b>Solo subir precios.</b> Los libros que en la lista bajan conservan el precio del POS (no se tocan). Los que suben muestran un aviso de «Precio actualizado» al venderse durante ${PRECIO_AVISO_DIAS} días.</span></label>`;
   if(S.paso==='hecho'){
     h+=`<div style="padding:10px;border-radius:8px;background:var(--gbg,#ecfdf5);color:var(--grn);font-weight:600;margin-bottom:8px">✓ ${S.hecho.ok} precio(s) actualizados${S.hecho.fallo?` · <span style="color:var(--red)">${S.hecho.fallo} no se pudieron guardar (vuelve a analizar y aplica de nuevo)</span>`:''}</div>
+      ${S.hecho.suben||S.hecho.mantenidos?`<div style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:8px">${S.hecho.suben?`· ${S.hecho.suben} libro(s) subieron: al venderlos saldrá el aviso «Precio actualizado» durante ${PRECIO_AVISO_DIAS} días.<br>`:''}${S.hecho.mantenidos?`· ${S.hecho.mantenidos} libro(s) que bajan en la lista conservaron su precio.`:''}</div>`:''}
       <div style="display:flex;gap:7px;flex-wrap:wrap"><button class="btn btn-b btn-sm" id="prc-acta">↓ Descargar acta de cambios</button>
       <button class="btn btn-g btn-sm" id="prc-otro">Cargar otra lista</button></div></div>`;
     panel.innerHTML=h; prcBind(); return;
   }
   const sube=S.cambios.filter(c=>c.nuevo>c.actual).length, baja=S.cambios.length-sube;
-  const nAl=S.cambios.filter(c=>c.alerta).length, nSel=S.cambios.filter(c=>c.sel).length;
+  const nAl=S.cambios.filter(c=>c.alerta&&!c.bloq).length, nSel=S.cambios.filter(c=>c.sel&&!c.bloq).length;
   const kpi=(t,v,c,f)=>`<div data-f="${f}" class="prc-kpi" style="cursor:pointer;padding:8px;border-radius:8px;background:var(--bg2,#fff);border:1px solid ${S.filtro===f?'var(--blu)':'var(--border)'}"><div style="font-size:18px;font-weight:700;color:${c}">${v}</div><div style="font-size:10.5px;color:var(--text3)">${t}</div></div>`;
   h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:6px;margin-bottom:10px">
       ${kpi('Cambian de precio',S.cambios.length,'var(--text)','cambios')}
       ${kpi('Suben',sube,'var(--red)','sube')}
-      ${kpi('Bajan',baja,'var(--grn)','baja')}
+      ${kpi(S.soloSuben!==false?'Bajan (se mantienen)':'Bajan',baja,'var(--grn)','baja')}
       ${kpi('Para revisar (>'+S.umbral+'%)',nAl,'var(--amber)','alerta')}
       ${kpi('Sin cambio',S.iguales.length,'var(--text3)','igual')}
       ${kpi('No están en el POS',S.noPOS.length,'var(--text3)','nopos')}
@@ -3729,8 +3783,9 @@ function prcRender(){
   if(['cambios','sube','baja','alerta'].includes(S.filtro)){
     lista=S.cambios.filter(c=>(S.filtro==='cambios')||(S.filtro==='sube'&&c.nuevo>c.actual)||(S.filtro==='baja'&&c.nuevo<c.actual)||(S.filtro==='alerta'&&c.alerta))
       .filter(c=>mq(c.p.name,c.p.code));
-    rows=lista.map(c=>`<tr style="${c.alerta?'background:rgba(245,158,11,.08)':''}">
-      <td style="padding:4px"><input type="checkbox" class="prc-ck" data-id="${esc(c.id)}"${c.sel?' checked':''} style="width:auto"></td>
+    S._vis=lista.filter(c=>!c.bloq).map(c=>c.id);
+    rows=lista.map(c=>`<tr style="${c.bloq?'opacity:.55':(c.alerta?'background:rgba(245,158,11,.08)':'')}">
+      <td style="padding:4px">${c.bloq?'<span title="Baja en la lista: se mantiene el precio del POS" style="font-size:10px;color:var(--text3)">se mantiene</span>':`<input type="checkbox" class="prc-ck" data-id="${esc(c.id)}"${c.sel?' checked':''} style="width:auto">`}</td>
       <td style="padding:4px;font-family:monospace;font-size:10.5px">${esc(c.p.code)}</td>
       <td style="padding:4px">${esc(c.p.name)}${c.inactivo?' <span style="font-size:10px;color:var(--text3)">(inactivo)</span>':''}${c.dup?' <span title="Hay más de un producto con este ISBN; se actualizan todos" style="font-size:10px;color:var(--amber)">ISBN repetido</span>':''}${c.difLista?` <span title="El precio del POS no coincide con el «precio anterior» de la lista (${prcFmt(c.f.ant)})" style="font-size:10px;color:var(--amber)">POS≠lista ant. ${prcFmt(c.f.ant)}</span>`:''}</td>
       <td style="padding:4px;text-align:right">${prcFmt(c.actual)}</td>
@@ -3784,6 +3839,7 @@ function prcBind(){
     PRC.det.cIsbn=+$('prc-cisbn').value; PRC.det.cNuevo=+$('prc-cnuevo').value; PRC.det.cAnt=+$('prc-cant').value;
     PRC.umbral=Math.max(1,+$('prc-umbral').value||40); PRC.paso='vista'; prcAnalizar(); prcRender(); };
   ['prc-cisbn','prc-cnuevo','prc-cant','prc-umbral'].forEach(id=>$(id)?.addEventListener('change',reAn));
+  $('prc-solosuben')?.addEventListener('change',e=>{PRC.soloSuben=e.target.checked;if(PRC.det){prcAnalizar();}prcRender();});
   document.querySelectorAll('.prc-kpi').forEach(el=>el.addEventListener('click',()=>{PRC.filtro=el.dataset.f;prcRender();}));
   $('prc-busca')?.addEventListener('input',e=>{PRC.busca=e.target.value;clearTimeout(PRC._t);
     PRC._t=setTimeout(()=>{prcRender();const b=$('prc-busca');if(b){b.focus();b.setSelectionRange(b.value.length,b.value.length);}},250);});
@@ -3791,11 +3847,12 @@ function prcBind(){
     PRC.cambios.filter(c=>c.id===ck.dataset.id).forEach(c=>c.sel=ck.checked);
     const n=PRC.cambios.filter(c=>c.sel).length, b=$('prc-aplicar');
     if(b){b.textContent='Aplicar '+n+' cambio(s) de precio';b.disabled=!n;} }));
-  const marcar=v=>{ const ids=new Set([...document.querySelectorAll('.prc-ck')].map(c=>c.dataset.id));
-    PRC.cambios.forEach(c=>{if(ids.has(c.id))c.sel=v;}); prcRender(); };
+  const marcar=v=>{ const ids=new Set(PRC._vis||[]);
+    PRC.cambios.forEach(c=>{if(ids.has(c.id)&&!c.bloq)c.sel=v;}); prcRender(); };
   $('prc-todos')?.addEventListener('click',()=>marcar(true));
   $('prc-ninguno')?.addEventListener('click',()=>marcar(false));
-  $('prc-otro')?.addEventListener('click',()=>{PRC={paso:'archivo',umbral:PRC.umbral};prcRender();});
+  $('prc-otro')?.addEventListener('click',()=>{PRC={paso:'archivo',umbral:PRC.umbral,soloSuben:PRC.soloSuben};prcRender();});
+  $('prc-quitaravisos')?.addEventListener('click',prcQuitarAvisos);
   $('prc-dlnopos')?.addEventListener('click',()=>prcCSV('no_encontrados_en_POS_'+today()+'.csv',
     ['ISBN','Titulo','Precio nuevo','Fila en la lista'],PRC.noPOS.map(f=>[f.isbnLista,f.tit,f.nuevo.toFixed(2),f.fila])));
   $('prc-acta')?.addEventListener('click',prcDescargarActa);
@@ -3811,23 +3868,30 @@ function prcDescargarActa(){
 
 async function prcAplicar(){
   if(MI_ROL!=='admin'){alert('Solo administración puede cambiar precios.');return;}
-  const sel=PRC.cambios.filter(c=>c.sel);
+  const sel=PRC.cambios.filter(c=>c.sel&&!c.bloq);
   if(!sel.length)return;
   const sube=sel.filter(c=>c.nuevo>c.actual).length;
-  if(!confirm('Se actualizará el precio de '+sel.length+' producto(s) ('+sube+' suben, '+(sel.length-sube)+' bajan).\n\nNo se toca stock ni costo. Las ventas ya hechas no cambian.\n¿Continuar?'))return;
+  const nMant=PRC.cambios.filter(c=>c.bloq).length;
+  if(!confirm('Se actualizará el precio de '+sel.length+' producto(s) ('+sube+' suben, '+(sel.length-sube)+' bajan).'+
+    (nMant?'\n'+nMant+' libro(s) que bajan en la lista conservan su precio actual.':'')+
+    (sube?'\nLos que suben mostrarán el aviso «Precio actualizado» al venderse durante '+PRECIO_AVISO_DIAS+' días.':'')+
+    '\n\nNo se toca stock ni costo. Las ventas ya hechas no cambian.\n¿Continuar?'))return;
+  const dia=today();
+  const avisoDe=c=>c.nuevo>c.actual?{precioAvisoAntes:c.actual,precioAvisoNuevo:c.nuevo,precioAvisoFecha:dia}:null;
   const btn=document.getElementById('prc-aplicar'); if(btn){btn.disabled=true;btn.textContent='Guardando…';}
   const ok=[]; let fallo=0, errMsg='';
   for(let i=0;i<sel.length;i+=400){
     const lote=sel.slice(i,i+400);
     try{
       const batch=writeBatch(db);
-      lote.forEach(c=>batch.update(doc(db,PRODUCTOS_COL,c.id),{price:c.nuevo,updatedAt:serverTimestamp()}));
+      lote.forEach(c=>batch.update(doc(db,PRODUCTOS_COL,c.id),{price:c.nuevo,...(avisoDe(c)||{}),updatedAt:serverTimestamp()}));
       await conLimite(batch.commit(),20000);
       lote.forEach(c=>{
-        const lp=P.find(x=>String(x.id)===c.id); if(lp)lp.price=c.nuevo;
-        if(typeof _catMap!=='undefined'&&_catMap.get(c.id))_catMap.get(c.id).price=c.nuevo;
+        const av=avisoDe(c), put=o=>{o.price=c.nuevo;if(av)Object.assign(o,av);};
+        const lp=P.find(x=>String(x.id)===c.id); if(lp)put(lp);
+        if(typeof _catMap!=='undefined'&&_catMap.get(c.id)&&_catMap.get(c.id)!==lp)put(_catMap.get(c.id));
         const prev=_lastPSync.get(c.id);
-        if(prev){try{const o=JSON.parse(prev);o.price=c.nuevo;_lastPSync.set(c.id,JSON.stringify(o));}catch(e){}}
+        if(prev){try{const o=JSON.parse(prev);put(o);_lastPSync.set(c.id,JSON.stringify(o));}catch(e){}}
         ok.push(c);
       });
       if(btn)btn.textContent='Guardando… '+ok.length+'/'+sel.length;
@@ -3844,14 +3908,36 @@ async function prcAplicar(){
       await bitacora('precios_actualizados',{
         accion:'Actualizó '+ok.length+' precio(s) desde la lista «'+PRC.archivo+'»'+(ok.length>500?' (tramo '+(i/500+1)+' de '+Math.ceil(ok.length/500)+')':''),
         archivo:PRC.archivo, total:ok.length, fallidos:fallo,
+        soloSuben:PRC.soloSuben!==false, mantenidos:nMant,
         detalle:tramo.map(c=>(c.p.code||'')+'|'+c.actual.toFixed(2)+'|'+c.nuevo.toFixed(2)).join(';')});
       if(!ok.length)break;
     }
   }catch(e){console.error('bitacora precios',e);}
   if(fallo)avisoError(errMsg||('No se pudieron guardar '+fallo+' precio(s)'));
   PRC.hecho={ok:ok.length,fallo,fecha,usuario,archivo:PRC.archivo,
+    suben:ok.filter(c=>c.nuevo>c.actual).length, mantenidos:nMant,
     items:ok.map(c=>({code:c.p.code,name:c.p.name,actual:c.actual,nuevo:c.nuevo,pct:c.pct,id:c.id}))};
   PRC.paso='hecho';
+  try{ if(typeof _catProgramarGuardado==='function')_catProgramarGuardado(); }catch(e){}
+  prcRender();
+}
+
+async function prcQuitarAvisos(){
+  if(MI_ROL!=='admin')return;
+  const ps=P.filter(p=>precioAvisoDe(p));
+  if(!ps.length||!confirm('Se quitará el aviso «Precio actualizado» de '+ps.length+' libro(s). El precio no cambia.\n¿Continuar?'))return;
+  let n=0;
+  for(let i=0;i<ps.length;i+=400){
+    const lote=ps.slice(i,i+400);
+    try{
+      const batch=writeBatch(db);
+      lote.forEach(p=>batch.update(doc(db,PRODUCTOS_COL,String(p.id)),{precioAvisoFecha:'',updatedAt:serverTimestamp()}));
+      await conLimite(batch.commit(),20000);
+      lote.forEach(p=>{ p.precioAvisoFecha=''; const c=typeof _catMap!=='undefined'&&_catMap.get(String(p.id)); if(c&&c!==p)c.precioAvisoFecha='';
+        const prev=_lastPSync.get(String(p.id)); if(prev){try{const o=JSON.parse(prev);o.precioAvisoFecha='';_lastPSync.set(String(p.id),JSON.stringify(o));}catch(e){}} n++; });
+    }catch(e){ console.error('quitar avisos',e); avisoError(msgError(e,'quitar avisos de precio')); registrarFallo('quitar avisos precio',e); break; }
+  }
+  try{ await bitacora('precios_actualizados',{accion:'Quitó el aviso «Precio actualizado» de '+n+' libro(s)',total:n}); }catch(e){}
   try{ if(typeof _catProgramarGuardado==='function')_catProgramarGuardado(); }catch(e){}
   prcRender();
 }
@@ -3861,7 +3947,7 @@ function abrirActualizarPrecios(){
   const panel=document.getElementById('import-panel'); if(!panel)return;
   if(panel.style.display==='block'&&PRC){panel.style.display='none';PRC=null;return;}
   panel.style.display='block';
-  PRC={paso:'archivo',umbral:40};
+  PRC={paso:'archivo',umbral:40,soloSuben:true};
   prcRender();
 }
 // Acceso de solo lectura para diagnóstico desde la consola (no permite escribir)
