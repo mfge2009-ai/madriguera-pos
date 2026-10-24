@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#2b2316">
+<title>La Madri | Reloj de asistencia</title>
+<style>
+:root{--bg:#2b2316;--panel:#3a3020;--card:#f8f6f1;--txt:#fff;--txt2:#e7dcc6;--txt3:#b9ab8e;
+  --grn:#2fae6b;--amb:#f2b233;--red:#ef5350;--blu:#64b5f6}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased}
+button,input{font:inherit}
+.wrap{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px;padding:24px;min-height:100vh;align-items:start}
+@media (max-width:820px){.wrap{grid-template-columns:1fr;padding:16px}}
+.qrbox{background:var(--card);color:#1a1a1a;border-radius:22px;padding:22px;text-align:center;position:relative}
+.qrbox h1{font-size:clamp(20px,2.6vw,30px);letter-spacing:.04em}
+.qrbox p{color:#555;font-size:clamp(14px,1.4vw,18px);margin:4px 0 12px}
+#qr{display:flex;justify-content:center;align-items:center;min-height:200px}
+#qr svg{width:min(100%,58vh);height:auto;display:block}
+#qr.invalido svg{filter:blur(10px);opacity:.35}
+.barra{height:8px;background:#e6e0d3;border-radius:4px;overflow:hidden;margin-top:12px}
+.barra div{height:100%;background:#5c4a2a;transition:width 1s linear}
+.estado{margin-top:10px;font-size:15px;font-weight:700}
+.estado.mal{color:#b3261e}
+.velo{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(248,246,241,.92);border-radius:22px;padding:20px;font-weight:800;font-size:20px;color:#b3261e}
+.velo.on{display:flex}
+.lado h2{font-size:18px;color:var(--txt2);margin:4px 0 10px;letter-spacing:.03em;text-transform:uppercase}
+.reloj{font-size:clamp(40px,6vw,76px);font-weight:900;font-variant-numeric:tabular-nums;line-height:1}
+.fecha{color:var(--txt3);margin:4px 0 18px;font-size:18px}
+.per{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--panel);border-radius:14px;padding:12px 14px;margin-bottom:8px;border-left:6px solid var(--txt3)}
+.per b{font-size:18px;display:block}
+.per span{color:var(--txt2);font-size:14px}
+.per.dentro{border-color:var(--grn)} .per.pausa{border-color:var(--amb)} .per.permiso{border-color:var(--blu)}
+.per.alerta{border-color:var(--red);background:#4a1f1a}
+.tag{font-size:13px;font-weight:800;padding:4px 9px;border-radius:8px;white-space:nowrap;background:#00000033}
+.alerta .tag{background:var(--red);color:#fff}
+.vacio{color:var(--txt3);padding:10px 0}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.btns button{background:var(--panel);color:#fff;border:1px solid #5a4c33;border-radius:10px;padding:8px 12px;font-size:14px;cursor:pointer}
+.capa{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;padding:20px;z-index:10}
+.capa.on{display:flex}
+.caja{background:var(--card);color:#1a1a1a;border-radius:18px;padding:24px;width:min(420px,100%)}
+.caja h1{font-size:22px;margin-bottom:6px}.caja p{color:#555;font-size:14px;margin-bottom:10px}
+.caja label{display:block;font-size:13px;font-weight:700;margin:10px 0 4px;color:#555}
+.caja input{width:100%;padding:12px;border:1px solid #ddd8ce;border-radius:10px;font-size:16px}
+.caja button{width:100%;margin-top:14px;padding:14px;border:0;border-radius:10px;background:#5c4a2a;color:#fff;font-weight:800;font-size:17px;cursor:pointer}
+.err{color:#b3261e;font-size:14px;margin-top:10px;display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="qrbox">
+    <h1>MARCA TU ASISTENCIA</h1>
+    <p>Abre <b>Asistencia</b> en tu celular y toca «Escanear QR» (o usa la cámara). El código cambia cada 30 segundos.</p>
+    <div id="qr"></div>
+    <div class="barra"><div id="barra" style="width:100%"></div></div>
+    <div class="estado" id="estado">Conectando…</div>
+    <div class="velo" id="velo"><div id="velo-t">Sin conexión</div><div style="font-size:15px;font-weight:400;color:#555" id="velo-d">El código no es válido mientras no se recupere la conexión.</div></div>
+  </section>
+  <section class="lado">
+    <div class="reloj" id="reloj">--:--</div>
+    <div class="fecha" id="fecha"></div>
+    <h2>Personal hoy</h2>
+    <div id="lista"><div class="vacio">Cargando…</div></div>
+    <div class="btns">
+      <button id="b-full">⛶ Pantalla completa</button>
+      <button id="b-salir">Cerrar sesión</button>
+    </div>
+  </section>
+</div>
+
+<div class="capa" id="c-login">
+  <div class="caja">
+    <h1>Reloj de asistencia</h1>
+    <p>Ingresa con la cuenta de la pantalla del local (rol «reloj») o con la de administración. La sesión queda abierta en este equipo y no cierra la del POS.</p>
+    <label for="l-mail">Correo</label><input id="l-mail" type="email" autocomplete="username">
+    <label for="l-pass">Contraseña</label><input id="l-pass" type="password" autocomplete="current-password">
+    <button id="l-btn">Ingresar</button>
+    <div class="err" id="l-err"></div>
+  </div>
+</div>
+
+<script src="qrcode.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import * as A from './asist-core.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBzAwD0HBDhWe7u_1o1toLPJLhiduHVJyo",
+  authDomain: "la-madriguera-cb489.firebaseapp.com",
+  projectId: "la-madriguera-cb489",
+  storageBucket: "la-madriguera-cb489.firebasestorage.app",
+  messagingSenderId: "648077569073",
+  appId: "1:648077569073:web:7b438dfdac9d5fef063910"
+};
+// App con nombre propio: su sesión se guarda aparte y NO cierra la sesión
+// del POS si esta pantalla se abre en el mismo computador.
+const app = initializeApp(firebaseConfig, 'reloj');
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const CADA = 30; // segundos entre códigos
+let UID = null, token = null, emitido = 0, valido = false, girando = null, CFG = {}, PERS = {}, MARCAS = [];
+
+// ── Código QR ─────────────────────────────────────────────────
+function urlMarcar(t) { const u = new URL('./', location.href); u.searchParams.set('t', t); return u.toString(); }
+function pintarQR(t) {
+  const q = qrcode(0, 'M'); q.addData(urlMarcar(t)); q.make();
+  $('qr').innerHTML = q.createSvgTag({cellSize: 8, margin: 2, scalable: true});
+}
+async function girar() {
+  if (document.hidden || !UID) return;
+  const nuevo = A.nuevoToken();
+  try {
+    await Promise.race([
+      setDoc(doc(db, 'lm_asist_qr', 'actual'), {token: nuevo, prev: token || '', ts: serverTimestamp(), por: UID}),
+      new Promise((_, r) => setTimeout(() => r(new Error('tiempo')), 8000))
+    ]);
+    token = nuevo; emitido = Date.now(); valido = true;
+    pintarQR(token); velo(false);
+    $('estado').className = 'estado'; $('estado').textContent = 'Código vigente';
+  } catch (e) {
+    valido = false;
+    velo(true, e.code === 'permission-denied' ? 'Sin permiso' : 'Sin conexión',
+      e.code === 'permission-denied' ? 'Esta cuenta no puede emitir códigos. Usa la cuenta «reloj» o la de administración.' : 'El código no es válido mientras no se recupere la conexión. Se reintenta solo.');
+  }
+}
+function velo(on, t, d) { $('velo').classList.toggle('on', on); $('qr').classList.toggle('invalido', on); if (t) $('velo-t').textContent = t; if (d) $('velo-d').textContent = d; }
+function iniciarGiro() { if (girando) return; girar(); girando = setInterval(girar, CADA * 1000); }
+function detenerGiro() { clearInterval(girando); girando = null; }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { detenerGiro(); }
+  else if (UID) { iniciarGiro(); pedirPantallaEncendida(); }
+});
+
+// ── Reloj y barra ─────────────────────────────────────────────
+let diaActual = A.diaDe(Date.now());
+setInterval(() => {
+  const d = new Date();
+  $('reloj').textContent = A.pad(d.getHours()) + ':' + A.pad(d.getMinutes());
+  $('fecha').textContent = (t => t.charAt(0).toUpperCase() + t.slice(1))(d.toLocaleDateString('es-EC', {weekday: 'long', day: 'numeric', month: 'long'}));
+  if (valido) {
+    const s = Math.max(0, CADA - (Date.now() - emitido) / 1000);
+    $('barra').style.width = (100 * s / CADA) + '%';
+  }
+  if (A.diaDe(Date.now()) !== diaActual) location.reload(); // nuevo día: nueva consulta
+  if (d.getSeconds() === 0) pintarLista();
+}, 1000);
+
+// ── Tablero del personal ──────────────────────────────────────
+function pintarLista() {
+  const uids = Object.keys(PERS).filter(u => PERS[u].activo === true);
+  if (!uids.length) { $('lista').innerHTML = '<div class="vacio">No hay personal habilitado.</div>'; return; }
+  const filas = uids.map(u => {
+    const p = PERS[u], ms = MARCAS.filter(m => m.uid === u);
+    const r = A.recorrer(ms), al = A.alertasAhora(p, ms, CFG);
+    const alerta = al.find(a => a.sev === 'alta');
+    let est = r.estado, txt = '', tag = {fuera: 'Fuera', dentro: 'Trabajando', pausa: 'En pausa', permiso: 'Con permiso'}[est];
+    if (est === 'dentro') txt = 'Desde ' + A.horaDe(r.desde);
+    else if (est === 'pausa') txt = 'Desde ' + A.horaDe(r.desde);
+    else if (est === 'permiso') txt = 'Salió ' + A.horaDe(r.desde) + (r.regreso ? ' · vuelve ' + A.horaDe(r.regreso) : '');
+    else if (r.marcas.length) txt = 'Salió ' + A.horaDe(r.desde);
+    else txt = al.some(a => a.tipo === 'sin_entrada') ? 'No ha marcado entrada' : 'Sin marcas hoy';
+    if (alerta) tag = 'NO HA REGRESADO';
+    const orden = {dentro: 0, permiso: 1, pausa: 2, fuera: 3}[est] - (alerta ? 10 : 0);
+    return {orden, html: `<div class="per ${est}${alerta ? ' alerta' : ''}"><div><b>${esc(p.nombre || '—')}</b><span>${esc(txt)}</span></div><div class="tag">${esc(tag)}</div></div>`};
+  }).sort((a, b) => a.orden - b.orden);
+  $('lista').innerHTML = filas.map(f => f.html).join('');
+}
+function escuchar() {
+  onSnapshot(doc(db, 'lm_asist_cfg', 'local'), s => { CFG = s.exists() ? s.data() : {}; pintarLista(); }, () => {});
+  onSnapshot(collection(db, 'lm_asist_personal'), s => { PERS = {}; s.docs.forEach(d => PERS[d.id] = d.data()); pintarLista(); }, () => {});
+  const desde = Timestamp.fromMillis(A.inicioDia(A.diaDe(Date.now())));
+  onSnapshot(query(collection(db, 'lm_asist_marcas'), where('ts', '>=', desde)), s => {
+    MARCAS = s.docs.map(d => { const x = d.data(); return Object.assign({}, x, {id: d.id, ts: x.ts && x.ts.toMillis ? x.ts.toMillis() : Date.now()}); });
+    pintarLista();
+  }, () => {});
+}
+
+// ── Pantalla siempre encendida ────────────────────────────────
+let wl = null;
+async function pedirPantallaEncendida() { try { if ('wakeLock' in navigator && !wl) { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => wl = null); } } catch (e) {} }
+$('b-full').addEventListener('click', () => { const el = document.documentElement; (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el); pedirPantallaEncendida(); });
+$('b-salir').addEventListener('click', async () => { if (confirm('¿Cerrar la sesión del reloj en este equipo?')) { detenerGiro(); await signOut(auth); location.reload(); } });
+
+// ── Sesión ────────────────────────────────────────────────────
+async function ingresar() {
+  const m = $('l-mail').value.trim(), p = $('l-pass').value, er = $('l-err');
+  er.style.display = 'none';
+  if (!m || !p) { er.textContent = 'Ingresa correo y contraseña.'; er.style.display = 'block'; return; }
+  $('l-btn').disabled = true;
+  try { await signInWithEmailAndPassword(auth, m, p); }
+  catch (e) { er.textContent = e.code === 'auth/invalid-credential' ? 'Correo o contraseña incorrectos.' : 'No se pudo ingresar (' + (e.code || e.message) + ').'; er.style.display = 'block'; }
+  finally { $('l-btn').disabled = false; }
+}
+$('l-btn').addEventListener('click', ingresar);
+['l-mail','l-pass'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') ingresar(); }));
+
+let iniciado = false;
+onAuthStateChanged(auth, async user => {
+  if (!user) { $('c-login').classList.add('on'); return; }
+  let rol = '';
+  try { const s = await getDoc(doc(db, 'roles', user.uid)); rol = s.exists() ? (s.data().rol || '') : ''; } catch (e) {}
+  if (!['reloj','admin'].includes(rol)) {
+    await signOut(auth);
+    $('c-login').classList.add('on');
+    $('l-err').textContent = 'Esta cuenta no puede mostrar el reloj (rol: ' + (rol || 'ninguno') + ').'; $('l-err').style.display = 'block';
+    return;
+  }
+  UID = user.uid; $('c-login').classList.remove('on');
+  if (!iniciado) { iniciado = true; escuchar(); iniciarGiro(); pedirPantallaEncendida(); }
+});
+</script>
+</body>
+</html>

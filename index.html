@@ -388,6 +388,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
     <div class="ngrp">Caja</div>
     <button data-v="caja" title="Turno y cuadre"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M16 15h2"/></svg><span class="nl">Turno y cuadre</span><span class="nbadge" data-badge="caja"></span></button>
     <button data-v="nomina" title="Nómina"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="12" r="2.5"/><path d="M14 10h4M14 14h4"/></svg><span class="nl">Nómina</span></button>
+    <button data-v="asistencia" id="nav-asist" style="display:none" title="Asistencia"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="nl">Asistencia</span><span class="nbadge" data-badge="asistencia"></span></button>
     <div class="ngrp">Inventario</div>
     <button data-v="inventario" title="Inventario"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span class="nl">Inventario</span><span class="nbadge" data-badge="inventario"></span></button>
     <button data-v="productos" title="Productos"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span class="nl">Productos</span></button>
@@ -527,7 +528,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
 const firebaseConfig = {
@@ -781,7 +782,7 @@ let MI_NOMBRE='';
 let _diaSesion='';
 let CL=[]; // clientes frecuentes
 let CG={consignantes:[],libros:[],liquidaciones:[]}; // consignación
-let NOM={empleados:[],anticipos:[],pagos:[]}; // nómina: sueldo fijo + anticipos
+let NOM={empleados:[],anticipos:[],pagos:[],horas:[]}; // nómina: sueldo fijo o por horas (horas aprobadas en Asistencia) + anticipos
 let GF=[]; // gastos fijos recurrentes (definiciones)
 let actaConsignante=null,actaLibros=[];
 let consignaSub='libros',editConsignante=null,addLibrosTo=null,csearch='',liquidarTo=null;
@@ -1919,7 +1920,7 @@ function subRT(){
         if(k==='tables')T=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
         if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
-        if(k==='nomina'){const d=snap.data().v||{};NOM={empleados:d.empleados||[],anticipos:d.anticipos||[],pagos:d.pagos||[]};_publicarPersonal();}
+        if(k==='nomina'){const d=snap.data().v||{};NOM={empleados:d.empleados||[],anticipos:d.anticipos||[],pagos:d.pagos||[],horas:d.horas||[]};_publicarPersonal();}
         if(k==='gastos_fijos'){GF=snap.data().v||[];}
       }
       _loaded[k]=true;
@@ -2006,6 +2007,7 @@ function render(){
   else if(view==='dashboard'){mc.innerHTML=`<div class="sc">${rDash()}</div>`;}
   else if(view==='caja'){mc.innerHTML=`<div class="sc">${rCaja()}</div>`;attachCaja();}
   else if(view==='nomina'){mc.innerHTML=`<div class="sc">${rNomina()}</div>`;attachNomina();}
+  else if(view==='asistencia'){mc.innerHTML=`<div class="sc">${rAsist()}</div>`;attachAsist();}
   else if(view==='inventario'){mc.innerHTML=`<div class="sc">${rInv()}</div>`;attachInv();}
   else if(view==='reportes'){mc.innerHTML=`<div class="sc">${rReportes()}</div>`;attachReportes();}
   else if(view==='bitacora'){mc.innerHTML=`<div class="sc">${rBitacora()}</div>`;attachBitacora();}
@@ -6863,7 +6865,7 @@ const perDePago=p=>p.periodoId||((p.mes||'')+'-Q2');
 const pagoDePeriodo=(empId,mes,q)=>NOM.pagos.find(p=>p.empId===empId&&perDePago(p)===perId(mes,q));
 
 // ── Cuánto le toca a un empleado en UN periodo ───────────────
-const decimoMes=e=>(e&&e.decimo!==false)?r2((+e.sueldo||0)/12):0;  // sueldo ÷ 12
+const decimoMes=e=>(e&&e.decimo!==false&&e.modalidad!=='hora')?r2((+e.sueldo||0)/12):0;  // sueldo ÷ 12
 // Partir en dos mitades EXACTAS: si el monto tiene centavos impares
 // (ej. 39.17), la quincena lleva la parte baja y el fin de mes el resto,
 // de modo que Q1 + Q2 == monto del mes al centavo. Sin esto se perdia
@@ -6871,8 +6873,13 @@ const decimoMes=e=>(e&&e.decimo!==false)?r2((+e.sueldo||0)/12):0;  // sueldo ÷ 
 const mitad1=x=>Math.floor(r2(x)*100/2)/100;   // quincena  (1–15)
 const mitad2=x=>r2(r2(x)-mitad1(x));           // fin de mes (16–fin)
 const mitadDe=(x,q)=>q==='Q2'?mitad2(x):mitad1(x);
-const mitadSueldo=(e,q)=>mitadDe(+e.sueldo||0,q);
-const mitadDecimo=(e,q)=>mitadDe(decimoMes(e),q);
+// Por horas (jornada parcial): el periodo paga las horas APROBADAS en
+// Asistencia para ese mes y quincena; el décimo tercero es ese monto ÷ 12.
+const esPorHoras=e=>!!e&&e.modalidad==='hora';
+const horasAprob=(e,q)=>(NOM.horas||[]).find(h=>h.empId===e.id&&h.periodoId===perId(nomMes,q));
+const montoHoras=(e,q)=>{const h=horasAprob(e,q);return h?r2(+h.monto||0):0;};
+const mitadSueldo=(e,q)=>esPorHoras(e)?montoHoras(e,q):mitadDe(+e.sueldo||0,q);
+const mitadDecimo=(e,q)=>esPorHoras(e)?(e.decimo!==false?r2(montoHoras(e,q)/12):0):mitadDe(decimoMes(e),q);
 const brutoPeriodo=(e,q)=>r2(mitadSueldo(e,q)+mitadDecimo(e,q));
 
 // Reparte los vales pendientes contra el monto disponible, del más
@@ -6987,7 +6994,9 @@ function rNomina(){
       <div class="fgrid">
         <div class="fg"><label>Nombre</label><input id="e-nombre" value="${esc(e.nombre||'')}" placeholder="Nombre y apellido"></div>
         <div class="fg"><label>Cargo</label><input id="e-cargo" value="${esc(e.cargo||'')}" placeholder="Ej: Barista"></div>
+        <div class="fg"><label>Forma de pago</label><select id="e-modalidad"><option value="fijo" ${e.modalidad!=='hora'?'selected':''}>Sueldo fijo mensual</option><option value="hora" ${e.modalidad==='hora'?'selected':''}>Por horas (jornada parcial)</option></select></div>
         <div class="fg"><label>Sueldo mensual ($)</label><input id="e-sueldo" type="number" step="0.01" value="${e.sueldo||''}" placeholder="0.00"></div>
+        <div class="fg"><label>Tarifa por hora ($)</label><input id="e-tarifa" type="number" step="0.01" value="${e.tarifaHora||''}" placeholder="0.00"></div>
         <div class="fg"><label>Fecha de ingreso</label><input id="e-ingreso" type="date" value="${e.ingreso||today()}"></div>
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:6px"><input type="checkbox" id="e-decimo" ${e.decimo!==false?'checked':''}> Décimo tercero mensualizado (sueldo ÷ 12)</label>
@@ -7010,7 +7019,7 @@ function rNomina(){
       ${emps.map(e=>{const pend=antPendTotal(e.id);return `<div class="mrow" style="margin-bottom:6px">
         <div style="min-width:0;flex:1">
           <div style="font-weight:700;font-size:13px">${esc(e.nombre)} ${e.activo===false?'<span class="badge" style="background:var(--bg3);color:var(--text3);font-size:9px">inactivo</span>':''}</div>
-          <div style="font-size:11px;color:var(--text3)">${esc(e.cargo||'—')} · Sueldo ${fmt(e.sueldo||0)}${e.decimo!==false?` · +${fmt(decimoMes(e))} décimo`:''} · <b>${fmt(brutoPeriodo(e,'Q1'))}</b> por quincena${pend>0?` · <span style="color:var(--red)">vales pend. ${fmt(pend)}</span>`:''}</div>
+          <div style="font-size:11px;color:var(--text3)">${esc(e.cargo||'—')} · ${esPorHoras(e)?`Por horas · <b>${fmt(e.tarifaHora||0)}</b> la hora (según asistencia aprobada)`:`Sueldo ${fmt(e.sueldo||0)}${e.decimo!==false?` · +${fmt(decimoMes(e))} décimo`:''} · <b>${fmt(brutoPeriodo(e,'Q1'))}</b> por quincena`}${pend>0?` · <span style="color:var(--red)">vales pend. ${fmt(pend)}</span>`:''}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           <button class="btn btn-g btn-sm" data-eedit="${e.id}">Editar</button>
@@ -7066,8 +7075,9 @@ function rNomina(){
         extra=`<div class="card" style="margin:6px 0 10px;background:var(--bg3)">
           <div style="font-weight:700;font-size:12px;margin-bottom:10px">Pagar a ${esc(e.nombre)} · ${perLabel(nomMes,nomQ)}</div>
           <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
-            <div style="display:flex;justify-content:space-between;padding:2px 0"><span>Mitad del sueldo <span style="color:var(--text3);font-size:10px">(${fmt(e.sueldo||0)} ÷ 2)</span></span><span>${fmt(mitadSueldo(e,nomQ))}</span></div>
-            ${e.decimo!==false?`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Mitad del décimo tercero <span style="color:var(--text3);font-size:10px">(${fmt(e.sueldo||0)} ÷ 12 ÷ 2)</span></span><span>${fmt(mitadDecimo(e,nomQ))}</span></div>`:''}
+            ${esPorHoras(e)?(()=>{const h=horasAprob(e,nomQ);return `<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Horas aprobadas <span style="color:var(--text3);font-size:10px">(${h?(Math.round(h.min.total/60*100)/100)+' h · '+fmt(h.tarifa)+'/h con recargos':'—'})</span></span><span>${fmt(mitadSueldo(e,nomQ))}</span></div>
+            ${e.decimo!==false?`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Décimo tercero <span style="color:var(--text3);font-size:10px">(monto ÷ 12)</span></span><span>${fmt(mitadDecimo(e,nomQ))}</span></div>`:''}`;})():`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Mitad del sueldo <span style="color:var(--text3);font-size:10px">(${fmt(e.sueldo||0)} ÷ 2)</span></span><span>${fmt(mitadSueldo(e,nomQ))}</span></div>
+            ${e.decimo!==false?`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Mitad del décimo tercero <span style="color:var(--text3);font-size:10px">(${fmt(e.sueldo||0)} ÷ 12 ÷ 2)</span></span><span>${fmt(mitadDecimo(e,nomQ))}</span></div>`:''}`}
             <div style="display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid var(--border);font-weight:700"><span>Bruto del periodo</span><span>${fmt(bruto)}</span></div>
             ${rep.total>0?`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>− Vales / anticipos</span><span style="color:var(--red)">−${fmt(rep.total)}</span></div>`:''}
             ${quedaDespues>0.005?`<div style="font-size:10px;color:var(--red);padding:3px 0">Quedan ${fmt(quedaDespues)} en vales para el siguiente pago (no se descuenta más de lo que alcanza).</div>`:''}
@@ -7087,9 +7097,9 @@ function rNomina(){
       return `<div class="mrow" style="margin-bottom:5px">
         <div style="min-width:0;flex:1">
           <div style="font-weight:700;font-size:13px">${esc(e.nombre)}</div>
-          <div style="font-size:11px;color:var(--text3)">${fmt(mitadSueldo(e,nomQ))} sueldo${e.decimo!==false?` + ${fmt(mitadDecimo(e,nomQ))} décimo`:''}${rep.total>0?` · −${fmt(rep.total)} vales`:''} · Neto <b style="color:var(--text)">${fmt(neto)}</b></div>
+          <div style="font-size:11px;color:var(--text3)">${esPorHoras(e)&&!horasAprob(e,nomQ)?'<span style="color:var(--amb)">Por horas: falta aprobar las horas de este periodo en Asistencia</span>':`${fmt(mitadSueldo(e,nomQ))} ${esPorHoras(e)?'horas':'sueldo'}${e.decimo!==false?` + ${fmt(mitadDecimo(e,nomQ))} décimo`:''}${rep.total>0?` · −${fmt(rep.total)} vales`:''} · Neto <b style="color:var(--text)">${fmt(neto)}</b>`}</div>
         </div>
-        ${yaPago?`<span class="badge" style="background:var(--gbg);color:var(--grn);font-size:10px;flex-shrink:0">✓ Pagado</span>`:`<button class="btn btn-acc btn-sm" data-ppay="${e.id}" style="flex-shrink:0">Pagar</button>`}
+        ${!yaPago&&esPorHoras(e)&&!horasAprob(e,nomQ)?`<button class="btn btn-g btn-sm" data-nomasist="1" style="flex-shrink:0">Aprobar horas →</button>`:yaPago?`<span class="badge" style="background:var(--gbg);color:var(--grn);font-size:10px;flex-shrink:0">✓ Pagado</span>`:`<button class="btn btn-acc btn-sm" data-ppay="${e.id}" style="flex-shrink:0">Pagar</button>`}
       </div>${extra}`;
     }).join('');
     const porPagar=activos.filter(e=>!pagoDePeriodo(e.id,nomMes,nomQ));
@@ -7155,17 +7165,22 @@ function attachNomina(){
   // Empleados
   mc.querySelector('#e-new')?.addEventListener('click',()=>{editEmp='new';render();});
   mc.querySelector('#e-cancel')?.addEventListener('click',()=>{editEmp=null;render();});
+  const _modal=()=>{const h=mc.querySelector('#e-modalidad')?.value==='hora';const s=mc.querySelector('#e-sueldo'),t=mc.querySelector('#e-tarifa');if(s)s.closest('.fg').style.display=h?'none':'';if(t)t.closest('.fg').style.display=h?'':'none';const d=mc.querySelector('#e-desglose');if(d)d.innerHTML=h?'Se paga por quincena según las horas <b>aprobadas en Asistencia</b> (tarifa × horas, con recargos). Décimo tercero = monto ÷ 12.':'Se paga en 2 partes al mes: quincena (1–15) y fin de mes (16–fin). Cada pago = mitad del sueldo + mitad del décimo.';};
+  mc.querySelector('#e-modalidad')?.addEventListener('change',_modal); _modal();
   mc.querySelector('#e-save')?.addEventListener('click',async()=>{
     const nombre=document.getElementById('e-nombre').value.trim();
     const cargo=document.getElementById('e-cargo').value.trim();
-    const sueldo=parseFloat(document.getElementById('e-sueldo').value)||0;
+    const modalidad=document.getElementById('e-modalidad')?.value==='hora'?'hora':'fijo';
+    const sueldo=modalidad==='hora'?0:(parseFloat(document.getElementById('e-sueldo').value)||0);
+    const tarifaHora=r2(parseFloat(document.getElementById('e-tarifa')?.value)||0);
     const ingreso=document.getElementById('e-ingreso').value||today();
     const activo=document.getElementById('e-activo').checked;
     if(!nombre){alert('El nombre es obligatorio');return;}
-    if(sueldo<=0){alert('Ingresa un sueldo válido');return;}
+    if(modalidad==='fijo'&&sueldo<=0){alert('Ingresa un sueldo válido');return;}
+    if(modalidad==='hora'&&tarifaHora<=0){alert('Ingresa la tarifa por hora');return;}
     const decimo=document.getElementById('e-decimo')?.checked!==false;
-    if(editEmp==='new'){NOM.empleados.push({id:'em'+Date.now(),nombre,cargo,sueldo,ingreso,activo,decimo});}
-    else{const e=empById(editEmp);if(e)Object.assign(e,{nombre,cargo,sueldo,ingreso,activo,decimo});}
+    if(editEmp==='new'){NOM.empleados.push({id:'em'+Date.now(),nombre,cargo,sueldo,modalidad,tarifaHora,ingreso,activo,decimo});}
+    else{const e=empById(editEmp);if(e)Object.assign(e,{nombre,cargo,sueldo,modalidad,tarifaHora,ingreso,activo,decimo});}
     await sNOM();editEmp=null;render();
   });
   mc.querySelectorAll('[data-eedit]').forEach(el=>el.addEventListener('click',()=>{editEmp=el.dataset.eedit;render();}));
@@ -7207,10 +7222,12 @@ function attachNomina(){
   mc.querySelector('#nom-mes')?.addEventListener('change',e=>{nomMes=e.target.value||nomMes;pagoEmpId=null;render();});
   mc.querySelectorAll('[data-nomq]').forEach(el=>el.addEventListener('click',()=>{nomQ=el.dataset.nomq;pagoEmpId=null;render();}));
   mc.querySelectorAll('[data-ppay]').forEach(el=>el.addEventListener('click',()=>{pagoEmpId=el.dataset.ppay;render();}));
+  mc.querySelectorAll('[data-nomasist]').forEach(el=>el.addEventListener('click',()=>irA('asistencia',()=>{asistTab='periodo';asistPerMes=nomMes;asistPerQ=nomQ;})));
   mc.querySelector('[data-pcancel]')?.addEventListener('click',()=>{pagoEmpId=null;render();});
   mc.querySelector('[data-pconfirm]')?.addEventListener('click',async e=>{
     const empId=e.target.dataset.pconfirm;const emp=empById(empId);if(!emp)return;
     if(pagoDePeriodo(empId,nomMes,nomQ)){alert('Ya existe un pago para este empleado en '+perLabel(nomMes,nomQ));return;}
+    if(esPorHoras(emp)&&!horasAprob(emp,nomQ)){alert('Primero aprueba las horas de '+emp.nombre+' para '+perLabel(nomMes,nomQ)+' en Asistencia → Horas del periodo.');return;}
     const bono=parseFloat(document.getElementById('p-bono').value)||0;
     const otros=parseFloat(document.getElementById('p-otros').value)||0;
     const metodo=document.getElementById('p-metodo').value;
@@ -7225,8 +7242,8 @@ function attachNomina(){
     const neto=r2(disponible-totalAnticipos);
     const queda=r2(antPendTotal(empId)-totalAnticipos);
     let msg='Pago a '+emp.nombre+'\n'+perLabel(nomMes,nomQ)+'\n\n';
-    msg+='Mitad del sueldo:  '+fmt(mitadSueldo(emp,nomQ))+'\n';
-    if(emp.decimo!==false) msg+='Mitad del décimo:  '+fmt(mitadDecimo(emp,nomQ))+'\n';
+    msg+=(esPorHoras(emp)?'Horas aprobadas:   ':'Mitad del sueldo:  ')+fmt(mitadSueldo(emp,nomQ))+'\n';
+    if(emp.decimo!==false) msg+=(esPorHoras(emp)?'Décimo (÷ 12):     ':'Mitad del décimo:  ')+fmt(mitadDecimo(emp,nomQ))+'\n';
     if(bono) msg+='Bono:              +'+fmt(bono)+'\n';
     if(otros) msg+='Otros descuentos:  -'+fmt(otros)+'\n';
     if(totalAnticipos) msg+='Vales descontados: -'+fmt(totalAnticipos)+'\n';
@@ -7255,7 +7272,8 @@ function attachNomina(){
     NOM.pagos.push({id:pagoId,empId,empNombre:emp.nombre,mes:nomMes,periodo:nomQ,periodoId:perId(nomMes,nomQ),
       sueldo:+emp.sueldo||0,mitadSueldo:mitadSueldo(emp,nomQ),decimo:mitadDecimo(emp,nomQ),brutoPeriodo:bruto,
       antIds:pend.map(a=>a.id),antAplic:rep.aplic,totalAnticipos,bono,otros,neto,
-      fecha:localISO(),metodo,nota,resp:turnoUser,respAuth:authUser(),gastoId});
+      fecha:localISO(),metodo,nota,resp:turnoUser,respAuth:authUser(),gastoId,
+      modalidad:esPorHoras(emp)?'hora':'fijo',horasId:esPorHoras(emp)?(horasAprob(emp,nomQ)||{}).id||null:null});
     await sNOM();pagoEmpId=null;render();
   });
 
@@ -7277,6 +7295,524 @@ function attachNomina(){
     if(p.gastoId){const g=S.find(s=>s.id===p.gastoId);if(g){g.anulada=true;g.anuladaPor=turnoUser;g.anuladaPorAuth=authUser();g.anuladaFecha=localISO();g.anuladaMotivo='Pago de nómina anulado';await saveVenta(g);}}
     NOM.pagos=NOM.pagos.filter(x=>x.id!==p.id);await sNOM();render();
   }));
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  MÓDULO DE ASISTENCIA — La Madriguera (23-oct-2026)
+//  Marcación desde el celular de cada trabajador con QR dinámico
+//  (asistencia/reloj.html) + verificación de ubicación. Las reglas de
+//  Firestore exigen el código vigente y la ubicación del local.
+//  Este módulo (solo administración) muestra el tablero del día,
+//  registra correcciones (sin borrar nada), calcula horas por periodo
+//  y aprueba las horas que la Nómina paga a quien cobra por hora.
+//
+//  Colecciones: lm_asist_marcas (inmutable), lm_asist_personal/{uid},
+//  lm_asist_cfg/local, lm_asist_qr/actual, lm_asist_solicitudes/{uid}.
+//  Horas aprobadas: NOM.horas (documento madu/nomina, solo admin).
+// ══════════════════════════════════════════════════════════════
+let AC=null;                       // asistencia/asist-core.js
+const ASIST={per:{},cfg:null,sol:[],hoy:[],dia:'',subs:false,err:''};
+let asistTab='hoy';
+let asistCorr=null;                // formulario de marca manual abierto
+let asistHorUid=null;              // horario en edición
+let asistNueva=false;              // formulario de cuenta nueva
+let asistGeo=null;                 // lectura de ubicación para configurar
+let asistPerMes=today().slice(0,7);
+let asistPerQ=(+today().slice(8,10)<=15)?'Q1':'Q2';
+const asistPerData={clave:'',marcas:null,cargando:false,err:''};
+let asistDetalle=null;             // uid con detalle por día abierto
+let _asistUnsubHoy=null,_asistTimer=null;
+
+const asistMs=v=>v&&typeof v.toMillis==='function'?v.toMillis():(typeof v==='number'?v:Date.now());
+const asistNorm=d=>{const x=d.data();return Object.assign({},x,{id:d.id,ts:asistMs(x.ts)});};
+const asistActivos=()=>Object.entries(ASIST.per).filter(([,p])=>p.activo===true).map(([uid,p])=>Object.assign({uid},p)).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+// No se repinta solo mientras hay un formulario en pantalla (se perdería lo escrito).
+const asistFormAbierto=()=>view==='asistencia'&&(asistTab==='config'||!!document.querySelector('#ac-ok,#ah-ok,#an-ok'));
+function asistRepintar(){
+  clearTimeout(_asistTimer);
+  _asistTimer=setTimeout(()=>{
+    if((view==='asistencia'&&!asistFormAbierto())||view==='inicio') render();
+    else { try{ actualizarNavBadges(); }catch(e){} }
+  },300);
+}
+async function asistIniciar(){
+  if(MI_ROL!=='admin'||ASIST.subs) return;
+  ASIST.subs=true;
+  try{ AC=await import('./asistencia/asist-core.js'); }
+  catch(e){ ASIST.err='No se pudo cargar asistencia/asist-core.js (¿se subió la carpeta asistencia?)'; console.error(e); return; }
+  onSnapshot(collection(db,'lm_asist_personal'),s=>{ASIST.per={};s.docs.forEach(d=>ASIST.per[d.id]=d.data());asistRepintar();},e=>{ASIST.err=msgError(e,'leer el personal de asistencia');asistRepintar();});
+  onSnapshot(doc(db,'lm_asist_cfg','local'),s=>{ASIST.cfg=s.exists()?s.data():null;asistRepintar();},()=>{});
+  onSnapshot(collection(db,'lm_asist_solicitudes'),s=>{ASIST.sol=s.docs.map(asistNorm);asistRepintar();},()=>{});
+  asistEscucharHoy();
+}
+function asistEscucharHoy(){
+  if(_asistUnsubHoy){ try{_asistUnsubHoy();}catch(e){} }
+  ASIST.dia=today();
+  const desde=Timestamp.fromMillis(AC.inicioDia(ASIST.dia));
+  _asistUnsubHoy=onSnapshot(query(collection(db,'lm_asist_marcas'),where('ts','>=',desde)),s=>{
+    ASIST.hoy=s.docs.map(asistNorm); asistRepintar();
+  },e=>{ASIST.err=msgError(e,'leer las marcas de asistencia');asistRepintar();});
+}
+setInterval(()=>{ if(AC&&ASIST.subs&&ASIST.dia&&ASIST.dia!==today()) asistEscucharHoy(); else if(AC&&view==='asistencia'&&asistTab==='hoy'&&!asistFormAbierto()) render(); },60000);
+
+// Alertas para Inicio y el contador del menú
+function asistAlertas(){
+  if(!AC||MI_ROL!=='admin') return [];
+  const out=[], cfg=ASIST.cfg||{};
+  for(const p of asistActivos()){
+    AC.alertasAhora(p,ASIST.hoy.filter(m=>m.uid===p.uid),cfg).forEach(a=>out.push(a));
+  }
+  if(ASIST.sol.length) out.push({sev:'baja',tipo:'solicitud',txt:ASIST.sol.length+' solicitud(es) para habilitar asistencia',desc:ASIST.sol.map(s=>s.nombre).join(', ')});
+  if(asistActivos().length&&!(ASIST.cfg&&typeof ASIST.cfg.lat==='number')) out.push({sev:'media',tipo:'sin_ubicacion',txt:'Falta fijar la ubicación del local para la asistencia',desc:'Sin ubicación nadie puede marcar. Hágalo desde el local: Asistencia → Configuración.'});
+  return out;
+}
+
+// ── Periodo (mismas quincenas que la Nómina) ─────────────────
+function asistRango(mes,q){
+  const [y,m]=mes.split('-').map(Number), ult=new Date(y,m,0).getDate();
+  return q==='Q1'?{desde:mes+'-01',hasta:mes+'-15'}:{desde:mes+'-16',hasta:mes+'-'+String(ult).padStart(2,'0')};
+}
+async function asistCargarPeriodo(forzar){
+  const clave=asistPerMes+'|'+asistPerQ;
+  if(!AC||(!forzar&&asistPerData.clave===clave&&(asistPerData.marcas||asistPerData.cargando))) return;
+  const {desde,hasta}=asistRango(asistPerMes,asistPerQ);
+  asistPerData.clave=clave; asistPerData.cargando=true; asistPerData.err=''; asistPerData.marcas=null;
+  try{
+    const qs=await getDocs(query(collection(db,'lm_asist_marcas'),
+      where('ts','>=',Timestamp.fromMillis(AC.inicioDia(desde))),
+      where('ts','<',Timestamp.fromMillis(AC.inicioDia(AC.diaSiguiente(hasta))))));
+    if(asistPerData.clave!==clave) return;
+    asistPerData.marcas=qs.docs.map(asistNorm);
+  }catch(e){ asistPerData.err=msgError(e,'leer las marcas del periodo'); }
+  finally{ if(asistPerData.clave===clave){ asistPerData.cargando=false; if(view==='asistencia'&&asistTab==='periodo') render(); } }
+}
+const horasDe=(empId,periodoId)=>(NOM.horas||[]).find(h=>h.empId===empId&&h.periodoId===periodoId);
+const asistEmpDe=p=>p&&p.empId?empById(p.empId):null;
+const asistTarifa=e=>!e?0:(e.modalidad==='hora'?(+e.tarifaHora||0):r2((+e.sueldo||0)/240));
+function asistResumen(p,marcas,desde,hasta){
+  const ms=marcas.filter(m=>m.uid===p.uid), cfg=ASIST.cfg||{};
+  const r=AC.recorrer(ms), dias=AC.clasificar(r.tramos,p.horario||{},cfg), tot=AC.sumar(dias);
+  const hastaPunt=hasta<today()?hasta:today();
+  const punt=desde<=hastaPunt?AC.puntualidad(ms,p.horario||{},desde,hastaPunt,cfg):[];
+  const emp=asistEmpDe(p), tarifa=asistTarifa(emp);
+  const monto=emp&&emp.modalidad==='hora'?AC.montoDe(tot,tarifa):0;
+  // Sueldo fijo: valor sugerido de suplementarias y extraordinarias (hora = sueldo ÷ 240)
+  const extraFijo=emp&&emp.modalidad!=='hora'?r2((tarifa/60)*(tot.sup50*1.5+tot.sup100*2+tot.ext*2)):0;
+  return {ms,r,dias,tot,punt,emp,tarifa,monto,extraFijo,sinSalida:r.anomalias.filter(a=>a.sinSalida)};
+}
+
+// ── Vista ─────────────────────────────────────────────────────
+function rAsist(){
+  if(MI_ROL!=='admin') return '<div class="card">Solo administración puede ver la asistencia.</div>';
+  if(!AC) return `<div class="card">${ASIST.err?esc(ASIST.err):'Cargando asistencia…'}</div>`;
+  const tabs=[['hoy','Hoy'],['periodo','Horas del periodo'],['personal','Personal'+(ASIST.sol.length?' ('+ASIST.sol.length+')':'')],['config','Configuración']];
+  let body='';
+  if(asistTab==='hoy') body=rAsistHoy();
+  else if(asistTab==='periodo') body=rAsistPeriodo();
+  else if(asistTab==='personal') body=rAsistPersonal();
+  else body=rAsistConfig();
+  return `<div>
+    <div class="rb" style="margin-bottom:6px"><div class="stitle" style="margin:0">🕒 Asistencia</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-g btn-sm" id="as-reloj" title="Abre la pantalla con el código QR que escanean los trabajadores">🖥 Pantalla del QR</button>
+      <button class="btn btn-acc btn-sm" id="as-nuevamarca">+ Registrar marca</button></div></div>
+    ${ASIST.err?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px;margin-bottom:10px">${esc(ASIST.err)}</div>`:''}
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto">
+      ${tabs.map(([t,l])=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${asistTab===t?'700':'400'};color:${asistTab===t?'var(--acc)':'var(--text2)'};border-bottom:${asistTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-astab="${t}">${l}</button>`).join('')}
+    </div>
+    ${asistCorr?rAsistCorr():''}
+    ${body}
+  </div>`;
+}
+const AS_EST={fuera:['Fuera','var(--bg3)','var(--text2)'],dentro:['Trabajando','var(--gbg)','var(--grn)'],pausa:['En pausa','var(--abg)','var(--amb)'],permiso:['Con permiso','var(--bbg)','var(--blu)']};
+function asistChip(est){const e=AS_EST[est]||AS_EST.fuera;return `<span class="badge" style="background:${e[1]};color:${e[2]};font-size:10px">${e[0]}</span>`;}
+function asistMarcaFila(m,anulable){
+  return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--bg3);font-size:12px">
+    <span><b style="font-variant-numeric:tabular-nums">${AC.horaDe(m.ts)}</b> · ${esc(AC.TIPO_TXT[m.tipo]||m.tipo)}${m.tipo==='permiso'?` · «${esc(m.motivo||'')}» · vuelve ${m.regreso?AC.horaDe(m.regreso):'?'}`:''}
+      ${m.origen==='admin'?`<span style="color:var(--amb);font-size:10px"> · registrada por administración: ${esc(m.motivo||'')}</span>`:`<span style="color:var(--text3);font-size:10px"> · ${m.dist!=null?m.dist+' m':''}${m.prec!=null?' ±'+Math.round(m.prec)+' m':''}</span>`}</span>
+    ${anulable?`<button class="btn btn-g btn-sm" style="font-size:10px;padding:2px 8px" data-asanular="${esc(m.id)}">Anular</button>`:''}
+  </div>`;
+}
+function rAsistHoy(){
+  const act=asistActivos();
+  if(!act.length) return `<div class="card" style="text-align:center;color:var(--text3);padding:30px">Aún no hay personal habilitado. Vaya a <b>Personal</b> para crear las cuentas o aprobar solicitudes.</div>`;
+  const cfgOk=ASIST.cfg&&typeof ASIST.cfg.lat==='number';
+  const anuladas=new Set(ASIST.hoy.filter(m=>m.tipo==='anula').map(m=>m.anula));
+  const comp=AC.dispositivosCompartidos(ASIST.hoy);
+  const nombreDe=uid=>(ASIST.per[uid]||{}).nombre||uid;
+  return `${!cfgOk?`<div class="card" style="background:var(--abg);color:var(--amb);font-size:12px;margin-bottom:10px">⚠ Falta fijar la ubicación del local (pestaña Configuración). Mientras tanto nadie puede marcar.</div>`:''}
+    ${comp.length?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px;margin-bottom:10px">⚠ Un mismo celular se usó para marcar por varias personas hoy: ${comp.map(c=>c.uids.map(nombreDe).map(esc).join(' y ')).join('; ')}. Verifique que cada quien marque desde su propio teléfono.</div>`:''}
+    ${act.map(p=>{
+      const ms=ASIST.hoy.filter(m=>m.uid===p.uid);
+      const r=AC.recorrer(ms), al=AC.alertasAhora(p,ms,ASIST.cfg||{});
+      const min=r.tramos.concat(r.enCurso?[r.enCurso]:[]).reduce((s,t)=>s+(t.fin-t.ini)/60000,0);
+      const h=p.horario&&p.horario[String(new Date().getDay())];
+      const visibles=ms.filter(m=>m.tipo!=='anula').sort((a,b)=>a.ts-b.ts);
+      return `<div class="card" style="margin-bottom:10px">
+        <div class="rb" style="margin-bottom:6px"><div><b style="font-size:14px">${esc(p.nombre||'—')}</b> ${asistChip(r.estado)}
+          <div style="font-size:11px;color:var(--text3)">${h?'Horario hoy '+h.ini+'–'+h.fin:'Hoy no tiene horario'} · Trabajado hoy <b>${AC.fmtMin(min)}</b>${r.enCurso?' (en curso)':''}</div></div>
+          <button class="btn btn-g btn-sm" data-asmarcar="${esc(p.uid)}">+ Marca</button></div>
+        ${al.map(a=>`<div style="font-size:12px;padding:7px 9px;border-radius:var(--rs);margin-bottom:6px;background:${a.sev==='alta'?'var(--rbg)':a.sev==='media'?'var(--abg)':'var(--bg3)'};color:${a.sev==='alta'?'var(--red)':a.sev==='media'?'var(--amb)':'var(--text2)'}"><b>${esc(a.txt)}</b><br>${esc(a.desc)}</div>`).join('')}
+        ${visibles.length?visibles.map(m=>anuladas.has(m.id)?`<div style="font-size:12px;color:var(--text3);text-decoration:line-through;padding:4px 0">${AC.horaDe(m.ts)} · ${esc(AC.TIPO_TXT[m.tipo])} (anulada)</div>`:asistMarcaFila(m,true)).join(''):'<div style="font-size:12px;color:var(--text3)">Sin marcas hoy.</div>'}
+      </div>`;}).join('')}
+    <div style="font-size:11px;color:var(--text3)">Las marcas no se pueden editar ni borrar. Para corregir: «Anular» (con motivo) y registrar la marca correcta. Todo queda firmado con su cuenta.</div>`;
+}
+function rAsistCorr(){
+  const c=asistCorr, act=asistActivos();
+  return `<div class="card" style="margin-bottom:14px;border:2px solid var(--acc)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Registrar marca manual</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Úsela para un olvido de marca o un error. Queda registrada como hecha por administración, con su motivo, y se ve en el celular del trabajador.</div>
+    <div class="fgrid">
+      <div class="fg"><label>Trabajador</label><select id="ac-uid">${act.map(p=>`<option value="${esc(p.uid)}" ${p.uid===c.uid?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></div>
+      <div class="fg"><label>Tipo</label><select id="ac-tipo">${AC.TIPOS.map(t=>`<option value="${t}" ${t===c.tipo?'selected':''}>${AC.TIPO_TXT[t]}</option>`).join('')}</select></div>
+      <div class="fg"><label>Fecha</label><input id="ac-dia" type="date" value="${c.dia}" max="${today()}"></div>
+      <div class="fg"><label>Hora</label><input id="ac-hora" type="time" value="${c.hora}"></div>
+      <div class="fg" id="ac-reg-w" style="${c.tipo==='permiso'?'':'display:none'}"><label>Regreso previsto</label><input id="ac-reg" type="time" value="${c.reg||''}"></div>
+      <div class="fg" style="grid-column:1/-1"><label>Motivo (obligatorio)</label><input id="ac-motivo" maxlength="200" placeholder="Ej.: olvidó marcar la salida; confirmado con la cámara / con la caja" value="${esc(c.motivo||'')}"></div>
+    </div>
+    <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="ac-cancel">Cancelar</button><button class="btn btn-acc" id="ac-ok">Registrar marca</button></div>
+  </div>`;
+}
+function rAsistPeriodo(){
+  asistCargarPeriodo();
+  const {desde,hasta}=asistRango(asistPerMes,asistPerQ), perIdA=perId(asistPerMes,asistPerQ);
+  const cab=`<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+      <div class="fg" style="margin:0"><label>Mes</label><input type="month" id="ap-mes" value="${asistPerMes}"></div>
+      <div style="display:flex;gap:4px">${PERIODOS.map(([q,l])=>`<button class="btn ${asistPerQ===q?'btn-acc':'btn-g'} btn-sm" data-apq="${q}">${l}</button>`).join('')}</div>
+      <button class="btn btn-g btn-sm" id="ap-recargar">↻ Actualizar</button>
+      <button class="btn btn-g btn-sm" id="ap-csv">↓ CSV</button>
+      <button class="btn btn-g btn-sm" id="ap-imp">🖨 Imprimir para firmas</button>
+    </div><div style="font-size:11px;color:var(--text3);margin-top:6px">${perLabel(asistPerMes,asistPerQ)} · del ${desde} al ${hasta}. Mismos periodos que la Nómina.</div></div>`;
+  if(asistPerData.err) return cab+`<div class="card" style="color:var(--red)">${esc(asistPerData.err)}</div>`;
+  if(!asistPerData.marcas) return cab+'<div class="card">Cargando marcas del periodo…</div>';
+  const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid));
+  if(!pers.length) return cab+'<div class="card" style="color:var(--text3)">No hay personal habilitado.</div>';
+  const comp=AC.dispositivosCompartidos(asistPerData.marcas);
+  return cab+(comp.length?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px;margin-bottom:10px">⚠ En este periodo hubo celulares usados por más de una persona: ${comp.map(c=>c.uids.map(u=>esc((ASIST.per[u]||{}).nombre||u)).join(' y ')).join('; ')}.</div>`:'')+pers.map(p=>{
+    const R=asistResumen(p,asistPerData.marcas,desde,hasta), t=R.tot, e=R.emp;
+    const apr=e?horasDe(e.id,perIdA):null, pagado=e?pagoDePeriodo(e.id,asistPerMes,asistPerQ):null;
+    const fila=(l,v,x)=>`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>${l}</span><span>${v}${x?` <span style="color:var(--text3);font-size:10px">${x}</span>`:''}</span></div>`;
+    const atrasos=R.punt.filter(x=>x.tipo==='atraso'), faltas=R.punt.filter(x=>x.tipo==='falta');
+    let pago='';
+    if(!e) pago=`<div style="font-size:11px;color:var(--amb)">Sin ficha de Nómina vinculada (pestaña Personal).</div>`;
+    else if(e.modalidad==='hora'){
+      pago=`<div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);padding-top:6px;margin-top:4px"><span>A pagar por horas (${fmt(R.tarifa)}/h)</span><span>${fmt(R.monto)}</span></div>
+      ${apr?`<div style="font-size:11px;color:var(--grn);margin-top:4px">✓ Aprobado ${fmt(apr.monto)} el ${new Date(apr.fecha).toLocaleString('es-EC')} por ${esc(apr.resp||'')}${Math.abs(apr.monto-R.monto)>0.005?` <b style="color:var(--amb)">· las marcas cambiaron después: hoy da ${fmt(R.monto)}</b>`:''}</div>`:''}
+      ${pagado?`<div style="font-size:11px;color:var(--text3)">Periodo ya pagado en Nómina.</div>`:`<button class="btn btn-acc btn-sm" style="margin-top:8px" data-apaprobar="${esc(p.uid)}">${apr?'Volver a aprobar':'Aprobar horas para la Nómina'}</button>`}`;
+    } else {
+      pago=`<div style="font-size:11px;color:var(--text3);border-top:1px solid var(--border);padding-top:6px;margin-top:4px">Sueldo fijo. ${R.extraFijo>0?`Valor sugerido de horas suplementarias/extraordinarias: <b style="color:var(--text)">${fmt(R.extraFijo)}</b> (hora = sueldo ÷ 240). Si corresponde, agréguelo como «Bono / extra» al pagar.`:'Sin horas suplementarias ni extraordinarias.'}</div>`;
+    }
+    const det=asistDetalle===p.uid?`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">${Object.values(R.dias).map(d=>{
+      const md=R.r.marcas.filter(m=>AC.diaDe(m.ts)===d.dia);
+      return `<div style="font-size:11px;padding:6px 0 2px"><b>${d.dia}</b>${d.extra?' <span class="badge" style="font-size:9px;background:var(--abg);color:var(--amb)">descanso/feriado</span>':''} · ${AC.fmtMin(d.total)}${d.sup50+d.sup100>0?' · supl. '+AC.fmtMin(d.sup50+d.sup100):''}${d.noc>0?' · noct. '+AC.fmtMin(d.noc):''}</div>${md.map(m=>asistMarcaFila(m,true)).join('')}`;}).join('')||'<div style="font-size:11px;color:var(--text3)">Sin tramos pagables.</div>'}
+      ${(()=>{const sinDia=R.r.marcas.filter(m=>!R.dias[AC.diaDe(m.ts)]);return sinDia.length?`<div style="font-size:11px;padding:6px 0 2px;color:var(--amb)"><b>Marcas sin tramo pagable</b></div>${sinDia.map(m=>asistMarcaFila(m,true)).join('')}`:'';})()}</div>`:'';
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="rb" style="margin-bottom:6px"><div><b style="font-size:14px">${esc(p.nombre||'—')}</b>${p.activo!==true?' <span class="badge" style="font-size:9px">inactivo</span>':''}
+        <div style="font-size:11px;color:var(--text3)">${e?esc(e.cargo||'')+' · '+(e.modalidad==='hora'?'Por horas':'Sueldo fijo'):'—'} · ${Object.keys(R.dias).length} día(s) con marcas</div></div>
+        <button class="btn btn-g btn-sm" data-apdet="${esc(p.uid)}">${asistDetalle===p.uid?'Ocultar días':'Ver días'}</button></div>
+      <div style="font-size:12px;color:var(--text2)">
+        ${fila('Horas trabajadas',AC.fmtMin(t.total))}
+        ${fila('Ordinarias',AC.fmtMin(t.ord),t.noc>0?'de ellas '+AC.fmtMin(t.noc)+' nocturnas (+25%)':'')}
+        ${t.sup50>0?fila('Suplementarias (+50%)',AC.fmtMin(t.sup50)):''}
+        ${t.sup100>0?fila('Suplementarias de madrugada (+100%)',AC.fmtMin(t.sup100)):''}
+        ${t.ext>0?fila('Extraordinarias: descanso o feriado (+100%)',AC.fmtMin(t.ext)):''}
+        ${atrasos.length?fila('<span style="color:var(--amb)">Atrasos</span>',atrasos.length,atrasos.reduce((s,x)=>s+x.min,0)+' min en total'):''}
+        ${faltas.length?fila('<span style="color:var(--red)">Faltas</span>',faltas.length,faltas.map(f=>f.dia.slice(8)).join(', ')):''}
+      </div>
+      ${R.r.anomalias.length?`<div style="font-size:11px;background:var(--abg);color:var(--amb);border-radius:var(--rs);padding:7px 9px;margin-top:6px">${R.r.anomalias.map(a=>'• '+esc(a.txt)).join('<br>')}</div>`:''}
+      ${pago}${det}
+    </div>`;}).join('')+`<div style="font-size:11px;color:var(--text3)">Cálculo: hasta 8 h diarias ordinarias; lo que pasa de 8 h, suplementario al 50 % (100 % entre 00:00 y 06:00); días de descanso o feriados, 100 %; recargo nocturno de 25 % entre 19:00 y 06:00. Pausas y permisos no se pagan. Un turno sin salida no se paga hasta registrarla. Verifique los criterios con su contador.</div>`;
+}
+const DIAS_SEM=[['1','Lunes'],['2','Martes'],['3','Miércoles'],['4','Jueves'],['5','Viernes'],['6','Sábado'],['0','Domingo']];
+function rAsistPersonal(){
+  const emps=NOM.empleados.filter(e=>e.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const optsEmp=sel=>`<option value="">— Elegir empleado de Nómina —</option>`+emps.map(e=>`<option value="${e.id}" ${e.id===sel?'selected':''}>${esc(e.nombre)}</option>`).join('');
+  const sol=ASIST.sol.length?`<div class="card" style="margin-bottom:12px;border:2px solid var(--abrd)"><div style="font-weight:700;font-size:13px;margin-bottom:8px">Solicitudes de habilitación</div>
+    ${ASIST.sol.map(s=>`<div class="mrow" style="margin-bottom:6px;flex-wrap:wrap;gap:6px"><div style="flex:1;min-width:160px"><b style="font-size:13px">${esc(s.nombre)}</b><div style="font-size:11px;color:var(--text3)">${esc(s.email)} · ${new Date(s.ts).toLocaleString('es-EC')}</div></div>
+      <select data-solemp="${esc(s.id)}" style="max-width:220px">${optsEmp('')}</select>
+      <button class="btn btn-acc btn-sm" data-solok="${esc(s.id)}">Habilitar</button><button class="btn btn-r btn-sm" data-solno="${esc(s.id)}">✕</button></div>`).join('')}
+    <div style="font-size:11px;color:var(--text3)">Solo habilite a quien reconozca por el correo. La cuenta queda vinculada a la ficha de Nómina elegida.</div></div>`:'';
+  const nueva=asistNueva?`<div class="card" style="margin-bottom:12px;border:2px solid var(--acc)"><div style="font-weight:700;font-size:13px;margin-bottom:8px">Crear cuenta de asistencia</div>
+    <div class="fgrid"><div class="fg"><label>Empleado</label><select id="an-emp">${optsEmp('')}</select></div>
+    <div class="fg"><label>Correo (será su usuario)</label><input id="an-mail" type="email" placeholder="nombre@gmail.com"></div>
+    <div class="fg"><label>Contraseña inicial (mín. 6)</label><input id="an-pass" type="text" autocomplete="off"></div></div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">La cuenta solo sirve para marcar asistencia (rol «personal»): no abre el POS. Entréguele la contraseña en persona. Para quien ya tiene cuenta del POS (por ejemplo, caja), no cree otra: que abra la página de asistencia y pida la habilitación.</div>
+    <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="an-cancel">Cancelar</button><button class="btn btn-acc" id="an-ok">Crear cuenta</button></div></div>`:'';
+  const lista=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).sort((a,b)=>(b.activo===true)-(a.activo===true)||(a.nombre||'').localeCompare(b.nombre||''));
+  const urlAsist=new URL('asistencia/',location.href).toString();
+  return sol+`<div class="rb" style="margin-bottom:10px"><span class="stitle" style="margin:0">Personal habilitado (${lista.filter(p=>p.activo===true).length})</span><button class="btn btn-acc btn-sm" id="as-nueva">+ Crear cuenta</button></div>`+nueva+
+    (lista.length?lista.map(p=>{
+      const e=asistEmpDe(p), hs=p.horario||{};
+      const resumen=DIAS_SEM.filter(([k])=>hs[k]).map(([k,l])=>l.slice(0,3)+' '+hs[k].ini+'–'+hs[k].fin).join(' · ')||'Sin horario (no se calculan atrasos ni faltas)';
+      const ed=asistHorUid===p.uid?`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+        <div class="fg"><label>Ficha de Nómina</label><select id="ah-emp">${optsEmp(p.empId||'')}</select></div>
+        ${DIAS_SEM.map(([k,l])=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:12px"><label style="display:flex;gap:6px;align-items:center;width:110px"><input type="checkbox" data-ahd="${k}" ${hs[k]?'checked':''}> ${l}</label>
+          <input type="time" data-ahi="${k}" value="${hs[k]?hs[k].ini:'10:00'}" style="width:110px"> a <input type="time" data-ahf="${k}" value="${hs[k]?hs[k].fin:'18:00'}" style="width:110px"></div>`).join('')}
+        <div style="font-size:11px;color:var(--text3);margin:4px 0 8px">Los días sin marcar son de descanso: si trabaja en ellos, esas horas se calculan como extraordinarias (100 %), salvo que lo desactive en Configuración.</div>
+        <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="ah-cancel">Cancelar</button><button class="btn btn-acc btn-sm" id="ah-ok">Guardar</button></div></div>`:'';
+      return `<div class="card" style="margin-bottom:8px;${p.activo!==true?'opacity:.6':''}">
+        <div class="rb"><div style="min-width:0"><b style="font-size:13px">${esc(p.nombre||'—')}</b> ${p.activo===true?'':'<span class="badge" style="font-size:9px">inactivo</span>'}
+          <div style="font-size:11px;color:var(--text3)">${esc(p.email||'')} · Nómina: ${e?esc(e.nombre)+' ('+(e.modalidad==='hora'?'por horas '+fmt(e.tarifaHora||0)+'/h':'sueldo fijo')+')':'<span style="color:var(--amb)">sin vincular</span>'}</div>
+          <div style="font-size:11px;color:var(--text2)">${esc(resumen)}</div></div>
+          <div style="display:flex;gap:6px;flex-shrink:0"><button class="btn btn-g btn-sm" data-ahedit="${esc(p.uid)}">Editar</button>
+          <button class="btn ${p.activo===true?'btn-r':'btn-g'} btn-sm" data-ahact="${esc(p.uid)}">${p.activo===true?'Desactivar':'Activar'}</button></div></div>${ed}</div>`;}).join('')
+    :'<div class="card" style="color:var(--text3);text-align:center;padding:24px">Nadie habilitado todavía.</div>')+
+    `<div class="card" style="margin-top:12px;font-size:12px;color:var(--text2)"><b>Página para los trabajadores:</b> ${esc(urlAsist)}<br>No necesitan guardarla: al escanear el QR de la pantalla se abre sola. La primera vez ingresan con su correo y contraseña.</div>`;
+}
+function rAsistConfig(){
+  const c=Object.assign({},AC.CFG_DEF,ASIST.cfg||{});
+  const g=asistGeo;
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Ubicación del local</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Hágalo <b>estando dentro de La Madriguera</b>, de preferencia con el celular, cerca de la caja. Solo se podrá marcar dentro del radio indicado. El servidor lo verifica: no depende del celular del trabajador.</div>
+    ${c.lat!=null&&typeof c.lat==='number'?`<div style="font-size:12px;margin-bottom:8px">Actual: <b>${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}</b> · radio ${c.radio} m · <a href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">ver en el mapa</a></div>`:'<div style="font-size:12px;color:var(--red);margin-bottom:8px">Sin configurar.</div>'}
+    ${g?`<div style="font-size:12px;background:var(--bg3);border-radius:var(--rs);padding:8px 10px;margin-bottom:8px">${g.err?`<span style="color:var(--red)">${esc(g.err)}</span>`:g.lat!=null?`Lectura: <b>${g.lat.toFixed(6)}, ${g.lng.toFixed(6)}</b> · precisión ±${Math.round(g.prec)} m ${g.leyendo?'(mejorando…)':''} ${g.prec>50?'<br><span style="color:var(--amb)">Precisión baja: acérquese a una ventana o active el Wi-Fi y espere unos segundos.</span>':''}`:'Leyendo ubicación…'}</div>`:''}
+    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px"><button class="btn btn-g btn-sm" id="ag-leer">📍 Leer mi ubicación aquí</button>${g&&g.lat!=null?'<button class="btn btn-acc btn-sm" id="ag-usar">Usar esta lectura</button>':''}</div>
+    <div class="fgrid">
+      <div class="fg"><label>Latitud</label><input id="ag-lat" type="number" step="0.000001" value="${g&&g.usar?g.lat.toFixed(6):(typeof c.lat==='number'?c.lat:'')}"></div>
+      <div class="fg"><label>Longitud</label><input id="ag-lng" type="number" step="0.000001" value="${g&&g.usar?g.lng.toFixed(6):(typeof c.lng==='number'?c.lng:'')}"></div>
+      <div class="fg"><label>Radio permitido (m)</label><input id="ag-radio" type="number" min="30" max="500" value="${c.radio}"></div>
+      <div class="fg"><label>Precisión mínima aceptada (m)</label><input id="ag-prec" type="number" min="20" max="500" value="${c.precMax}"></div>
+    </div></div>
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:8px">Tolerancias y cálculo</div>
+    <div class="fgrid">
+      <div class="fg"><label>Tolerancia de atraso (min)</label><input id="ag-tole" type="number" min="0" max="60" value="${c.tolEntrada}"></div>
+      <div class="fg"><label>Aviso si no regresa del permiso tras (min)</label><input id="ag-tolr" type="number" min="0" max="120" value="${c.tolRetorno}"></div>
+      <div class="fg"><label>Aviso de pausa larga (min)</label><input id="ag-pmax" type="number" min="10" max="240" value="${c.pausaMax}"></div>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:6px 0"><input type="checkbox" id="ag-noc" ${c.nocturno!==false?'checked':''}> Recargo nocturno de 25 % (19:00 a 06:00)</label>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:6px 0"><input type="checkbox" id="ag-desc" ${c.descansoExtra!==false?'checked':''}> Horas en día de descanso del trabajador = extraordinarias (100 %)</label>
+    <div class="fg" style="margin-top:8px"><label>Feriados (uno por línea, AAAA-MM-DD)</label><textarea id="ag-fer" rows="4" style="width:100%;font-family:inherit">${esc((c.feriados||[]).join('\n'))}</textarea></div>
+  </div>
+  <button class="btn btn-acc" id="ag-guardar">Guardar configuración</button>
+  <div class="card" style="margin-top:14px;font-size:12px;color:var(--text2)">
+    <b>Pantalla del QR:</b> ábrala en una tablet o celular fijo en el local (no en una pestaña oculta: el código solo cambia mientras la pantalla está visible). Conviene una cuenta propia con rol «reloj» para esa pantalla; también funciona con la de administración.<br>
+    <a href="asistencia/reloj.html" target="_blank" rel="noopener">${esc(new URL('asistencia/reloj.html',location.href).toString())}</a></div>`;
+}
+
+// ── Acciones ──────────────────────────────────────────────────
+function attachAsist(){
+  const mc=document.getElementById('mc'); if(!mc||!AC) return;
+  const q=s=>mc.querySelector(s), qa=s=>mc.querySelectorAll(s);
+  qa('[data-astab]').forEach(el=>el.addEventListener('click',()=>{asistTab=el.dataset.astab;asistHorUid=null;asistNueva=false;render();}));
+  q('#as-reloj')?.addEventListener('click',()=>window.open('asistencia/reloj.html','_blank'));
+  const abrirCorr=uid=>{const d=new Date();asistCorr={uid:uid||(asistActivos()[0]||{}).uid,tipo:'salida',dia:today(),hora:String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'),motivo:''};render();};
+  q('#as-nuevamarca')?.addEventListener('click',()=>{ if(!asistActivos().length){alert('Primero habilite al personal (pestaña Personal).');return;} abrirCorr(); });
+  qa('[data-asmarcar]').forEach(el=>el.addEventListener('click',()=>abrirCorr(el.dataset.asmarcar)));
+  // Formulario de marca manual
+  if(asistCorr){
+    const sync=()=>{asistCorr={uid:q('#ac-uid').value,tipo:q('#ac-tipo').value,dia:q('#ac-dia').value,hora:q('#ac-hora').value,reg:q('#ac-reg').value,motivo:q('#ac-motivo').value};};
+    q('#ac-tipo')?.addEventListener('change',()=>{sync();q('#ac-reg-w').style.display=asistCorr.tipo==='permiso'?'':'none';});
+    q('#ac-cancel')?.addEventListener('click',()=>{asistCorr=null;render();});
+    q('#ac-ok')?.addEventListener('click',async e=>{
+      sync(); const c=asistCorr, p=ASIST.per[c.uid];
+      if(!p){alert('Elija el trabajador.');return;}
+      if(!c.dia||!c.hora){alert('Indique fecha y hora.');return;}
+      if((c.motivo||'').trim().length<5){alert('El motivo es obligatorio (mínimo 5 caracteres).');return;}
+      const ts=AC.msDeHora(c.dia,c.hora);
+      if(ts>Date.now()+60000){alert('No se puede registrar una marca en el futuro.');return;}
+      const reg={uid:c.uid,nombre:p.nombre||'',tipo:c.tipo,ts:Timestamp.fromMillis(ts),dia:c.dia,motivo:c.motivo.trim(),por:auth.currentUser.uid,creado:serverTimestamp(),origen:'admin'};
+      if(c.tipo==='permiso'){ if(!c.reg){alert('Indique la hora de regreso prevista.');return;} reg.regreso=AC.msDeHora(c.dia,c.reg); }
+      e.target.disabled=true;
+      try{
+        const ref=doc(collection(db,'lm_asist_marcas'));
+        await conLimite(setDoc(ref,reg));
+        bitacora('asistencia_marca_manual',{accion:'Registró '+AC.TIPO_TXT[c.tipo]+' de '+p.nombre+' · '+c.dia+' '+c.hora,trabajador:p.nombre,marcaId:ref.id,motivo:reg.motivo});
+        asistCorr=null; asistPerData.clave=''; render();
+      }catch(err){ e.target.disabled=false; avisoError(msgError(err,'registrar la marca')); }
+    });
+  }
+  qa('[data-asanular]').forEach(el=>el.addEventListener('click',async()=>{
+    const m=ASIST.hoy.find(x=>x.id===el.dataset.asanular)||(asistPerData.marcas||[]).find(x=>x.id===el.dataset.asanular); if(!m)return;
+    const p=ASIST.per[m.uid]||{};
+    const motivo=(prompt('Anular «'+AC.TIPO_TXT[m.tipo]+' '+AC.horaDe(m.ts)+'» de '+(p.nombre||'')+'.\nLa marca no se borra: queda tachada, con su motivo y su firma.\n\nMotivo:')||'').trim();
+    if(!motivo)return;
+    if(motivo.length<5){alert('El motivo debe tener al menos 5 caracteres.');return;}
+    try{
+      const ref=doc(collection(db,'lm_asist_marcas'));
+      // La anulación lleva la MISMA hora que la marca anulada: así cae en el mismo periodo.
+      await conLimite(setDoc(ref,{uid:m.uid,nombre:p.nombre||'',tipo:'anula',anula:m.id,ts:Timestamp.fromMillis(m.ts),dia:AC.diaDe(m.ts),motivo,por:auth.currentUser.uid,creado:serverTimestamp(),origen:'admin'}));
+      bitacora('asistencia_marca_anulada',{accion:'Anuló '+AC.TIPO_TXT[m.tipo]+' de '+(p.nombre||'')+' · '+AC.diaDe(m.ts)+' '+AC.horaDe(m.ts),trabajador:p.nombre||'',marcaId:m.id,motivo});
+      asistPerData.clave=''; render();
+    }catch(err){ avisoError(msgError(err,'anular la marca')); }
+  }));
+  // Periodo
+  q('#ap-mes')?.addEventListener('change',e=>{asistPerMes=e.target.value||asistPerMes;render();});
+  qa('[data-apq]').forEach(el=>el.addEventListener('click',()=>{asistPerQ=el.dataset.apq;render();}));
+  q('#ap-recargar')?.addEventListener('click',()=>{asistCargarPeriodo(true);render();});
+  qa('[data-apdet]').forEach(el=>el.addEventListener('click',()=>{asistDetalle=asistDetalle===el.dataset.apdet?null:el.dataset.apdet;render();}));
+  qa('[data-apaprobar]').forEach(el=>el.addEventListener('click',()=>asistAprobar(el.dataset.apaprobar)));
+  q('#ap-csv')?.addEventListener('click',asistCSV);
+  q('#ap-imp')?.addEventListener('click',asistImprimir);
+  // Personal
+  q('#as-nueva')?.addEventListener('click',()=>{asistNueva=true;render();});
+  q('#an-cancel')?.addEventListener('click',()=>{asistNueva=false;render();});
+  q('#an-ok')?.addEventListener('click',e=>asistCrearCuenta(e.target));
+  qa('[data-solok]').forEach(el=>el.addEventListener('click',()=>asistHabilitar(el.dataset.solok,mc.querySelector(`[data-solemp="${CSS.escape(el.dataset.solok)}"]`).value)));
+  qa('[data-solno]').forEach(el=>el.addEventListener('click',async()=>{
+    const s=ASIST.sol.find(x=>x.id===el.dataset.solno); if(!s||!confirm('¿Rechazar la solicitud de '+s.nombre+' ('+s.email+')?'))return;
+    try{ await conLimite(deleteDoc(doc(db,'lm_asist_solicitudes',s.id))); bitacora('asistencia_solicitud_rechazada',{accion:'Rechazó la solicitud de asistencia de '+s.email}); }catch(err){ avisoError(msgError(err,'rechazar la solicitud')); }
+  }));
+  qa('[data-ahedit]').forEach(el=>el.addEventListener('click',()=>{asistHorUid=el.dataset.ahedit;render();}));
+  q('#ah-cancel')?.addEventListener('click',()=>{asistHorUid=null;render();});
+  q('#ah-ok')?.addEventListener('click',async()=>{
+    const horario={};
+    for(const [k] of DIAS_SEM){ if(q(`[data-ahd="${k}"]`).checked){ const ini=q(`[data-ahi="${k}"]`).value, fin=q(`[data-ahf="${k}"]`).value; if(!ini||!fin||fin<=ini){alert('Revise el horario: la hora de salida debe ser posterior a la de entrada.');return;} horario[k]={ini,fin}; } }
+    const empId=q('#ah-emp').value, emp=empById(empId), uid=asistHorUid;
+    try{
+      await conLimite(setDoc(doc(db,'lm_asist_personal',uid),{horario,empId:empId||'',nombre:emp?emp.nombre:(ASIST.per[uid]||{}).nombre||''},{merge:true}));
+      bitacora('asistencia_personal_editado',{accion:'Editó horario/vínculo de asistencia de '+((emp&&emp.nombre)||'')});
+      asistHorUid=null; render();
+    }catch(err){ avisoError(msgError(err,'guardar el horario')); }
+  });
+  qa('[data-ahact]').forEach(el=>el.addEventListener('click',async()=>{
+    const uid=el.dataset.ahact, p=ASIST.per[uid]; if(!p)return;
+    const activo=p.activo!==true;
+    if(!activo&&!confirm('¿Desactivar a '+p.nombre+'? Ya no podrá marcar. Sus marcas se conservan.'))return;
+    try{ await conLimite(setDoc(doc(db,'lm_asist_personal',uid),{activo},{merge:true})); bitacora('asistencia_personal_'+(activo?'activado':'desactivado'),{accion:(activo?'Activó':'Desactivó')+' la asistencia de '+p.nombre}); }
+    catch(err){ avisoError(msgError(err,'cambiar el estado')); }
+  }));
+  // Configuración
+  q('#ag-leer')?.addEventListener('click',asistLeerUbicacion);
+  q('#ag-usar')?.addEventListener('click',()=>{ if(asistGeo&&asistGeo.lat!=null){ q('#ag-lat').value=asistGeo.lat.toFixed(6); q('#ag-lng').value=asistGeo.lng.toFixed(6); } });
+  q('#ag-guardar')?.addEventListener('click',async()=>{
+    const lat=parseFloat(q('#ag-lat').value), lng=parseFloat(q('#ag-lng').value);
+    const radio=Math.round(+q('#ag-radio').value||80), precMax=Math.round(+q('#ag-prec').value||150);
+    if(!isFinite(lat)||!isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180){alert('Latitud o longitud inválida. Use «Leer mi ubicación aquí» estando en el local.');return;}
+    if(radio<30||radio>500){alert('El radio debe estar entre 30 y 500 m.');return;}
+    const fer=q('#ag-fer').value.split(/\s+/).map(s=>s.trim()).filter(Boolean);
+    if(fer.some(f=>!/^\d{4}-\d{2}-\d{2}$/.test(f))){alert('Los feriados deben ir como AAAA-MM-DD, uno por línea.');return;}
+    const cfg=Object.assign({lat:+lat.toFixed(7),lng:+lng.toFixed(7),radio,precMax:Math.max(20,precMax),
+      tolEntrada:Math.max(0,+q('#ag-tole').value||0),tolRetorno:Math.max(0,+q('#ag-tolr').value||0),pausaMax:Math.max(10,+q('#ag-pmax').value||60),
+      nocturno:q('#ag-noc').checked,descansoExtra:q('#ag-desc').checked,feriados:[...new Set(fer)].sort(),
+      por:auth.currentUser.uid,actualizado:serverTimestamp()},AC.cajaGeocerca(lat,radio));
+    const antes=ASIST.cfg||{};
+    try{
+      await conLimite(setDoc(doc(db,'lm_asist_cfg','local'),cfg));
+      bitacora('asistencia_config',{accion:'Configuró asistencia: radio '+radio+' m, ubicación '+cfg.lat+','+cfg.lng+(typeof antes.lat==='number'?' (antes '+antes.lat+','+antes.lng+', '+antes.radio+' m)':'')});
+      asistGeo=null; render(); alert('Configuración guardada.');
+    }catch(err){ avisoError(msgError(err,'guardar la configuración de asistencia')); }
+  });
+}
+function asistLeerUbicacion(){
+  if(!navigator.geolocation){alert('Este navegador no permite leer la ubicación.');return;}
+  asistGeo={leyendo:true}; render();
+  let mejor=null;
+  const w=navigator.geolocation.watchPosition(p=>{
+    const c=p.coords; if(!mejor||c.accuracy<mejor.prec) mejor={lat:c.latitude,lng:c.longitude,prec:c.accuracy};
+    asistGeo=Object.assign({leyendo:true},mejor); if(view==='asistencia'&&asistTab==='config') render();
+  },e=>{ asistGeo={err:e.code===1?'Permiso de ubicación denegado en este navegador.':'No se pudo leer la ubicación ('+e.message+').'}; navigator.geolocation.clearWatch(w); render(); },{enableHighAccuracy:true,maximumAge:0,timeout:20000});
+  setTimeout(()=>{ navigator.geolocation.clearWatch(w); if(asistGeo&&asistGeo.leyendo){ asistGeo.leyendo=false; if(view==='asistencia'&&asistTab==='config') render(); } },15000);
+}
+async function asistHabilitar(uid,empId){
+  const s=ASIST.sol.find(x=>x.id===uid); if(!s)return;
+  const emp=empById(empId);
+  if(!emp){alert('Elija la ficha de Nómina de esta persona.');return;}
+  if(Object.entries(ASIST.per).some(([u,p])=>u!==uid&&p.empId===empId&&p.activo===true)&&!confirm(emp.nombre+' ya tiene otra cuenta de asistencia activa. ¿Habilitar esta también?'))return;
+  if(!confirm('¿Habilitar a '+s.email+' como '+emp.nombre+'?'))return;
+  try{
+    await conLimite(setDoc(doc(db,'lm_asist_personal',uid),{empId,nombre:emp.nombre,email:s.email,activo:true,horario:(ASIST.per[uid]||{}).horario||{},creado:serverTimestamp(),por:auth.currentUser.uid},{merge:true}));
+    await conLimite(deleteDoc(doc(db,'lm_asist_solicitudes',uid)));
+    bitacora('asistencia_habilitada',{accion:'Habilitó la asistencia de '+s.email+' como '+emp.nombre});
+    asistHorUid=uid; asistTab='personal'; render();
+  }catch(err){ avisoError(msgError(err,'habilitar la cuenta')); }
+}
+async function asistCrearCuenta(btn){
+  const mc=document.getElementById('mc');
+  const empId=mc.querySelector('#an-emp').value, email=mc.querySelector('#an-mail').value.trim().toLowerCase(), pass=mc.querySelector('#an-pass').value;
+  const emp=empById(empId);
+  if(!emp){alert('Elija el empleado.');return;}
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){alert('Correo inválido.');return;}
+  if(pass.length<6){alert('La contraseña debe tener al menos 6 caracteres.');return;}
+  btn.disabled=true;
+  let app2=null;
+  try{
+    app2=initializeApp(firebaseConfig,'alta_'+Date.now());
+    const a2=getAuth(app2); await setPersistence(a2,inMemoryPersistence);   // no toca la sesión abierta
+    const u=(await createUserWithEmailAndPassword(a2,email,pass)).user;
+    // La sesión de ADMINISTRACIÓN (db) escribe la ficha y el rol: la cuenta nueva no puede hacerlo sola.
+    // Primero la ficha (es lo que habilita a marcar); el rol solo sirve para que, si abre el POS, vaya a asistencia.
+    await conLimite(setDoc(doc(db,'lm_asist_personal',u.uid),{empId,nombre:emp.nombre,email,activo:true,horario:{},creado:serverTimestamp(),por:auth.currentUser.uid}));
+    let avisoRol='';
+    try{ await conLimite(setDoc(doc(db,'roles',u.uid),{rol:'personal',nombre:emp.nombre})); }
+    catch(eR){ avisoRol='\n\nAviso: no se pudo asignar el rol «personal» ('+((eR&&eR.code)||'error')+'). Puede marcar igual; revise que la regla de «roles» acepte ese rol.'; }
+    bitacora('asistencia_cuenta_creada',{accion:'Creó la cuenta de asistencia '+email+' para '+emp.nombre});
+    asistNueva=false; asistHorUid=u.uid; render();
+    alert('Cuenta creada para '+emp.nombre+'.\n\nUsuario: '+email+'\nContraseña: '+pass+'\n\nEntréguesela en persona. Ahora defina su horario.'+avisoRol);
+  }catch(e){
+    const c=(e&&e.code)||'';
+    alert(c==='auth/email-already-in-use'?'Ese correo ya tiene cuenta. Pídale que abra la página de asistencia, ingrese y pulse «Solicitar habilitación».':c==='auth/weak-password'?'Contraseña muy débil.':'No se pudo crear la cuenta: '+(c||e.message));
+  }finally{
+    btn.disabled=false;
+    if(app2){ try{ await signOut(getAuth(app2)); }catch(e){} try{ await deleteApp(app2); }catch(e){} }
+  }
+}
+async function asistAprobar(uid){
+  const p=Object.assign({uid},ASIST.per[uid]||{}); const {desde,hasta}=asistRango(asistPerMes,asistPerQ);
+  const R=asistResumen(p,asistPerData.marcas||[],desde,hasta), e=R.emp;
+  if(!e||e.modalidad!=='hora'){alert('Solo se aprueban horas de empleados que cobran por hora.');return;}
+  if(!(R.tarifa>0)){alert('Falta la tarifa por hora de '+e.nombre+' (Nómina → Empleados).');return;}
+  if(pagoDePeriodo(e.id,asistPerMes,asistPerQ)){alert('Este periodo ya se pagó.');return;}
+  if(hasta>=today()&&!confirm('El periodo aún no termina (hasta '+hasta+'). ¿Aprobar las horas registradas hasta ahora?'))return;
+  if(R.sinSalida.length&&!confirm('Hay '+R.sinSalida.length+' turno(s) sin marca de salida que NO se pagarán:\n'+R.sinSalida.map(a=>'• '+a.txt).join('\n')+'\n\nSi la persona sí trabajó, registre la salida antes de aprobar. ¿Aprobar igual?'))return;
+  const t=R.tot;
+  let msg='Aprobar horas de '+e.nombre+'\n'+perLabel(asistPerMes,asistPerQ)+'\n\n';
+  msg+='Horas trabajadas: '+AC.fmtMin(t.total)+'\nTarifa: '+fmt(R.tarifa)+' por hora\n';
+  if(t.noc) msg+='Nocturnas (+25%): '+AC.fmtMin(t.noc)+'\n';
+  if(t.sup50+t.sup100) msg+='Suplementarias: '+AC.fmtMin(t.sup50+t.sup100)+'\n';
+  if(t.ext) msg+='Extraordinarias: '+AC.fmtMin(t.ext)+'\n';
+  msg+='─────────────\nMONTO: '+fmt(R.monto)+'\n\nQuedará disponible en Nómina → Pagar nómina.';
+  if(!confirm(msg))return;
+  const reg={id:perId(asistPerMes,asistPerQ)+'_'+e.id,empId:e.id,uid,periodoId:perId(asistPerMes,asistPerQ),desde,hasta,
+    min:{total:t.total,ord:t.ord,noc:t.noc,sup50:t.sup50,sup100:t.sup100,ext:t.ext},tarifa:R.tarifa,monto:R.monto,
+    marcas:R.ms.length,sinSalida:R.sinSalida.length,fecha:localISO(),resp:turnoUser,respAuth:authUser()};
+  NOM.horas=(NOM.horas||[]).filter(h=>h.id!==reg.id); NOM.horas.push(reg);
+  try{ await sNOM(); bitacora('asistencia_horas_aprobadas',{accion:'Aprobó '+AC.fmtMin(t.total)+' = '+fmt(R.monto)+' de '+e.nombre+' · '+perLabel(asistPerMes,asistPerQ),empleado:e.nombre,monto:R.monto}); render(); }
+  catch(err){ avisoError(msgError(err,'aprobar las horas')); }
+}
+function asistFilasPeriodo(){
+  const {desde,hasta}=asistRango(asistPerMes,asistPerQ), filas=[];
+  for(const [uid,p0] of Object.entries(ASIST.per)){
+    const p=Object.assign({uid},p0), R=asistResumen(p,asistPerData.marcas||[],desde,hasta);
+    if(!R.ms.length&&p.activo!==true) continue;
+    for(const d of Object.values(R.dias)){
+      const md=R.r.marcas.filter(m=>AC.diaDe(m.ts)===d.dia);
+      filas.push({nombre:p.nombre||'',dia:d.dia,marcas:md.map(m=>AC.horaDe(m.ts)+' '+AC.TIPO_TXT[m.tipo]+(m.origen==='admin'?' (adm: '+(m.motivo||'')+')':'')+(m.tipo==='permiso'?' ['+(m.motivo||'')+']':'')).join(' | '),
+        total:d.total,ord:d.ord,noc:d.noc,sup:d.sup50+d.sup100,ext:d.ext,obs:R.punt.filter(x=>x.dia===d.dia).map(x=>x.txt).concat(R.r.anomalias.filter(a=>AC.diaDe(a.ts)===d.dia).map(a=>a.txt)).join('; ')});
+    }
+    R.punt.filter(x=>x.tipo==='falta').forEach(f=>filas.push({nombre:p.nombre||'',dia:f.dia,marcas:'',total:0,ord:0,noc:0,sup:0,ext:0,obs:f.txt}));
+    R.r.anomalias.filter(a=>a.sinSalida&&!R.dias[AC.diaDe(a.ts)]).forEach(a=>filas.push({nombre:p.nombre||'',dia:AC.diaDe(a.ts),marcas:'',total:0,ord:0,noc:0,sup:0,ext:0,obs:a.txt}));
+  }
+  return filas.sort((a,b)=>a.nombre.localeCompare(b.nombre)||a.dia.localeCompare(b.dia));
+}
+function asistCSV(){
+  if(!asistPerData.marcas){alert('Espere a que carguen las marcas.');return;}
+  const h=n=>(Math.round(n/60*100)/100).toFixed(2).replace('.',',');
+  const cel=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const rows=[['Trabajador','Fecha','Marcas','Horas','Ordinarias','Nocturnas','Suplementarias','Extraordinarias','Observaciones']]
+    .concat(asistFilasPeriodo().map(f=>[f.nombre,f.dia,f.marcas,h(f.total),h(f.ord),h(f.noc),h(f.sup),h(f.ext),f.obs]));
+  const blob=new Blob(['\ufeff'+rows.map(r=>r.map(cel).join(';')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='asistencia_'+perId(asistPerMes,asistPerQ)+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+function asistImprimir(){
+  if(!asistPerData.marcas){alert('Espere a que carguen las marcas.');return;}
+  const {desde,hasta}=asistRango(asistPerMes,asistPerQ);
+  const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid));
+  const filas=asistFilasPeriodo();
+  const html=`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Asistencia ${perId(asistPerMes,asistPerQ)}</title>
+  <style>body{font-family:Arial,sans-serif;font-size:11px;margin:18px}h1{font-size:16px;margin:0}h2{font-size:13px;margin:18px 0 4px}table{width:100%;border-collapse:collapse;margin-top:4px}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}th{background:#eee}.n{text-align:right;white-space:nowrap}.firma{display:flex;gap:40px;margin-top:30px}.firma div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}.pb{page-break-after:always}</style></head><body>
+  ${pers.map(p=>{const R=asistResumen(p,asistPerData.marcas,desde,hasta), t=R.tot, fs=filas.filter(f=>f.nombre===(p.nombre||''));
+    return `<div class="pb"><h1>La Madriguera — Registro de asistencia</h1><div>${esc(perLabel(asistPerMes,asistPerQ))} · del ${desde} al ${hasta}</div>
+    <h2>${esc(p.nombre||'')}${R.emp?' · '+esc(R.emp.cargo||''):''}</h2>
+    <table><tr><th>Fecha</th><th>Marcas</th><th class="n">Horas</th><th class="n">Ord.</th><th class="n">Noct.</th><th class="n">Supl.</th><th class="n">Extra</th><th>Observaciones</th></tr>
+    ${fs.map(f=>`<tr><td>${f.dia}</td><td>${esc(f.marcas)}</td><td class="n">${AC.fmtMin(f.total)}</td><td class="n">${AC.fmtMin(f.ord)}</td><td class="n">${AC.fmtMin(f.noc)}</td><td class="n">${AC.fmtMin(f.sup)}</td><td class="n">${AC.fmtMin(f.ext)}</td><td>${esc(f.obs)}</td></tr>`).join('')||'<tr><td colspan="8">Sin registros</td></tr>'}
+    <tr><th colspan="2">Total del periodo</th><th class="n">${AC.fmtMin(t.total)}</th><th class="n">${AC.fmtMin(t.ord)}</th><th class="n">${AC.fmtMin(t.noc)}</th><th class="n">${AC.fmtMin(t.sup50+t.sup100)}</th><th class="n">${AC.fmtMin(t.ext)}</th><th>${R.emp&&R.emp.modalidad==='hora'?'A pagar: '+fmt(R.monto)+' ('+fmt(R.tarifa)+'/h)':''}</th></tr></table>
+    <p style="margin-top:10px">Declaro que las horas registradas corresponden al tiempo efectivamente trabajado. Las marcas se registraron con código QR en el local y verificación de ubicación; las marcadas «adm» fueron registradas por administración con su motivo.</p>
+    <div class="firma"><div>Trabajador: ${esc(p.nombre||'')}</div><div>Empleadora: La Madriguera</div></div></div>`;}).join('')}
+  <script>window.onload=()=>window.print();<\/script></body></html>`;
+  const w=window.open('','_blank'); if(!w){alert('Permita las ventanas emergentes para imprimir.');return;}
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 
@@ -7989,6 +8525,9 @@ function iniAlertas(){
       if(casos.length) add('media',casos.length+' ingreso(s) de mercadería con diferencias o códigos sin alta','Resuélvalos en la revisión: reclamo o aceptación, alta de productos y factura del proveedor.','Revisar',()=>irA('inventario',()=>{invModo='revision';revSel=casos[0].id;}),'inventario');
       else if(sinRev.length) add('baja',sinRev.length+' ingreso(s) de mercadería sin revisar','Vincúlelos con la factura del proveedor o el corte de consignación.','Revisar',()=>irA('inventario',()=>{invModo='revision';revSel=sinRev[0].id;}),'inventario');
     }catch(e){}
+  }
+  if(admin){
+    try{ asistAlertas().forEach(a=>add(a.sev,a.txt,a.desc,'Ver',()=>irA('asistencia',()=>{asistTab=a.tipo==='solicitud'?'personal':a.tipo==='sin_ubicacion'?'config':'hoy';}),'asistencia')); }catch(e){}
   }
   try{
     const largas=T.filter(t=>t.openedAt&&t.order&&t.order.length&&(Date.now()-new Date(t.openedAt).getTime())>60*60000);
@@ -10014,6 +10553,9 @@ async function _prepararBitacora(user){
   try{ localStorage.setItem('madu_turno',MI_NOMBRE); }catch(e){}
   const nb=document.getElementById('nav-bitacora');
   if(nb) nb.style.display = (MI_ROL==='admin') ? '' : 'none';
+  const na=document.getElementById('nav-asist');
+  if(na) na.style.display = (MI_ROL==='admin') ? '' : 'none';
+  if(MI_ROL==='admin') asistIniciar();
   bitacora('inicio_sesion',{accion:'Abrio el POS', rol:MI_ROL});
   if(MI_ROL==='admin') await cargarBitacora(30);
 }
@@ -10022,6 +10564,9 @@ onAuthStateChanged(auth,async user=>{
   if(user){
     await _cargarRol(user);
     if(MI_ROL==='cocina'){ location.replace('cocina/'); return; }
+    // Cuentas que solo marcan asistencia (o la pantalla del QR): no abren el POS.
+    if(MI_ROL==='personal'){ location.replace('asistencia/'); return; }
+    if(MI_ROL==='reloj'){ location.replace('asistencia/reloj.html'); return; }
     _prepararBitacora(user);
     if(lg)lg.style.display='none';
     if(!_initDone){_initDone=true;init();}

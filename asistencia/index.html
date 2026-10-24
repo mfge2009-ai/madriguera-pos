@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#5c4a2a">
+<title>La Madri | Asistencia</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icono-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Asistencia">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root{
+  --bg:#f8f6f1;--bg2:#fff;--bg3:#f0ede6;
+  --text:#1a1a1a;--text2:#555;--text3:#8a857b;
+  --border:#ddd8ce;--acc:#5c4a2a;--acc2:#7a6240;--acl:#ede5d0;
+  --grn:#1f6b45;--gbg:#d4edda;--amb:#8a4f00;--abg:#fff3cd;
+  --red:#8b1a1a;--rbg:#fde8e8;--blu:#1a3f8b;--bbg:#ddeeff;
+  --r:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);
+  min-height:100dvh;font-size:16px;-webkit-font-smoothing:antialiased;padding:0 0 env(safe-area-inset-bottom)}
+button,input,select{font:inherit}
+header{background:var(--acc);color:#fff;padding:14px 16px calc(14px);display:flex;align-items:center;gap:10px}
+header .marca{font-weight:800;letter-spacing:.04em;flex:1}
+header .marca small{display:block;font-weight:400;opacity:.8;font-size:12px;letter-spacing:0}
+header button{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:6px 10px;font-size:13px}
+main{max-width:520px;margin:0 auto;padding:16px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:12px}
+h1{font-size:20px;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px}
+.reloj{font-size:44px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;line-height:1.05}
+.fecha{color:var(--text2);font-size:14px}
+.estado{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:12px;font-weight:700;margin-top:12px}
+.estado i{width:12px;height:12px;border-radius:50%;flex-shrink:0;background:currentColor}
+.e-fuera{background:var(--bg3);color:var(--text2)} .e-dentro{background:var(--gbg);color:var(--grn)}
+.e-pausa{background:var(--abg);color:var(--amb)} .e-permiso{background:var(--bbg);color:var(--blu)}
+.estado span{font-weight:400;font-size:14px;display:block;color:var(--text2)}
+.btn{display:block;width:100%;border:0;border-radius:12px;padding:18px 14px;font-size:19px;font-weight:800;cursor:pointer;margin-top:10px;color:#fff;background:var(--acc)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.b-entrada,.b-regreso{background:var(--grn)} .b-salida{background:var(--red)} .b-pausa{background:#a86a00} .b-permiso{background:var(--blu)}
+.btn.sec{background:var(--bg3);color:var(--text);font-size:16px;padding:14px;font-weight:700}
+.geo{display:flex;gap:10px;align-items:flex-start;padding:12px;border-radius:12px;font-size:14px;margin-top:10px}
+.geo.ok{background:var(--gbg);color:var(--grn)} .geo.mal{background:var(--rbg);color:var(--red)} .geo.esp{background:var(--bg3);color:var(--text2)}
+.geo b{display:block;font-size:15px}
+.aviso{padding:12px;border-radius:12px;font-size:14px;background:var(--abg);color:var(--amb);margin-top:10px}
+.aviso.err{background:var(--rbg);color:var(--red)}
+.aviso.ok{background:var(--gbg);color:var(--grn)}
+.cuenta{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-top:10px}
+.cuenta div{height:100%;background:var(--acc2);transition:width 1s linear}
+label{display:block;font-size:13px;font-weight:700;color:var(--text2);margin:12px 0 4px}
+input,select{width:100%;padding:13px 12px;border:1px solid var(--border);border-radius:10px;background:#fff;font-size:16px}
+.lista{list-style:none}
+.lista li{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--bg3);font-size:15px}
+.lista li:last-child{border-bottom:0}
+.lista .h{font-variant-numeric:tabular-nums;font-weight:700}
+.lista .adm{font-size:11px;color:var(--amb);display:block}
+.tot{display:flex;justify-content:space-between;font-weight:800;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.hecho{text-align:center;padding:26px 16px}
+.hecho .chk{width:76px;height:76px;border-radius:50%;background:var(--grn);color:#fff;font-size:44px;line-height:76px;margin:0 auto 10px}
+.oculto{display:none!important}
+.qrhint{display:flex;gap:12px;align-items:center}
+.qrhint svg{flex-shrink:0}
+.peq{font-size:12px;color:var(--text3);margin-top:8px}
+.btn.b-scan{background:var(--acc);font-size:21px;padding:22px 14px;display:flex;align-items:center;justify-content:center;gap:10px}
+#scan{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
+#scan video{flex:1;width:100%;object-fit:cover;min-height:0}
+#scan .marco{position:absolute;left:50%;top:42%;width:min(70vw,320px);aspect-ratio:1;transform:translate(-50%,-50%);border:4px solid #fff;border-radius:22px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+#scan .pie{position:absolute;left:0;right:0;bottom:0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));text-align:center;color:#fff}
+#scan .pie p{margin-bottom:12px;font-size:16px;font-weight:600;text-shadow:0 1px 3px #000}
+#scan .pie button{width:100%;padding:15px;border:0;border-radius:12px;font-size:17px;font-weight:800;background:#fff;color:#1a1a1a}
+.inst{background:var(--acl);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:12px;font-size:14px}
+.inst b{display:block;margin-bottom:4px}
+.inst .fila{display:flex;gap:8px;margin-top:10px}
+.inst button{flex:1;padding:11px;border-radius:10px;border:0;font-weight:700;background:var(--acc);color:#fff}
+.inst button.sec{background:transparent;color:var(--text2);border:1px solid var(--border)}
+</style>
+</head>
+<body>
+<header>
+  <div class="marca">LA MADRIGUERA<small>Registro de asistencia</small></div>
+  <button id="b-salir" class="oculto">Salir</button>
+</header>
+<main>
+  <!-- Cargando -->
+  <div id="v-carga" class="card"><p class="sub">Cargando…</p></div>
+
+  <!-- Inicio de sesión -->
+  <div id="v-login" class="card oculto">
+    <h1>Ingresa con tu cuenta</h1>
+    <p class="sub">La sesión queda abierta en este celular. Usa tu propia cuenta: la marca queda a tu nombre.</p>
+    <label for="l-mail">Correo</label><input id="l-mail" type="email" autocomplete="username" inputmode="email">
+    <label for="l-pass">Contraseña</label><input id="l-pass" type="password" autocomplete="current-password">
+    <button class="btn" id="l-btn">Ingresar</button>
+    <div id="l-err" class="aviso err oculto"></div>
+  </div>
+
+  <!-- Cuenta sin vincular -->
+  <div id="v-novinc" class="card oculto">
+    <h1>Tu cuenta aún no está habilitada</h1>
+    <p class="sub" id="nv-txt">Administración debe vincular tu cuenta con tu ficha de personal antes de que puedas marcar.</p>
+    <div id="nv-form">
+      <label for="nv-nombre">Tu nombre y apellido</label><input id="nv-nombre" maxlength="60">
+      <button class="btn" id="nv-btn">Solicitar habilitación</button>
+    </div>
+    <div id="nv-msg" class="aviso oculto"></div>
+  </div>
+
+  <!-- Principal -->
+  <div id="v-main" class="oculto">
+    <div class="inst oculto" id="inst">
+      <b>📲 Ten la asistencia a un toque</b>
+      <span id="inst-txt"></span>
+      <div class="fila"><button id="inst-ok">Instalar</button><button class="sec" id="inst-no">Ahora no</button></div>
+    </div>
+    <div class="card">
+      <h1 id="m-nombre"></h1>
+      <div class="reloj" id="m-reloj">--:--</div>
+      <div class="fecha" id="m-fecha"></div>
+      <div class="estado e-fuera" id="m-estado"><i></i><div><div id="m-est-t">Fuera de turno</div><span id="m-est-d"></span></div></div>
+    </div>
+
+    <!-- Marcar -->
+    <div class="card" id="m-marcar">
+      <div id="mk-sinqr">
+        <button class="btn b-scan" id="b-scan"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" aria-hidden="true"><path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>Escanear QR para marcar</button>
+        <p class="peq" style="text-align:center">Apunta al código de la pantalla de La Madriguera. Solo funciona en el local.</p>
+      </div>
+      <div id="mk-conqr" class="oculto">
+        <div class="sub" id="mk-tiempo">Código escaneado.</div>
+        <div class="cuenta"><div id="mk-barra" style="width:100%"></div></div>
+        <div class="geo esp" id="mk-geo"><div><b>Verificando tu ubicación…</b>Permite el acceso a la ubicación cuando el celular lo pida.</div></div>
+        <div id="mk-btns"></div>
+        <div id="mk-permiso" class="oculto">
+          <label for="pm-motivo">Motivo del permiso</label><input id="pm-motivo" maxlength="200" placeholder="Ej.: clases en la universidad">
+          <label for="pm-hora">¿A qué hora regresas?</label><input id="pm-hora" type="time">
+          <p class="peq">El tiempo fuera no se paga. Si no regresas a esa hora, administración recibe un aviso.</p>
+          <button class="btn b-permiso" id="pm-ok">Confirmar salida con permiso</button>
+          <button class="btn sec" id="pm-cancel">Cancelar</button>
+        </div>
+      </div>
+      <div id="mk-msg" class="aviso oculto"></div>
+    </div>
+
+    <!-- Hecho -->
+    <div class="card hecho oculto" id="m-hecho">
+      <div class="chk">✓</div>
+      <h1 id="hc-t"></h1>
+      <p class="sub" id="hc-d"></p>
+    </div>
+
+    <!-- Hoy -->
+    <div class="card">
+      <h1 style="font-size:17px">Tus marcas de hoy</h1>
+      <ul class="lista" id="m-lista"></ul>
+      <div class="tot"><span>Tiempo trabajado hoy</span><span id="m-total">0h00</span></div>
+      <p class="peq">Las pausas y los permisos no cuentan. Si olvidaste una marca, avisa a administración: solo ella puede corregirla, con motivo.</p>
+    </div>
+  </div>
+</main>
+
+<div id="scan" class="oculto" role="dialog" aria-label="Escanear código QR">
+  <video id="scan-v" playsinline muted></video>
+  <div class="marco"></div>
+  <div class="pie"><p id="scan-t">Apunta al código QR de la pantalla</p><button id="scan-x">Cancelar</button></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, addDoc, collection, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import * as A from './asist-core.js';
+
+// Mismo proyecto que el POS (la-madriguera-cb489)
+const firebaseConfig = {
+  apiKey: "AIzaSyBzAwD0HBDhWe7u_1o1toLPJLhiduHVJyo",
+  authDomain: "la-madriguera-cb489.firebaseapp.com",
+  projectId: "la-madriguera-cb489",
+  storageBucket: "la-madriguera-cb489.firebasestorage.app",
+  messagingSenderId: "648077569073",
+  appId: "1:648077569073:web:7b438dfdac9d5fef063910"
+};
+const app = initializeApp(firebaseConfig);
+// Sin copia local a propósito: una marca debe llegar al servidor en el
+// momento, con el código vigente. Si no hay conexión, se avisa y no se marca.
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+const $ = id => document.getElementById(id);
+const ver = (id, si) => $(id).classList.toggle('oculto', !si);
+const VISTAS = ['v-carga','v-login','v-novinc','v-main'];
+const vista = v => VISTAS.forEach(x => ver(x, x === v));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const conLimite = (p, ms = 15000) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(Object.assign(new Error('tiempo'), {code: 'tiempo'})), ms))]);
+
+// ── Código escaneado (llega en la dirección: ?t=…) ─────────────
+// Se guarda solo en esta pestaña y se borra de la barra de direcciones,
+// para que recargar o compartir la página no sirva para marcar.
+const VIDA_QR = 75; // segundos que se ofrecen para marcar tras escanear
+(() => {
+  const u = new URL(location.href), t = u.searchParams.get('t');
+  if (t) {
+    try { sessionStorage.setItem('asist_qr', JSON.stringify({t, en: Date.now()})); } catch (e) {}
+    u.searchParams.delete('t'); history.replaceState(null, '', u.pathname + u.search + u.hash);
+  }
+})();
+function qrVigente() {
+  try {
+    const q = JSON.parse(sessionStorage.getItem('asist_qr') || 'null');
+    if (q && q.t && Date.now() - q.en < VIDA_QR * 1000) return q;
+  } catch (e) {}
+  return null;
+}
+const gastarQR = () => { try { sessionStorage.removeItem('asist_qr'); } catch (e) {} };
+
+// Identificador de este celular (para detectar si un mismo celular marca por varias personas)
+const DISP = (() => { try { let d = localStorage.getItem('asist_disp'); if (!d) { d = A.nuevoToken().slice(0, 12); localStorage.setItem('asist_disp', d); } return d; } catch (e) { return 'sin-id'; } })();
+
+let USER = null, PER = null, CFG = null, MARCAS = [], POS_GPS = null, GEO = null, GEO_EN = 0, leyendoGPS = false, ocupado = false;
+
+// ── Reloj ───────────────────────────────────────────────────────
+function tic() {
+  const d = new Date();
+  $('m-reloj').textContent = A.pad(d.getHours()) + ':' + A.pad(d.getMinutes()) + ':' + A.pad(d.getSeconds());
+  $('m-fecha').textContent = (t => t.charAt(0).toUpperCase() + t.slice(1))(d.toLocaleDateString('es-EC', {weekday: 'long', day: 'numeric', month: 'long'}));
+  const q = qrVigente();
+  if (!$('mk-conqr').classList.contains('oculto')) {
+    if (!q) { pintarMarcar(); return; }
+    const s = Math.max(0, Math.ceil(VIDA_QR - (Date.now() - q.en) / 1000));
+    $('mk-tiempo').textContent = 'Código escaneado · tienes ' + s + ' s para marcar';
+    $('mk-barra').style.width = (100 * s / VIDA_QR) + '%';
+  }
+  if (Date.now() % 60000 < 1000) pintarHoy();
+}
+setInterval(tic, 1000);
+
+// ── Sesión ──────────────────────────────────────────────────────
+async function ingresar() {
+  const m = $('l-mail').value.trim(), p = $('l-pass').value;
+  ver('l-err', false);
+  if (!m || !p) { $('l-err').textContent = 'Ingresa correo y contraseña.'; ver('l-err', true); return; }
+  $('l-btn').disabled = true;
+  try { await signInWithEmailAndPassword(auth, m, p); }
+  catch (e) {
+    const map = {'auth/invalid-credential': 'Correo o contraseña incorrectos.', 'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos.', 'auth/network-request-failed': 'Sin conexión a internet.'};
+    $('l-err').textContent = map[e.code] || ('No se pudo ingresar (' + (e.code || e.message) + ').'); ver('l-err', true);
+  } finally { $('l-btn').disabled = false; }
+}
+$('l-btn').addEventListener('click', ingresar);
+['l-mail','l-pass'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') ingresar(); }));
+$('b-salir').addEventListener('click', async () => { if (confirm('¿Cerrar la sesión en este celular?')) { await signOut(auth); location.reload(); } });
+
+onAuthStateChanged(auth, async user => {
+  USER = user;
+  ver('b-salir', !!user);
+  if (!user) { vista('v-login'); return; }
+  vista('v-carga');
+  try {
+    const s = await conLimite(getDoc(doc(db, 'lm_asist_personal', user.uid)));
+    PER = s.exists() ? s.data() : null;
+  } catch (e) { PER = null; if (e.code !== 'permission-denied') { $('v-carga').innerHTML = '<p class="aviso err">No se pudo conectar. Revisa tu internet y recarga la página.</p>'; return; } }
+  if (!PER || PER.activo !== true) { await mostrarNoVinculado(user); return; }
+  try { const c = await conLimite(getDoc(doc(db, 'lm_asist_cfg', 'local'))); CFG = c.exists() ? c.data() : null; } catch (e) { CFG = null; }
+  $('m-nombre').textContent = 'Hola, ' + (PER.nombre || user.email).split(' ')[0];
+  vista('v-main');
+  ofrecerInstalar();
+  ubicar();          // se adelanta la ubicación: al escanear, el botón ya está listo
+  await cargarHoy();
+  pintarMarcar();
+});
+
+async function mostrarNoVinculado(user) {
+  vista('v-novinc');
+  if (PER && PER.activo === false) {
+    $('nv-txt').textContent = 'Tu ficha de personal está inactiva. Si es un error, habla con administración.';
+    ver('nv-form', false); return;
+  }
+  try {
+    const s = await getDoc(doc(db, 'lm_asist_solicitudes', user.uid));
+    if (s.exists()) { ver('nv-form', false); $('nv-msg').textContent = 'Solicitud enviada el ' + new Date(s.data().ts.toMillis()).toLocaleString('es-EC') + '. Espera a que administración la apruebe.'; ver('nv-msg', true); }
+  } catch (e) {}
+}
+$('nv-btn').addEventListener('click', async () => {
+  const n = $('nv-nombre').value.trim();
+  if (n.length < 2) { alert('Escribe tu nombre y apellido.'); return; }
+  $('nv-btn').disabled = true;
+  try {
+    await conLimite(setDoc(doc(db, 'lm_asist_solicitudes', USER.uid), {uid: USER.uid, email: USER.email, nombre: n, ts: serverTimestamp()}));
+    ver('nv-form', false); $('nv-msg').className = 'aviso ok'; $('nv-msg').textContent = 'Listo. Administración verá tu solicitud en el POS.'; ver('nv-msg', true);
+  } catch (e) { $('nv-btn').disabled = false; alert('No se pudo enviar (' + (e.code || e.message) + ').'); }
+});
+
+// ── Marcas de hoy ───────────────────────────────────────────────
+async function cargarHoy() {
+  try {
+    const qs = await conLimite(getDocs(query(collection(db, 'lm_asist_marcas'), where('uid', '==', USER.uid), where('dia', '==', A.diaDe(Date.now())))));
+    MARCAS = qs.docs.map(d => { const x = d.data(); return Object.assign({}, x, {id: d.id, ts: x.ts && x.ts.toMillis ? x.ts.toMillis() : Date.now()}); });
+  } catch (e) { MARCAS = []; }
+  pintarHoy();
+}
+function pintarHoy() {
+  if (!USER) return;
+  const r = A.recorrer(MARCAS);
+  const est = $('m-estado');
+  est.className = 'estado e-' + r.estado;
+  const t = {fuera: 'Fuera de turno', dentro: 'Trabajando', pausa: 'En pausa', permiso: 'Fuera con permiso'}[r.estado];
+  $('m-est-t').textContent = t;
+  let d = '';
+  if (r.estado === 'dentro') d = 'Desde las ' + A.horaDe(r.desde);
+  else if (r.estado === 'pausa') d = 'Desde las ' + A.horaDe(r.desde) + ' · no se paga';
+  else if (r.estado === 'permiso') d = 'Desde las ' + A.horaDe(r.desde) + (r.regreso ? ' · regreso previsto ' + A.horaDe(r.regreso) : '');
+  else if (r.marcas.length) d = 'Última salida ' + A.horaDe(r.desde);
+  $('m-est-d').textContent = d;
+  $('m-lista').innerHTML = r.marcas.length ? r.marcas.map(m => `<li><span>${esc(A.TIPO_TXT[m.tipo])}${m.tipo === 'permiso' && m.motivo ? ' · ' + esc(m.motivo) : ''}${m.origen === 'admin' ? '<span class="adm">registrada por administración</span>' : ''}</span><span class="h">${A.horaDe(m.ts)}</span></li>`).join('')
+    : '<li><span class="sub">Aún no hay marcas hoy.</span></li>';
+  const tr = r.tramos.concat(r.enCurso ? [r.enCurso] : []);
+  const min = tr.reduce((s, x) => s + (x.fin - x.ini) / 60000, 0);
+  $('m-total').textContent = A.fmtMin(min) + (r.enCurso ? ' (en curso)' : '');
+}
+
+// ── Marcar ──────────────────────────────────────────────────────
+function pintarMarcar() {
+  const q = qrVigente();
+  ver('mk-sinqr', !q); ver('mk-conqr', !!q);
+  if (!q) { ver('mk-permiso', false); return; }
+  const r = A.recorrer(MARCAS);
+  const ok = GEO && GEO.ok;
+  $('mk-btns').innerHTML = A.accionesPara(r.estado).map(t => `<button class="btn b-${t}" data-t="${t}" ${ok && !ocupado ? '' : 'disabled'}>${{entrada: 'Marcar ENTRADA', pausa: 'Iniciar pausa (almuerzo)', permiso: 'Salir con permiso', regreso: 'Marcar REGRESO', salida: 'Marcar SALIDA'}[t]}</button>`).join('');
+  $('mk-btns').querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.t === 'permiso') { ver('mk-permiso', true); ver('mk-btns', false); const d = new Date(Date.now() + 2 * 3600000); $('pm-hora').value = A.pad(d.getHours()) + ':' + A.pad(d.getMinutes()); $('pm-motivo').focus(); return; }
+    marcar(b.dataset.t);
+  }));
+  if (!leyendoGPS && (!GEO || Date.now() - GEO_EN > 90000)) ubicar();
+}
+$('pm-cancel').addEventListener('click', () => { ver('mk-permiso', false); ver('mk-btns', true); });
+$('pm-ok').addEventListener('click', () => {
+  const motivo = $('pm-motivo').value.trim(), h = $('pm-hora').value;
+  if (motivo.length < 3) { alert('Escribe el motivo del permiso.'); return; }
+  if (!h) { alert('Indica la hora de regreso.'); return; }
+  let reg = A.msDeHora(A.diaDe(Date.now()), h);
+  if (reg <= Date.now() + 60000) { alert('La hora de regreso debe ser posterior a la hora actual.'); return; }
+  marcar('permiso', {motivo, regreso: reg});
+});
+
+let _geoIntento = 0;
+function ubicar() {
+  if (!navigator.geolocation) { pintarGeo({ok: false, motivo: 'Este navegador no permite leer la ubicación.'}); return; }
+  if (!CFG || typeof CFG.lat !== 'number') { pintarGeo({ok: false, motivo: 'Administración aún no configuró la ubicación del local.'}); return; }
+  const id = ++_geoIntento;
+  let mejor = null, w = null, terminado = false;
+  leyendoGPS = true;
+  const fin = () => { terminado = true; if (id === _geoIntento) leyendoGPS = false; if (w != null) navigator.geolocation.clearWatch(w); };
+  w = navigator.geolocation.watchPosition(p => {
+    if (id !== _geoIntento || terminado) return fin();
+    const c = p.coords;
+    if (!mejor || c.accuracy < mejor.prec) mejor = {lat: c.latitude, lng: c.longitude, prec: c.accuracy};
+    POS_GPS = mejor;
+    GEO = A.dentroGeocerca(CFG, mejor.lat, mejor.lng, mejor.prec); GEO_EN = Date.now();
+    pintarGeo(GEO);
+    if (GEO.ok && mejor.prec <= 40) fin();
+  }, e => {
+    const m = {1: 'No diste permiso de ubicación. Actívalo en el navegador para poder marcar.', 2: 'No se pudo obtener la ubicación. Activa el GPS.', 3: 'La ubicación tardó demasiado. Intenta de nuevo.'};
+    fin(); GEO = {ok: false, motivo: m[e.code] || 'Error de ubicación.'}; GEO_EN = Date.now(); pintarGeo(GEO, true);
+  }, {enableHighAccuracy: true, timeout: 20000, maximumAge: 0});
+  setTimeout(fin, 25000);
+}
+function pintarGeo(g, reintentar) {
+  const el = $('mk-geo');
+  el.className = 'geo ' + (g.ok ? 'ok' : 'mal');
+  el.innerHTML = g.ok
+    ? `<div><b>✓ Estás en La Madriguera</b>A ${g.dist} m del punto del local (±${Math.round(POS_GPS.prec)} m).</div>`
+    : `<div><b>No se puede marcar</b>${esc(g.motivo)}${reintentar || g.dist != null ? '<br><button class="btn sec" id="geo-re" style="margin-top:8px">Volver a intentar</button>' : ''}</div>`;
+  $('geo-re')?.addEventListener('click', () => { GEO = null; POS_GPS = null; leyendoGPS = false; el.className = 'geo esp'; el.innerHTML = '<div><b>Verificando tu ubicación…</b></div>'; ubicar(); });
+  pintarMarcar();
+}
+
+async function marcar(tipo, extra = {}) {
+  const q = qrVigente();
+  if (!q) { msg('El código venció. Escanea de nuevo el QR de la pantalla.', 'err'); pintarMarcar(); return; }
+  if (!GEO || !GEO.ok) { msg('Primero se debe verificar que estás en el local.', 'err'); return; }
+  if (ocupado) return;
+  ocupado = true; pintarMarcar(); $('pm-ok').disabled = true;
+  const reg = Object.assign({
+    uid: USER.uid, nombre: PER.nombre || '', tipo, ts: serverTimestamp(), dia: A.diaDe(Date.now()),
+    qr: q.t, lat: POS_GPS.lat, lng: POS_GPS.lng, prec: Math.round(POS_GPS.prec * 10) / 10, dist: GEO.dist,
+    disp: DISP, origen: 'qr'
+  }, extra);
+  try {
+    const ref = await conLimite(addDoc(collection(db, 'lm_asist_marcas'), reg));
+    gastarQR();
+    MARCAS.push(Object.assign({}, reg, {id: ref.id, ts: Date.now()}));
+    pintarHoy();
+    $('hc-t').textContent = A.TIPO_TXT[tipo] + ' registrada';
+    $('hc-d').textContent = A.horaDe(Date.now()) + (tipo === 'permiso' ? ' · regreso previsto ' + A.horaDe(extra.regreso) : '') + '. Para la siguiente marca, escanea el QR otra vez.';
+    ver('m-hecho', true); ver('mk-msg', false); ver('mk-permiso', false); ver('mk-btns', true);
+    setTimeout(() => ver('m-hecho', false), 15000);
+    cargarHoy();
+  } catch (e) {
+    if (e.code === 'permission-denied') {
+      gastarQR();
+      msg('El servidor no aceptó la marca. Puede ser que el código haya vencido o que la ubicación no corresponda al local. Escanea el QR otra vez estando en La Madriguera.', 'err');
+    } else if (e.code === 'tiempo' || e.code === 'unavailable') {
+      msg('No hubo respuesta del servidor. Revisa tu conexión. Si al recargar la marca no aparece en la lista, escanea el QR otra vez.', 'err');
+    } else msg('No se pudo registrar (' + (e.code || e.message) + ').', 'err');
+  } finally { ocupado = false; $('pm-ok').disabled = false; pintarMarcar(); }
+}
+function msg(t, cls) { const m = $('mk-msg'); m.className = 'aviso ' + (cls || ''); m.textContent = t; ver('mk-msg', true); }
+
+// ── Escáner de QR dentro de la página ─────────────────────────
+// Con BarcodeDetector (Android/Chrome) o, si no existe (iPhone), con jsQR.
+let flujo = null, escaneando = false;
+function cargarJsQR() {
+  return window.jsQR ? Promise.resolve() : new Promise((ok, mal) => { const s = document.createElement('script'); s.src = 'jsqr.min.js'; s.onload = ok; s.onerror = mal; document.head.appendChild(s); });
+}
+function tokenDe(texto) {
+  try { const u = new URL(texto); const t = u.searchParams.get('t'); if (t && /\/asistencia\/(index\.html)?$/.test(u.pathname)) return t; } catch (e) {}
+  return null;
+}
+async function abrirEscaner() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Este navegador no permite usar la cámara. Escanea el QR con la cámara del celular.'); return; }
+  ver('scan', true); $('scan-t').textContent = 'Apunta al código QR de la pantalla';
+  try {
+    flujo = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}}, audio: false});
+  } catch (e) {
+    cerrarEscaner();
+    alert(e.name === 'NotAllowedError' ? 'Sin permiso para la cámara. Actívalo en los ajustes del navegador para este sitio, o escanea el QR con la cámara del celular.' : 'No se pudo abrir la cámara.');
+    return;
+  }
+  const v = $('scan-v'); v.srcObject = flujo; await v.play().catch(() => {});
+  if (!leyendoGPS && (!GEO || Date.now() - GEO_EN > 90000)) ubicar();
+  escaneando = true;
+  let det = null;
+  try { if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) det = new BarcodeDetector({formats: ['qr_code']}); } catch (e) {}
+  if (!det) { try { await cargarJsQR(); } catch (e) { cerrarEscaner(); alert('No se pudo cargar el lector. Escanea el QR con la cámara del celular.'); return; } }
+  const cv = document.createElement('canvas'), cx = cv.getContext('2d', {willReadFrequently: true});
+  const ciclo = async () => {
+    if (!escaneando) return;
+    let texto = null;
+    try {
+      if (v.readyState >= 2 && v.videoWidth) {
+        if (det) { const r = await det.detect(v); if (r.length) texto = r[0].rawValue; }
+        else {
+          const k = Math.min(1, 640 / v.videoWidth); cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+          cx.drawImage(v, 0, 0, cv.width, cv.height);
+          const r = window.jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, {inversionAttempts: 'dontInvert'});
+          if (r) texto = r.data;
+        }
+      }
+    } catch (e) {}
+    if (texto) {
+      const t = tokenDe(texto);
+      if (t) {
+        try { sessionStorage.setItem('asist_qr', JSON.stringify({t, en: Date.now()})); } catch (e) {}
+        if (navigator.vibrate) navigator.vibrate(60);
+        cerrarEscaner(); ver('mk-msg', false); pintarMarcar();
+        $('m-marcar').scrollIntoView({behavior: 'smooth', block: 'start'});
+        return;
+      }
+      $('scan-t').textContent = 'Ese no es el código de asistencia. Apunta al QR de la pantalla del local.';
+    }
+    setTimeout(ciclo, det ? 120 : 200);
+  };
+  ciclo();
+}
+function cerrarEscaner() {
+  escaneando = false; ver('scan', false);
+  if (flujo) { flujo.getTracks().forEach(t => t.stop()); flujo = null; }
+  $('scan-v').srcObject = null;
+}
+$('b-scan').addEventListener('click', abrirEscaner);
+$('scan-x').addEventListener('click', cerrarEscaner);
+document.addEventListener('visibilitychange', () => { if (document.hidden && escaneando) cerrarEscaner(); });
+
+// ── Ofrecer instalarla como app (ícono en la pantalla de inicio) ──
+let pedidoInstalar = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); pedidoInstalar = e; ofrecerInstalar(); });
+function ofrecerInstalar() {
+  const instalada = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  let no = false; try { no = localStorage.getItem('asist_inst_no') === '1'; } catch (e) {}
+  if (instalada || no || !USER) { ver('inst', false); return; }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (pedidoInstalar) { $('inst-txt').textContent = 'Instálala y entra con un toque desde el ícono, sin buscar la página.'; ver('inst-ok', true); }
+  else if (ios) { $('inst-txt').innerHTML = 'En Safari toca <b style="display:inline">Compartir</b> (el cuadrado con flecha) y luego <b style="display:inline">«Agregar a inicio»</b>.'; ver('inst-ok', false); }
+  else { $('inst-txt').innerHTML = 'Toca el menú <b style="display:inline">⋮</b> del navegador y luego <b style="display:inline">«Agregar a la pantalla principal»</b>.'; ver('inst-ok', false); }
+  ver('inst', true);
+}
+$('inst-ok').addEventListener('click', async () => { if (!pedidoInstalar) return; pedidoInstalar.prompt(); try { await pedidoInstalar.userChoice; } catch (e) {} pedidoInstalar = null; ver('inst', false); });
+$('inst-no').addEventListener('click', () => { try { localStorage.setItem('asist_inst_no', '1'); } catch (e) {} ver('inst', false); });
+
+tic();
+</script>
+</body>
+</html>
