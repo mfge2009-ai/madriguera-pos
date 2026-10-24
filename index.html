@@ -895,9 +895,13 @@ async function pedirAutorizacionAdmin(accion, extra){
   // "extra" viaja tal cual a la bitacora: sirve para dejar el rastro concreto
   // (que venta, que mesa, que productos) y no solo el monto.
   const _ex = extra || {};
-  if(MI_ROL==='admin' && _admOK && Date.now()<_admOK.exp){
-    const autId=await bitacora('autorizacion_reutilizada',Object.assign({accion:accion||'', autorizadoPor:_admOK.email, autorizadoUid:_admOK.uid},_ex));
-    return Object.assign({},_admOK,{autId, db, cerrar:_sinCerrar});
+  // FIX 24-oct: con la sesion de ADMINISTRACION abierta no se vuelve a pedir
+  // correo y clave. La propia cuenta admin firma y la accion queda en la
+  // bitacora (las reglas del servidor ven igual una cuenta admin).
+  if(MI_ROL==='admin' && auth.currentUser){
+    const autId=await bitacora('accion_admin',Object.assign({accion:accion||'', autorizadoPor:authUser(), autorizadoUid:auth.currentUser.uid},_ex));
+    if(!autId){ alert('No se pudo registrar la accion en la bitacora.\nAccion NO realizada.'); return null; }
+    return {uid:auth.currentUser.uid, email:authUser(), exp:Date.now()+ADM_MINUTOS*60000, autId, db, cerrar:_sinCerrar};
   }
   const cred=await _admPedirDatos(accion);
   if(!cred) return null;
