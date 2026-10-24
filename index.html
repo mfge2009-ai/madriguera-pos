@@ -1350,14 +1350,21 @@ async function saveProductos(list,dbX){
   try{
     for(let i=0;i<reales.length;i+=400){
       const batch=writeBatch(dbW);
-      reales.slice(i,i+400).forEach(p=>batch.set(doc(dbW,PRODUCTOS_COL,String(p.id)),_marca(p)));
-      await conLimite(batch.commit());
+      const lote=reales.slice(i,i+400);
+      lote.forEach(p=>batch.set(doc(dbW,PRODUCTOS_COL,String(p.id)),_marca(p)));
+      // FIX 24-oct: un lote grande (cientos de fichas) tarda mas de 6 s en
+      // confirmarse aunque haya internet: el limite crece con el tamano.
+      await conLimite(batch.commit(), Math.max(ESPERA_SERVIDOR_MS, 15000+60*lote.length));
     }
     reales.forEach(p=>_lastPSync.set(String(p.id),JSON.stringify(p)));
     return true;
   }catch(e){
     console.error('saveProductos:',e);
-    avisoError(msgError(e,'guardar '+reales.length+' producto(s)'));
+    const _c=(e&&e.code)||'';
+    // FIX 24-oct: si HAY internet y solo fue lentitud, la escritura sigue en cola
+    // y sube sola: se avisa con la barra ambar de pendientes, sin la alarma roja
+    // de «Sin conexion». Permisos, cuota u otros errores siguen en rojo.
+    if(!(_c.includes('unavailable')&&navigator.onLine)) avisoError(msgError(e,'guardar '+reales.length+' producto(s)'));
     registrarFallo('guardar productos',e);
     // Lo escrito con la sesion del administrador no se reintenta con la de caja
     if(!dbX || dbX===db){ reales.forEach(_backupProd); avisoPendientes(); }
@@ -1385,7 +1392,7 @@ async function sP(dbX){
     const a=JSON.stringify({...p,stock:0,updatedAt:0}), b=JSON.stringify({...prevObj,stock:0,updatedAt:0});
     if(a!==b) dirty.push({...p,stock:prevObj.stock}); // conserva stock del servidor
   });
-  if(dirty.length>0)return await saveProductos(dirty,dbX);
+  if(dirty.length>0){ console.warn('sP: '+dirty.length+' ficha(s) por guardar',dirty.slice(0,5).map(p=>p.id+' '+(p.name||''))); return await saveProductos(dirty,dbX); }
   return true;
 }
 
@@ -3898,6 +3905,7 @@ async function prcAplicar(){
         if(typeof _catMap!=='undefined'&&_catMap.get(c.id)&&_catMap.get(c.id)!==lp)put(_catMap.get(c.id));
         const prev=_lastPSync.get(c.id);
         if(prev){try{const o=JSON.parse(prev);put(o);_lastPSync.set(c.id,JSON.stringify(o));}catch(e){}}
+        else if(lp){ _lastPSync.set(c.id,JSON.stringify(lp)); }   // FIX 24-oct: sin esto quedaba «sin guardar» y se reenviaba la ficha completa
         ok.push(c);
       });
       if(btn)btn.textContent='Guardando… '+ok.length+'/'+sel.length;
@@ -4292,6 +4300,7 @@ async function invAplicar(){
         if(typeof _catMap!=='undefined'&&_catMap.get(o.f.id))Object.assign(_catMap.get(o.f.id),o.upd);
         const prev=_lastPSync.get(o.f.id);
         if(prev){try{const ob=JSON.parse(prev);Object.assign(ob,o.upd);_lastPSync.set(o.f.id,JSON.stringify(ob));}catch(e){}}
+        else { const lp2=P.find(x=>String(x.id)===String(o.f.id)); if(lp2)_lastPSync.set(o.f.id,JSON.stringify(lp2)); }
         ok.push(o);
       });
       if(btn)btn.textContent='Guardando… '+ok.length+'/'+ops.length;
