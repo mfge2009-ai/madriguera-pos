@@ -3322,6 +3322,7 @@ function rProductos(){
         <button class="btn btn-g" onclick="resincronizarCatalogo()" style="font-size:11px" title="Relee el catalogo completo desde la nube (unas 1.800 lecturas). Normalmente no hace falta: se sincroniza solo.">🔄 Resincronizar</button>
         <button class="btn btn-g" id="bpexportcat" style="font-size:11px">↓ Exportar</button>
         ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpprecios" style="font-size:11px" title="Actualiza precios de venta desde la lista Excel/CSV del proveedor, cruzando por ISBN">💲 Actualizar precios</button>':''}
+        ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpdepurar" style="font-size:11px" title="Borrar en bloque productos mal creados (promociones, duplicados, pruebas). Solo administración">🧹 Depurar catálogo</button>':''}
         ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpinvini" style="font-size:11px" title="Concilia el conteo físico con el POS: fija el stock contado, pone en 0 e inactivo lo no contado y lista las altas">📦 Inventario inicial</button>':''}
         ${MI_ROL==='admin'?'<button class="btn btn-g" id="bpimport" style="font-size:11px">↑ Importar CSV</button>':''}
         <button class="btn btn-acc" id="bpn">+ Agregar</button>
@@ -3460,6 +3461,7 @@ function attachProd(){
   // Actualizar precios desde lista del proveedor
   mc.querySelector('#bpprecios')?.addEventListener('click',()=>{INV=null;abrirActualizarPrecios();});
   mc.querySelector('#bpinvini')?.addEventListener('click',()=>abrirInventarioInicial());
+  mc.querySelector('#bpdepurar')?.addEventListener('click',()=>abrirDepurar());
   if(INV){ const pp=document.getElementById('import-panel'); if(pp){ pp.style.display='block'; invRender(); } }
   if(PRC){ const pp=document.getElementById('import-panel'); if(pp){ pp.style.display='block'; prcRender(); } }
   // CSV Import
@@ -5631,13 +5633,16 @@ function invModal(html){
   return bg;
 }
 function invCerrarModal(){ const bg=document.getElementById('inv-modal'); if(bg){ bg.style.display='none'; bg.innerHTML=''; } }
-async function invAbrirEliminar(id){
+async function invAbrirEliminar(id,opts){
   if(MI_ROL!=='admin'){ alert('Solo la administración puede eliminar productos.'); return; }
   const p=P.find(x=>String(x.id)===String(id)); if(!p||!esProdReal(p)) return;
   invModal(`<div style="font-size:15px;font-weight:700;margin-bottom:6px">Eliminar producto</div>
     <div style="font-size:12px;color:var(--text3);margin-bottom:14px">${esc(p.name)}${p.code?' · '+esc(p.code):''}</div>
     <div style="font-size:13px;color:var(--text2);padding:18px 0;text-align:center">Revisando el historial de ventas…</div>`);
   const ver=await invVerificarEliminacion(p);
+  // FIX 24-oct: administración puede eliminar igual (depuración), salvo si está en una mesa abierta.
+  const enMesa=T.some(t=>(t.order||[]).some(i=>i&&String(i.productId??'')===String(p.id)));
+  if(opts&&opts.forzar&&!enMesa){ ver.ok=true; ver.resumen='DEPURACION (eliminado pese a historial) | '+ver.resumen; }
   const filas=ver.checks.map(c=>`<div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:3px 0;color:${c.ok?'var(--text)':'var(--red)'}">
     <span style="width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:${c.ok?'var(--gbg)':'var(--rbg)'};color:${c.ok?'var(--grn)':'var(--red)'}">${c.ok?'✓':'✕'}</span>${esc(c.txt)}</div>`).join('');
   const cab=(ico,bg,t)=>`<div style="display:flex;gap:12px;align-items:center;margin-bottom:12px"><div style="width:40px;height:40px;border-radius:10px;background:${bg};display:flex;align-items:center;justify-content:center;font-size:18px">${ico}</div>
@@ -5648,8 +5653,10 @@ async function invAbrirEliminar(id){
       <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Este producto tiene movimientos o no se pudo comprobar que no los tenga. Eliminarlo borraría su rastro en reportes, kardex y comprobantes.</div>
       ${verif}
       ${p.active?`<div style="background:var(--gbg);color:var(--grn);border-radius:var(--rs);padding:9px 12px;font-size:12px;margin-bottom:12px">Recomendado: <b>desactivarlo</b>. Se oculta del POS, conserva todo el historial y se puede reactivar.</div>`:''}
-      <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-g" id="inv-x">Cancelar</button>${p.active?'<button class="btn btn-acc" id="inv-desact">Desactivar producto</button>':''}</div>`);
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap"><button class="btn btn-g" id="inv-x">Cancelar</button>${enMesa?'':'<button class="btn btn-g" id="inv-forzar" style="color:var(--red)">Eliminar igual (depurar)</button>'}${p.active?'<button class="btn btn-acc" id="inv-desact">Desactivar producto</button>':''}</div>
+      ${enMesa?'':'<div style="font-size:11px;color:var(--text3);margin-top:8px">«Eliminar igual» borra solo la ficha: las ventas ya hechas conservan su nombre, precio y costo.</div>'}`);
     document.getElementById('inv-x').onclick=invCerrarModal;
+    const bf=document.getElementById('inv-forzar'); if(bf) bf.onclick=()=>invAbrirEliminar(id,{forzar:true});
     const bd=document.getElementById('inv-desact');
     if(bd) bd.onclick=async()=>{
       const aut=await autPropiaOAdmin('Desactivar el producto "'+p.name+'"',{producto:p.name, productoId:String(p.id), motivo:'eliminacion bloqueada por historial'});
@@ -5697,6 +5704,160 @@ async function invEjecutarEliminacion(p,motivo,ver){
   for(const [k,v] of [..._catMap.entries()]) if(k===id||String(v&&v.id)===id) _catMap.delete(k);
   _lastPSync.delete(id); _catProgramarGuardado();
   return true;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  DEPURAR CATÁLOGO (24-oct-2026) — solo administración
+//  Para borrar en bloque productos mal creados (promociones que no
+//  debían existir, duplicados, pruebas). No bloquea por historial:
+//  las ventas guardan su propia copia del nombre, precio, costo,
+//  categoría e ISBN de cada ítem, así que borrar la ficha NO cambia
+//  ventas, caja, facturas ni reportes ya registrados.
+//  Antes de borrar: descarga automática de un respaldo CSV de lo
+//  seleccionado y un solo registro resumen en la Bitácora.
+//  Solo se impide borrar lo que está en una mesa con pedido abierto.
+// ══════════════════════════════════════════════════════════════
+const DEP={abierto:false,q:'',cat:'Todas',filtro:'todos',sel:new Set(),ventas:null,cargandoVentas:false,borrando:false};
+function depUsos(){
+  // Cuántas veces aparece cada producto en ventas (lo que ya está cargado + historial completo si se pidió)
+  const m=new Map();
+  for(const s of S){
+    if(!s||s.anulada) continue;
+    const its=Array.isArray(s.items)?s.items:[];
+    for(const i of its){ const k=String(i.productId??i.prodId??''); if(!k) continue; const o=m.get(k)||{n:0,ult:''}; o.n+=(+i.qty||1); if((s.date||'')>o.ult)o.ult=(s.date||'').slice(0,10); m.set(k,o); }
+  }
+  return m;
+}
+function depEnMesa(){ const ids=new Set(); T.forEach(t=>(t.order||[]).forEach(i=>{ if(i&&i.productId!=null) ids.add(String(i.productId)); })); return ids; }
+function depNombreNorm(n){ return String(n||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
+function depLista(){
+  const usos=DEP.ventas||depUsos(), mesa=depEnMesa();
+  const nombres=new Map(); P.filter(esProdReal).forEach(p=>{ const k=depNombreNorm(p.name); nombres.set(k,(nombres.get(k)||0)+1); });
+  const q=depNombreNorm(DEP.q);
+  return P.filter(esProdReal).map(p=>{
+    const id=String(p.id), u=usos.get(id)||{n:0,ult:''};
+    return {p,id,ventas:u.n,ult:u.ult,mesa:mesa.has(id),dup:(nombres.get(depNombreNorm(p.name))||0)>1,stock:stockTipo(p)==='sin'?null:(+p.stock||0)};
+  }).filter(r=>{
+    if(DEP.cat!=='Todas'&&(r.p.category||'Sin categoría')!==DEP.cat) return false;
+    if(q&&!(depNombreNorm(r.p.name).includes(q)||String(r.p.code||'').toLowerCase().includes(q)||depNombreNorm(r.p.category).includes(q))) return false;
+    if(DEP.filtro==='inactivos'&&r.p.active!==false) return false;
+    if(DEP.filtro==='sinventas'&&r.ventas>0) return false;
+    if(DEP.filtro==='duplicados'&&!r.dup) return false;
+    if(DEP.filtro==='promos'&&!/promo|combo|oferta|2x1|descuento/.test(depNombreNorm(r.p.name+' '+(r.p.category||'')))) return false;
+    return true;
+  }).sort((a,b)=>(a.p.category||'').localeCompare(b.p.category||'')||depNombreNorm(a.p.name).localeCompare(depNombreNorm(b.p.name)));
+}
+function abrirDepurar(){
+  if(MI_ROL!=='admin'){ alert('Solo la administración puede depurar el catálogo.'); return; }
+  DEP.abierto=true; DEP.sel=new Set(); depPintar();
+}
+function depCerrar(){ DEP.abierto=false; const bg=document.getElementById('dep-modal'); if(bg) bg.remove(); }
+function depPintar(){
+  if(!DEP.abierto) return;
+  let bg=document.getElementById('dep-modal');
+  if(!bg){ bg=document.createElement('div'); bg.id='dep-modal'; bg.style.cssText='position:fixed;inset:0;background:rgba(46,37,22,.55);z-index:9996;display:flex;align-items:center;justify-content:center;padding:12px'; document.body.appendChild(bg); }
+  const filas=depLista();
+  const cats=['Todas',...[...new Set(P.filter(esProdReal).map(p=>p.category||'Sin categoría'))].sort()];
+  const visiblesSel=filas.filter(r=>!r.mesa);
+  const todosMarcados=visiblesSel.length>0&&visiblesSel.every(r=>DEP.sel.has(r.id));
+  const MAX=600, mostrar=filas.slice(0,MAX);
+  bg.innerHTML=`<div style="background:#fff;border-radius:14px;width:100%;max-width:1100px;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 12px 32px rgba(0,0,0,.25)">
+    <div style="padding:16px 18px 10px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font-size:16px;font-weight:700">🧹 Depurar catálogo</div>
+        <div style="font-size:11px;color:var(--text3)">Solo administración. Borra fichas mal creadas. Las ventas, la caja y las facturas ya registradas NO cambian: cada venta guarda su propia copia del producto.</div></div>
+        <button class="btn btn-g btn-sm" id="dep-x">Cerrar</button></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">
+        <input id="dep-q" placeholder="Buscar nombre, código o categoría…" value="${esc(DEP.q)}" style="flex:1;min-width:200px;padding:7px 9px;border:1px solid var(--border);border-radius:7px;font-family:inherit">
+        <select id="dep-cat" style="padding:7px;border:1px solid var(--border);border-radius:7px;font-family:inherit">${cats.map(c=>`<option ${c===DEP.cat?'selected':''}>${esc(c)}</option>`).join('')}</select>
+        ${[['todos','Todos'],['promos','Promociones/combos'],['duplicados','Nombre repetido'],['sinventas','Sin ventas'],['inactivos','Inactivos']].map(([k,l])=>`<button class="btn ${DEP.filtro===k?'btn-acc':'btn-g'} btn-sm" data-depf="${k}">${l}</button>`).join('')}
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px">${filas.length} producto(s) en la vista${filas.length>MAX?' (se muestran '+MAX+'; afine la búsqueda)':''} · Ventas contadas ${DEP.ventas?'con <b>todo el historial</b>':DEP.cargandoVentas?'<b>leyendo historial completo…</b>':'con los meses cargados · <button class="btn btn-g btn-sm" id="dep-hist" style="font-size:10px;padding:2px 8px">Contar con todo el historial</button>'}</div>
+    </div>
+    <div style="overflow:auto;flex:1">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="position:sticky;top:0;background:var(--bg3);z-index:1"><tr>
+          <th style="padding:7px;width:30px"><input type="checkbox" id="dep-all" ${todosMarcados?'checked':''} title="Marcar todos los de la vista"></th>
+          <th style="padding:7px;text-align:left">Producto</th><th style="padding:7px;text-align:left">Categoría</th><th style="padding:7px;text-align:right">Precio</th>
+          <th style="padding:7px;text-align:right">Stock</th><th style="padding:7px;text-align:right">Vendidos</th><th style="padding:7px;text-align:left">Estado</th></tr></thead>
+        <tbody>${mostrar.map(r=>`<tr style="border-top:1px solid var(--bg3);${DEP.sel.has(r.id)?'background:var(--rbg)':''}">
+          <td style="padding:6px 7px;text-align:center">${r.mesa?'🔒':`<input type="checkbox" data-depsel="${esc(r.id)}" ${DEP.sel.has(r.id)?'checked':''}>`}</td>
+          <td style="padding:6px 7px"><b>${esc(r.p.name||'(sin nombre)')}</b>${r.p.code?`<span style="color:var(--text3)"> · ${esc(r.p.code)}</span>`:''}${r.dup?' <span class="badge" style="font-size:9px;background:var(--abg);color:var(--amb)">nombre repetido</span>':''}</td>
+          <td style="padding:6px 7px;color:var(--text2)">${esc(r.p.category||'—')}</td>
+          <td style="padding:6px 7px;text-align:right">${fmt(r.p.price||0)}</td>
+          <td style="padding:6px 7px;text-align:right">${r.stock==null?'—':r.stock}</td>
+          <td style="padding:6px 7px;text-align:right">${r.ventas||'—'}${r.ult?`<div style="font-size:10px;color:var(--text3)">últ. ${r.ult}</div>`:''}</td>
+          <td style="padding:6px 7px;font-size:11px">${r.mesa?'<span style="color:var(--red)">En mesa abierta</span>':r.p.active===false?'<span style="color:var(--text3)">Inactivo</span>':'Activo'}</td></tr>`).join('')||'<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3)">Nada que mostrar con estos filtros.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+      <div style="font-size:12px"><b>${DEP.sel.size}</b> seleccionado(s)${DEP.sel.size?` · <button class="btn btn-g btn-sm" id="dep-limpiar" style="font-size:10px;padding:2px 8px">Quitar selección</button>`:''}
+        <div style="font-size:10px;color:var(--text3)">Antes de borrar se descarga un respaldo CSV de lo seleccionado. 🔒 = está en un pedido abierto: cobre o quite el ítem primero.</div></div>
+      <button class="btn" id="dep-go" ${DEP.sel.size&&!DEP.borrando?'':'disabled'} style="background:var(--red);color:#fff;border:none;font-weight:700;${DEP.sel.size&&!DEP.borrando?'':'opacity:.45'}">${DEP.borrando?'Eliminando…':'🗑 Eliminar '+DEP.sel.size+' producto(s)'}</button>
+    </div></div>`;
+  const $d=s=>bg.querySelector(s);
+  $d('#dep-x').onclick=depCerrar;
+  const qi=$d('#dep-q'); let t=null;
+  qi.oninput=()=>{ clearTimeout(t); t=setTimeout(()=>{ DEP.q=qi.value; const pos=qi.selectionStart; depPintar(); const n=document.getElementById('dep-q'); if(n){ n.focus(); try{n.setSelectionRange(pos,pos);}catch(e){} } },250); };
+  $d('#dep-cat').onchange=e=>{ DEP.cat=e.target.value; depPintar(); };
+  bg.querySelectorAll('[data-depf]').forEach(b=>b.onclick=()=>{ DEP.filtro=b.dataset.depf; depPintar(); });
+  bg.querySelectorAll('[data-depsel]').forEach(c=>c.onchange=()=>{ c.checked?DEP.sel.add(c.dataset.depsel):DEP.sel.delete(c.dataset.depsel); depPintar(); });
+  $d('#dep-all').onchange=e=>{ visiblesSel.forEach(r=>e.target.checked?DEP.sel.add(r.id):DEP.sel.delete(r.id)); depPintar(); };
+  $d('#dep-limpiar')&&($d('#dep-limpiar').onclick=()=>{ DEP.sel.clear(); depPintar(); });
+  $d('#dep-hist')&&($d('#dep-hist').onclick=async()=>{
+    DEP.cargandoVentas=true; depPintar();
+    try{ await invCargarHistorialCompleto(); DEP.ventas=depUsos(); }
+    catch(e){ alert('No se pudo leer todo el historial (sin conexión). Se cuentan solo los meses cargados.'); }
+    DEP.cargandoVentas=false; depPintar();
+  });
+  $d('#dep-go').onclick=depEliminar;
+}
+function depRespaldoCSV(rs){
+  const cel=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const cols=['id','code','name','category','subcategory','author','price','cost','stock','active','stockControl','hasVariants'];
+  const txt='﻿'+[cols.concat(['vendidos','json_completo']).map(cel).join(';')]
+    .concat(rs.map(r=>{ const c={...r.p}; delete c.updatedAt; return cols.map(k=>cel(c[k])).concat([cel(r.ventas),cel(JSON.stringify(c))]).join(';'); })).join('\r\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+  a.download='respaldo_productos_eliminados_'+localISO().slice(0,16).replace(/[:T]/g,'-')+'.csv'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+async function depEliminar(){
+  if(MI_ROL!=='admin'){ alert('Solo la administración puede eliminar productos.'); return; }
+  const mesa=depEnMesa();
+  const porId=new Map(P.filter(esProdReal).map(p=>[String(p.id),p]));
+  const usos=DEP.ventas||depUsos();
+  const rs=[...DEP.sel].filter(id=>porId.has(id)&&!mesa.has(id)).map(id=>{ const p=porId.get(id), u=usos.get(id)||{n:0}; return {p,id,ventas:u.n,stock:stockTipo(p)==='sin'?0:(+p.stock||0)}; });
+  if(!rs.length){ alert('No hay productos para eliminar (los que están en mesas abiertas no se pueden borrar).'); return; }
+  const conVentas=rs.filter(r=>r.ventas>0).length, conStock=rs.filter(r=>r.stock>0);
+  let msg='Eliminar '+rs.length+' producto(s) del catálogo.\n\n';
+  msg+='• Las ventas, la caja y las facturas ya registradas NO cambian'+(conVentas?' ('+conVentas+' de estos tienen ventas: seguirán apareciendo en reportes con su nombre)':'')+'.\n';
+  if(conStock.length) msg+='• '+conStock.length+' tienen stock ('+conStock.reduce((a,r)=>a+r.stock,0)+' u.): ese inventario deja de contarse.\n';
+  msg+='• Se descargará un respaldo CSV antes de borrar.\n• No se puede deshacer desde el POS.\n\nEscriba ELIMINAR para confirmar:';
+  const r=prompt(msg,'');
+  if(r==null) return;
+  if(r.trim().toUpperCase()!=='ELIMINAR'){ alert('No se eliminó nada (debe escribir ELIMINAR).'); return; }
+  DEP.borrando=true; depPintar();
+  depRespaldoCSV(rs);
+  // Un solo registro resumen en la Bitácora (id|código|nombre|precio|vendidos)
+  const bid=await bitacora('productos_depurados',{accion:'Depuró el catálogo: eliminó '+rs.length+' producto(s)', total:rs.length,
+    detalle:rs.map(x=>x.id+'|'+(x.p.code||'')+'|'+(x.p.name||'')+'|'+(+x.p.price||0).toFixed(2)+'|'+x.ventas).join(';').slice(0,900000)});
+  if(!bid){ DEP.borrando=false; depPintar(); alert('No se pudo registrar en la Bitácora. No se eliminó nada.'); return; }
+  const ok=[]; let fallo=0, err='';
+  for(let i=0;i<rs.length;i+=400){
+    const lote=rs.slice(i,i+400);
+    try{
+      const b=writeBatch(db); lote.forEach(x=>b.delete(doc(db,PRODUCTOS_COL,x.id)));
+      await conLimite(b.commit(),Math.max(ESPERA_SERVIDOR_MS,15000+40*lote.length));
+      ok.push(...lote);
+    }catch(e){ fallo+=lote.length; err=msgError(e,'eliminar productos'); console.error('depurar',e); }
+  }
+  const ids=new Set(ok.map(x=>x.id));
+  P=P.filter(x=>!ids.has(String(x.id)));
+  for(const [k,v] of [..._catMap.entries()]) if(ids.has(k)||ids.has(String(v&&v.id))) _catMap.delete(k);
+  ids.forEach(id=>_lastPSync.delete(id)); _catProgramarGuardado();
+  if(fallo) bitacora('accion_admin',{accion:'FALLO al eliminar '+fallo+' producto(s) en la depuración: siguen en el catálogo', refBitacora:bid});
+  DEP.sel=new Set(); DEP.borrando=false; depPintar(); render();
+  if(fallo) avisoError(err||('No se pudieron eliminar '+fallo+' producto(s).'));
+  else alert('✓ '+ok.length+' producto(s) eliminados. El respaldo CSV quedó en Descargas y el resumen en la Bitácora.');
 }
 
 // ── Hoja de ingreso de mercaderia (caja y administracion) ──
