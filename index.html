@@ -1509,7 +1509,7 @@ const localISO=d=>{const x=d?new Date(d):new Date();x.setMinutes(x.getMinutes()-
 const today=()=>localISO().slice(0,10);
 // Escapa texto de usuario antes de interpolarlo en HTML (previene inyeccion)
 const esc=v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-const isVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada&&!s.esActaDevolucion&&!s.esCambioPrecio;
+const isVenta=s=>s&&s.date&&!s.esGasto&&!s.esCierre&&!s.esDevolucion&&!s.esCancelacion&&!s.esFactura&&!s.esApertura&&!s.esParcial_done&&!s.esAnulacion&&!s.anulada&&!s.esActaDevolucion&&!s.esCambioPrecio&&!s.esMovCaja;
 
 // ── Ultimo dia con cierre de caja ────────────────────────────
 // Sirve para impedir que se registren gastos/anticipos con fecha anterior
@@ -4735,7 +4735,7 @@ function rCaja(){
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Conteo</div><div style="font-weight:700">${fmt(cr.conteo||0)}</div></div>
               <div style="text-align:center"><div style="color:var(--text3);font-size:10px;margin-bottom:2px">Diferencia</div><div style="font-weight:700;color:${difColor}">${dif>=0?'+':''}${fmt(dif)}</div></div>
             </div>
-            ${cr.v===2?`<div style="font-size:11px;color:var(--text3);margin-top:8px">Fondo ${fmt(cr.inicio||0)} · esperado ${fmt(cr.esperadoEnCaja||0)} · retiro ${fmt(cr.retiro||0)} · quedó ${fmt(cr.fondoSiguiente||0)}${cr.conteoInicial!=null?' · <b style="color:var(--amb)">recontado (primer conteo '+fmt(cr.conteoInicial)+')</b>':''}</div>`:''}
+            ${cr.v===2?`<div style="font-size:11px;color:var(--text3);margin-top:8px">Fondo ${fmt(cr.inicio||0)}${cr.ingresosEfectivo?' · ingresos '+fmt(cr.ingresosEfectivo):''} · esperado ${fmt(cr.esperadoEnCaja||0)} · retiro ${fmt(cr.retiro||0)} · quedó ${fmt(cr.fondoSiguiente||0)}${cr.conteoInicial!=null?' · <b style="color:var(--amb)">recontado (primer conteo '+fmt(cr.conteoInicial)+')</b>':''}</div>`:''}
             ${cr.obs?`<div style="font-size:11px;color:var(--text3);margin-top:8px;padding-top:8px;border-top:.5px solid var(--border)">📝 ${esc(cr.obs)}</div>`:''}
           </div>`;
         }).join('')}
@@ -4778,20 +4778,21 @@ function _recSet(k,v){ try{ localStorage.setItem('madu_rec_'+k,v); }catch(e){} }
 
 function filasReconstruccion(desde,hasta){
   const porDia={};
-  const tocar=d=>porDia[d]=porDia[d]||{dia:d,ventas:0,efectivo:0,gastosEf:0,gastosTot:0,anuladas:0,montoAnulado:0,descuentos:0,pedidos:0};
+  const tocar=d=>porDia[d]=porDia[d]||{dia:d,ventas:0,efectivo:0,ingresosEf:0,gastosEf:0,gastosTot:0,anuladas:0,montoAnulado:0,descuentos:0,pedidos:0};
   S.forEach(x=>{
     if(!x||!x.date) return;
     const d=x.date.slice(0,10);
     if(d<desde||d>hasta) return;
     if(isVenta(x)){ const f=tocar(d); f.ventas+=+x.total||0; f.efectivo+=efectivoDeVenta(x); f.pedidos++; f.descuentos+=+x.descuento||0; }
     else if(x.anulada&&x.items){ const f=tocar(d); f.anuladas++; f.montoAnulado+=+x.total||0; }
+    else if(x.esMovCaja&&x.tipo==='ingreso'&&!x.anulada){ const f=tocar(d); f.ingresosEf+=+x.monto||0; }
     else if(x.esGasto&&!x.anulada){ const f=tocar(d); f.gastosTot+=+x.total||0; if(metodoPago(x.paymentMethod)==='Efectivo') f.gastosEf+=+x.total||0; }
   });
   const cierres={};
   S.forEach(x=>{ if(x&&x.esCierre&&x.date) cjDiasDe(x).forEach(d=>cierres[d]=x); });
   const filas=Object.values(porDia).sort((a,b)=>a.dia.localeCompare(b.dia));
   let acum=0;
-  filas.forEach(f=>{ f.neto=f.efectivo-f.gastosEf; acum+=f.neto; f.acumulado=acum; f.cierre=cierres[f.dia]||null; });
+  filas.forEach(f=>{ f.neto=f.efectivo+f.ingresosEf-f.gastosEf; acum+=f.neto; f.acumulado=acum; f.cierre=cierres[f.dia]||null; });
   return filas;
 }
 
@@ -4807,7 +4808,8 @@ function rReconstruccion(){
   const totEfectivo=filas.reduce((a,f)=>a+f.efectivo,0);
   const totGastosEf=filas.reduce((a,f)=>a+f.gastosEf,0);
   const totVentas=filas.reduce((a,f)=>a+f.ventas,0);
-  const debioAcumular=inicial+totEfectivo-totGastosEf;
+  const totIngresosEf=filas.reduce((a,f)=>a+f.ingresosEf,0);
+  const debioAcumular=inicial+totEfectivo+totIngresosEf-totGastosEf;
   const deberiaHaber=debioAcumular-retiros;
   const diferencia=contado-deberiaHaber;
   const sinCuadre=filas.filter(f=>!f.cierre).length;
@@ -4843,6 +4845,7 @@ function rReconstruccion(){
     <div style="font-size:12.5px;line-height:2">
       <div style="display:flex;justify-content:space-between"><span>Efectivo al inicio</span><span>${fmt(inicial)}</span></div>
       <div style="display:flex;justify-content:space-between"><span>+ Ventas cobradas en efectivo (${filas.length} d\u00edas)</span><span>${fmt(totEfectivo)}</span></div>
+      ${totIngresosEf?`<div style="display:flex;justify-content:space-between"><span>+ Ingresos de efectivo registrados (cambio)</span><span>${fmt(totIngresosEf)}</span></div>`:''}
       <div style="display:flex;justify-content:space-between;color:var(--red)"><span>\u2212 Gastos pagados en efectivo</span><span>${fmt(totGastosEf)}</span></div>
       <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:4px"><span>= Debi\u00f3 acumularse</span><span style="font-weight:700">${fmt(debioAcumular)}</span></div>
       <div style="display:flex;justify-content:space-between;color:var(--red)"><span>\u2212 Dep\u00f3sitos y retiros</span><span>${fmt(retiros)}</span></div>
@@ -5011,13 +5014,14 @@ function cjCalcular(est){
   const piso=cjPiso(est), cub=cjCubiertos();
   // Cierres del sistema anterior: lo registrado antes de ellos, en su dia, ya se cuadro
   const antiguos=cjCierres().filter(c=>c.v!==2);
-  const ventas=[], gastos=[];
+  const ventas=[], gastos=[], ingresos=[];
   S.forEach(x=>{
     if(!x||!x.date||x.date<piso||cub.has(String(x.id))) return;
     const dia=x.date.slice(0,10);
     if(antiguos.some(c=>c.date.slice(0,10)===dia&&x.date<=c.date)) return;
     if(isVenta(x)) ventas.push(x);
     else if(x.esGasto&&!x.anulada&&metodoPago(x.paymentMethod)==='Efectivo') gastos.push(x);
+    else if(x.esMovCaja&&x.tipo==='ingreso'&&!x.anulada) ingresos.push(x);
   });
   const porMetodo={}; let efV=0, tot=0;
   ventas.forEach(v=>{
@@ -5027,13 +5031,14 @@ function cjCalcular(est){
     } else { const m=metodoPago(v.paymentMethod)||'Otros'; porMetodo[m]=(porMetodo[m]||0)+(+v.total||0); }
   });
   const efG=gastos.reduce((a,g)=>a+(+g.total||0),0);
+  const efI=ingresos.reduce((a,m)=>a+(+m.monto||0),0);
   // Ventas en efectivo YA cuadradas en un turno anterior y anuladas durante este:
   // si se devolvio el dinero, salio de esta caja. Se avisa; no se resta solo.
   const desdeAp=est.ap?est.ap.date:piso;
   const anulPrevias=S.filter(x=>x&&x.anulada&&cub.has(String(x.id))&&(x.fechaAnulacion||'')>=desdeAp&&efectivoDe(x)>0);
-  ventas.sort((a,b)=>a.date.localeCompare(b.date)); gastos.sort((a,b)=>a.date.localeCompare(b.date));
-  return {piso,ventas,gastos,efV:_r2(efV),efG:_r2(efG),tot:_r2(tot),porMetodo,anulPrevias,
-          ids:[...ventas,...gastos].map(x=>String(x.id))};
+  ventas.sort((a,b)=>a.date.localeCompare(b.date)); gastos.sort((a,b)=>a.date.localeCompare(b.date)); ingresos.sort((a,b)=>a.date.localeCompare(b.date));
+  return {piso,ventas,gastos,ingresos,efV:_r2(efV),efG:_r2(efG),efI:_r2(efI),tot:_r2(tot),porMetodo,anulPrevias,
+          ids:[...ventas,...gastos,...ingresos].map(x=>String(x.id))};
 }
 // Fondo que quedo en el ultimo cierre (lo que deberia encontrarse al abrir)
 function cjFondoEsperado(){
@@ -5095,7 +5100,7 @@ function cjDenomAttach(mc){
 }
 function cjPasosHTML(est){
   const res=cjD.fase==='resultado';
-  const p=[['Apertura',est.ap?'Fondo '+fmt(+est.ap.fondo||0):'Turno anterior',1],['Movimientos','Ventas y gastos del turno',1],['Conteo de efectivo',res?'Contado '+fmt(_cjNum(cjD.conteo)||0):'Cuenta billetes y monedas',res?1:2],['Cuadre y cierre','Confirma y bloquea el turno',res?2:0]];
+  const p=[['Apertura',est.ap?'Fondo '+fmt(+est.ap.fondo||0):'Turno anterior',1],['Movimientos','Ventas, gastos e ingresos',1],['Conteo de efectivo',res?'Contado '+fmt(_cjNum(cjD.conteo)||0):'Cuenta billetes y monedas',res?1:2],['Cuadre y cierre','Confirma y bloquea el turno',res?2:0]];
   return `<div class="cj-pasos">${p.map(([t,d,s],i)=>`<div class="cj-paso ${s===1?'ok':s===2?'act':''}"><span class="cj-pn">${s===1?'✓':i+1}</span><div><b>${t}</b><small>${esc(d)}</small></div></div>`).join('<i class="cj-pl"></i>')}</div>`;
 }
 function rCuadre(){
@@ -5123,7 +5128,7 @@ function rCuadre(){
       <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px;font-size:12px;line-height:1.55">
         <b>1.</b> Cuenta <b>todo</b> el efectivo de la caja: billetes, monedas y el fondo.<br>
         <b>2.</b> Anota cuántos billetes y monedas hay de cada valor (o escribe el total). No verás cuánto "debería haber" hasta guardar tu conteo.<br>
-        <span style="color:var(--text3)">${nV} venta(s) y ${nG} gasto(s) en efectivo entran en este cierre.</span>
+        <span style="color:var(--text3)">${nV} venta(s), ${nG} gasto(s) en efectivo${c.ingresos.length?' y '+c.ingresos.length+' ingreso(s) de efectivo':''} entran en este cierre.</span>
       </div>
       ${cjDenomHTML()}
       <div class="fg" style="margin-bottom:12px"><label>Efectivo contado ($)</label>
@@ -5132,7 +5137,7 @@ function rCuadre(){
       ${pend&&MI_ROL==='admin'?`<button class="btn btn-g btn-full btn-sm" style="margin-top:10px" id="cj-sinconteo">Cerrar sin conteo (solo administración, queda en la bitácora)</button>`:''}`;
   } else {
     const conteo=_cjNum(cjD.conteo);
-    const esperado=_r2((fondo||0)+c.efV-c.efG);
+    const esperado=_r2((fondo||0)+c.efV+c.efI-c.efG);
     const dif=_r2(conteo-esperado);
     const ok=Math.abs(dif)<0.005, peq=Math.abs(dif)<=CJ_TOL;
     const col=ok?'var(--grn)':dif>0?'var(--blu)':'var(--red)';
@@ -5142,12 +5147,14 @@ function rCuadre(){
     const otros=Object.entries(c.porMetodo).filter(([m])=>m!=='Efectivo');
     const det=cjD.verDetalle?`<div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:var(--rs);margin-top:6px">
         ${c.ventas.filter(v=>efectivoDe(v)>0).map(v=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;border-bottom:.5px solid var(--border)"><span>${_cjHora(v.date)} · ${esc(v.tableName||'venta')}${v.pagosParciales&&v.pagosParciales.length?' (parte en efectivo)':''}</span><span>+${fmt(efectivoDe(v))}</span></div>`).join('')}
+        ${c.ingresos.map(m=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;border-bottom:.5px solid var(--border);color:var(--blu)"><span>${_cjHora(m.date)} · Ingreso: ${esc(m.motivo||'cambio')} (${esc(m.user||'')})</span><span>+${fmt(m.monto)}</span></div>`).join('')}
         ${c.gastos.map(g=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;border-bottom:.5px solid var(--border);color:var(--red)"><span>${_cjHora(g.date)} · ${esc(g.desc||'gasto')}</span><span>−${fmt(g.total)}</span></div>`).join('')}
       </div>`:'';
     body=`${fondoHTML}
       <div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px">
         ${cjFila('Fondo inicial',fmt(fondo||0))}
         ${cjFila('+ Ventas en efectivo ('+c.ventas.filter(v=>efectivoDe(v)>0).length+')',fmt(c.efV))}
+        ${c.ingresos.length?cjFila('+ Ingresos de efectivo ('+c.ingresos.length+')',fmt(c.efI)):''}
         ${cjFila('− Gastos en efectivo ('+nG+')','<span style="color:var(--red)">−'+fmt(c.efG)+'</span>')}
         ${cjFila('<b>Debería haber</b>','<b>'+fmt(esperado)+'</b>')}
         ${cjFila('Contaste','<b>'+fmt(conteo)+'</b>',';border-bottom:none')}
@@ -5170,7 +5177,64 @@ function rCuadre(){
         <button class="btn btn-w" style="flex:2;padding:10px" id="cj-cerrar">Confirmar cierre</button>
       </div>`;
   }
-  return `${avisoSinCierre()}${cjPasosHTML(est)}<div class="card"><div style="font-weight:700;font-size:13px;margin-bottom:12px">${cjD.fase==='resultado'?'Paso 4 · Cuadre y cierre':'Paso 3 · Conteo de efectivo'}</div>${cab}${body}</div>`;
+  return `${avisoSinCierre()}${cjPasosHTML(est)}${cjD.fase!=='resultado'?cjIngresosHTML(c):''}<div class="card"><div style="font-weight:700;font-size:13px;margin-bottom:12px">${cjD.fase==='resultado'?'Paso 4 · Cuadre y cierre':'Paso 3 · Conteo de efectivo'}</div>${cab}${body}</div>`;
+}
+
+// ── Ingreso de efectivo durante el turno (1-nov-2026) ──
+// Dinero que entra a la caja sin ser venta: cambio/sencillo que trae la
+// administración, reposición del fondo, etc. Suma al efectivo esperado.
+// Registrarlo protege a la cajera: si no se registra, aparece como sobrante.
+// La caja crea el registro; solo administración puede anularlo.
+function cjIngresosHTML(c){
+  const lista=c.ingresos.map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11.5px;padding:5px 0;border-bottom:.5px solid var(--border)">
+      <span>${_cjHora(m.date)} · ${esc(m.motivo||'Cambio')} <span style="color:var(--text3)">· ${esc(m.user||'')}</span></span>
+      <span style="display:flex;gap:8px;align-items:center"><b style="color:var(--blu)">+${fmt(m.monto)}</b>${MI_ROL==='admin'?`<a href="#" data-cjanul="${esc(m.id)}" style="color:var(--red);font-size:11px">Anular</a>`:''}</span></div>`).join('');
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-weight:700;font-size:13px">Ingreso de efectivo a la caja</div>
+      ${c.ingresos.length?`<span style="font-size:12px;color:var(--blu);font-weight:700">+${fmt(c.efI)}</span>`:''}</div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px">Úsalo cuando entra dinero que <b>no es una venta</b>: cambio o sencillo, reposición del fondo. Se suma a lo que debería haber en caja.</div>
+    ${lista?`<div style="margin-bottom:10px">${lista}</div>`:''}
+    <div class="fgrid">
+      <div class="fg"><label>Monto que ingresa ($)</label><input id="cj-ing-monto" type="number" step="0.01" min="0" value="${esc(cjD.ingMonto||'')}" placeholder="0.00"></div>
+      <div class="fg"><label>Motivo</label><input id="cj-ing-motivo" value="${esc(cjD.ingMotivo||'')}" placeholder="Cambio / sencillo"></div>
+    </div>
+    <button class="btn btn-acc btn-full btn-sm" id="cj-ing-reg" style="margin-top:6px">+ Registrar ingreso</button>
+    ${MI_ROL!=='admin'?'<div style="font-size:10.5px;color:var(--text3);margin-top:6px">Si te equivocas en el monto, pide a administración que lo anule y regístralo de nuevo.</div>':''}
+  </div>`;
+}
+async function cjRegistrarIngreso(){
+  if(_cjOcupado) return;
+  const est=estadoCaja();
+  if(est.e==='cerrada'){ alert('Abre la caja antes de registrar un ingreso de efectivo.'); render(); return; }
+  const m=_cjNum(cjD.ingMonto);
+  if(isNaN(m)||m<=0){ alert('Escribe el monto que ingresa a la caja.'); return; }
+  if(m>2000&&!confirm('¿Seguro? Vas a registrar un ingreso de '+fmt(m)+'.')) return;
+  const motivo=(cjD.ingMotivo||'').trim()||'Cambio / sencillo';
+  if(!confirm('¿Registrar el ingreso de '+fmt(m)+' a la caja?\n\nMotivo: '+motivo+'\n\nQuedará en la bitácora y solo administración puede anularlo.')) return;
+  _cjOcupado=true;
+  try{
+    const rec={id:'movcaja'+Date.now(),esMovCaja:true,tipo:'ingreso',monto:_r2(m),motivo,
+      aperturaId:est.ap?est.ap.id:null,date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
+    const ok=await saveVenta(rec);
+    bitacora('ingreso_caja',{accion:'Registro un ingreso de efectivo a la caja de '+fmt(m)+' ('+motivo+')',monto:_r2(m),obs:motivo});
+    cjD.ingMonto=''; cjD.ingMotivo='';
+    render();
+    if(ok) alert('✓ Ingreso de '+fmt(m)+' registrado. Ya se suma a lo que debería haber en caja.');
+  } finally { _cjOcupado=false; }
+}
+async function cjAnularIngreso(id){
+  if(MI_ROL!=='admin') return;
+  const m=S.find(x=>x&&String(x.id)===String(id)&&x.esMovCaja);
+  if(!m||m.anulada) return;
+  if(cjCubiertos().has(String(m.id))){ alert('Ese ingreso ya entró en un cierre de caja: no se puede anular.'); return; }
+  const motivo=(prompt('Motivo para anular el ingreso de '+fmt(m.monto)+' (obligatorio):')||'').trim();
+  if(motivo.length<4){ alert('Debes indicar el motivo.'); return; }
+  const rec=Object.assign({},m,{anulada:true,fechaAnulacion:localISO(),anuladaPor:authUser(),motivoAnulacion:motivo});
+  const ok=await saveVenta(rec);
+  bitacora('anular_ingreso_caja',{accion:'Anulo el ingreso de efectivo de '+fmt(m.monto)+' ('+(m.motivo||'')+'): '+motivo,monto:m.monto,obs:motivo});
+  render();
+  if(ok) alert('✓ Ingreso anulado.');
 }
 
 function rCjApertura(){
@@ -5226,6 +5290,10 @@ function attachCuadre(mc){
   mc.querySelector('#cj-cerrar')?.addEventListener('click',()=>cjCerrar(false));
   mc.querySelector('#cj-sinconteo')?.addEventListener('click',()=>cjCerrar(true));
   mc.querySelector('#cj-abrir')?.addEventListener('click',cjAbrir);
+  mc.querySelector('#cj-ing-monto')?.addEventListener('input',e=>{cjD.ingMonto=e.target.value;});
+  mc.querySelector('#cj-ing-motivo')?.addEventListener('input',e=>{cjD.ingMotivo=e.target.value;});
+  mc.querySelector('#cj-ing-reg')?.addEventListener('click',cjRegistrarIngreso);
+  mc.querySelectorAll('[data-cjanul]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();cjAnularIngreso(a.dataset.cjanul);}));
 }
 
 let _cjOcupado=false;
@@ -5259,7 +5327,7 @@ async function cjCerrar(sinConteo){
   const c=cjCalcular(est);
   let fondo=est.ap?(+est.ap.fondo||0):_cjNum(cjD.fondoDia);
   if(isNaN(fondo)) fondo=0;
-  const esperado=_r2(fondo+c.efV-c.efG);
+  const esperado=_r2(fondo+c.efV+c.efI-c.efG);
   let conteo=null, dif=null, retiro=0, obs=(cjD.obs||'').trim(), autor=null, motivo='';
   if(sinConteo){
     autor=await pedirAutorizacionAdmin('Cerrar la caja del '+est.dia+' sin conteo');
@@ -5288,7 +5356,7 @@ async function cjCerrar(sinConteo){
     const ahora=localISO();
     const rec={id:'cierre'+Date.now(),esCierre:true,v:2,aperturaId:ap.id,desde:ap.desde||ap.date,hasta:ahora,date:ahora,
       inicio:fondo,sueltos:0,conteo,conteoInicial:(cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo)?cjD.conteoInicial:null,
-      efectivoEsperado:c.efV,gastosEfectivo:c.efG,esperadoEnCaja:esperado,diferencia:dif,
+      efectivoEsperado:c.efV,gastosEfectivo:c.efG,ingresosEfectivo:c.efI,nIngresosEf:c.ingresos.length,esperadoEnCaja:esperado,diferencia:dif,
       retiro,fondoSiguiente:sinConteo?null:_r2(conteo-retiro),
       desglose:sinConteo?null:cjDesglose(),
       porMetodo:Object.fromEntries(Object.entries(c.porMetodo).map(([k,v])=>[k,_r2(v)])),
