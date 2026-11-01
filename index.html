@@ -2229,7 +2229,7 @@ function rPOS(){
               ${p.hasItems?`<span style="font-weight:700;font-size:15px">${fmt(p.total)}</span>`:`<span style="font-size:12px;color:var(--text3)">sin ítems</span>`}
             </div>
             ${p.hasItems?`<div style="font-size:11px;color:var(--text2);line-height:1.6;margin-bottom:10px">${p.items.map(i=>`<div style="display:flex;justify-content:space-between"><span>${i.qty}× ${esc(i.name)}${i.variant?' <span style="color:var(--text3)">('+i.variant+')</span>':''}</span><span style="color:var(--text3)">${fmt(i.price*i.qty)}</span></div>`).join('')}</div>
-            <button class="btn btn-ok" style="width:100%;padding:10px;font-size:13px" data-cobrar-persona="${p.num}">Cobrar Persona ${p.num} · ${fmt(p.total)}</button>`:''}
+            <div style="display:flex;gap:6px"><button class="btn btn-g" style="padding:10px;font-size:12px" data-precuenta-persona="${p.num}" title="Precuenta de Persona ${p.num}">🖨</button><button class="btn btn-ok" style="flex:1;padding:10px;font-size:13px" data-cobrar-persona="${p.num}">Cobrar Persona ${p.num} · ${fmt(p.total)}</button></div>`:''}
           </div>`).join('')}
           ${sinAsignar.length>0?`<div style="padding:10px 12px;margin-bottom:8px;border-radius:10px;background:var(--abg);border:1.5px solid var(--abrd)">
             <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:4px">⚠ Sin asignar · ${fmt(totSinAsignar)}</div>
@@ -2238,6 +2238,7 @@ function rPOS(){
           </div>`:''}
           <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px;display:flex;gap:6px">
             <button class="btn btn-b btn-sm" id="bcomanda" style="flex:1">${yaEnviado?'+ Comanda':'Comanda'}</button>
+            <button class="btn btn-g btn-sm" id="bprecuenta" style="flex:1" title="Precuenta de toda la mesa">🖨 Precuenta</button>
             <button class="btn" style="flex:1;padding:9px;font-size:11px;background:#dbeafe;color:#1a3f8b;border:1px solid #93c5fd" id="bfactura">🧾 Factura</button>
             <button class="btn btn-ok" style="flex:2;padding:9px" id="bcobrar">Cobrar todo ${fmt(tot)}</button>
           </div>
@@ -2251,6 +2252,7 @@ function rPOS(){
           </div>
           <div style="display:flex;gap:6px;margin-top:5px">
             <button class="btn btn-g" style="flex:1;font-size:11px" id="bsplit">Cobro parcial</button>
+            <button class="btn btn-g" style="flex:1;font-size:11px" id="bprecuenta" title="Imprime la cuenta para el cliente antes de cobrar (no es comprobante de venta)">🖨 Precuenta</button>
             <button class="btn" style="flex:1;font-size:11px;background:#dbeafe;color:#1a3f8b;border:1px solid #93c5fd;font-weight:600" id="bfactura">🧾 Factura</button>
           </div>
         </div>`;
@@ -2419,6 +2421,8 @@ function attachPOS(){
   // Cobro
   mc.querySelector('#bcobrar')?.addEventListener('click',()=>{if(!cajaPuedeCobrar())return;cobConf=true;modoParcial=false;pagosParciales=[];itemSel=null;render();});
   mc.querySelector('#bscan')?.addEventListener('click',()=>openScanner());
+  mc.querySelector('#bprecuenta')?.addEventListener('click',()=>{ const t=T.find(x=>x.id===selT); if(t) imprimirPrecuenta(t); });
+  mc.querySelectorAll('[data-precuenta-persona]').forEach(el=>el.addEventListener('click',()=>{ const t=T.find(x=>x.id===selT); if(t) imprimirPrecuenta(t,+el.dataset.precuentaPersona); }));
   mc.querySelector('#bfactura')?.addEventListener('click',()=>{
     const t=T.find(x=>x.id===selT);
     const ref=t?{mesa:t.name,total:t.order.reduce((a,i)=>a+i.price*i.qty,0),items:t.order.map(i=>({...i}))}:null;
@@ -2728,6 +2732,49 @@ function imprimirComanda(items, mesa, esAdicional){
   });
   b+='<div class="line"></div>';
   printViaIframe(b);
+}
+
+// ── Precuenta (1-nov-2026) ──
+// Cuenta que se entrega al cliente ANTES de cobrar. No es comprobante de venta
+// y no registra cobro. Queda en la bitacora (mesa, total y n.º de impresión):
+// una precuenta seguida de ítems quitados de la mesa es una señal que revisar.
+function imprimirPrecuenta(t, persona){
+  if(!t||!t.order||!t.order.length){ alert('La mesa no tiene ítems.'); return; }
+  const src=persona?t.order.filter(i=>i.persona===persona):t.order;
+  if(!src.length){ alert('Persona '+persona+' no tiene ítems asignados.'); return; }
+  const g={};
+  src.forEach(i=>{ const k=[i.name,i.variant||'',+i.price||0].join('|'); if(!g[k]) g[k]={name:i.name,variant:i.variant,price:+i.price||0,qty:0}; g[k].qty+=(+i.qty||0); });
+  const items=Object.values(g).filter(i=>i.qty>0);
+  const total=_r2(items.reduce((a,i)=>a+i.price*i.qty,0));
+  const nUnid=items.reduce((a,i)=>a+i.qty,0);
+  window._precuentaN=window._precuentaN||{};
+  const key=String(t.id)+(persona?'-p'+persona:'');
+  const n=(window._precuentaN[key]||0)+1; window._precuentaN[key]=n;
+  const now=new Date();
+  let b='';
+  b+='<div class="c b" style="font-size:13pt">LA MADRIGUERA</div>';
+  b+='<div class="c">Cafe-Libreria - Urdesa Central</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="c b" style="font-size:12pt">PRECUENTA'+(n>1?' ('+n+')':'')+'</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="b">'+sanitize(t.name)+(persona?' · Persona '+persona:'')+'</div>';
+  b+='<div>Fecha: '+now.toLocaleDateString('es-EC')+' '+now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})+'</div>';
+  b+='<div>Atiende: '+sanitize(turnoUser)+'</div>';
+  b+='<div class="line"></div>';
+  items.forEach(function(i){
+    var nm=sanitize(i.name)+(i.variant?' ('+sanitize(i.variant)+')':'');
+    b+='<div class="row"><span>'+i.qty+'x '+nm+(i.qty>1?'<br><span style="font-size:9pt">  c/u $'+i.price.toFixed(2)+'</span>':'')+'</span><span>$'+(i.price*i.qty).toFixed(2)+'</span></div>';
+  });
+  b+='<div class="line"></div>';
+  b+='<div class="row"><span>'+nUnid+' item(s)</span><span></span></div>';
+  b+='<div class="row b" style="font-size:12pt"><span>TOTAL A PAGAR</span><span>$'+total.toFixed(2)+'</span></div>';
+  b+='<div style="font-size:9pt">Precios incluyen IVA cuando aplica.</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="c b">NO ES COMPROBANTE DE VENTA</div>';
+  b+='<div class="c" style="font-size:9pt">Si necesitas factura con tus datos, indicalo al pagar.</div>';
+  b+='<div class="c" style="margin-top:4px">Gracias por tu visita!</div>';
+  printViaIframe(b);
+  try{ bitacora('precuenta',{accion:'Imprimio precuenta'+(n>1?' ('+n+')':'')+' de '+(t.name||'mesa')+(persona?' · Persona '+persona:'')+' por '+fmt(total),monto:total,mesa:t.name||'',persona:persona||null,impresion:n}); }catch(e){}
 }
 
 function imprimirTicket(t){
