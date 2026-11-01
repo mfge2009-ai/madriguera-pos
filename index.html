@@ -454,7 +454,6 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
           <button class="fac-tipo-btn" data-tipo="Cédula" style="padding:8px;border-radius:7px;border:1.5px solid #ddd;background:#f8f8f8;font-size:12px;cursor:pointer;font-family:inherit">Cédula</button>
           <button class="fac-tipo-btn" data-tipo="RUC" style="padding:8px;border-radius:7px;border:1.5px solid #ddd;background:#f8f8f8;font-size:12px;cursor:pointer;font-family:inherit">RUC</button>
           <button class="fac-tipo-btn" data-tipo="Pasaporte" style="padding:8px;border-radius:7px;border:1.5px solid #ddd;background:#f8f8f8;font-size:12px;cursor:pointer;font-family:inherit">Pasaporte</button>
-          <button class="fac-tipo-btn" data-tipo="Consumidor Final" style="padding:8px;border-radius:7px;border:1.5px solid #ddd;background:#f8f8f8;font-size:12px;cursor:pointer;font-family:inherit">Consumidor Final</button>
         </div>
       </div>
       <div id="fac-num-div">
@@ -8677,7 +8676,7 @@ function iniAlertas(){
       const ids=new Set(SRI_F.map(f=>String(f.ventaId))), cola=sriCola();
       const desde=new Date(); desde.setDate(desde.getDate()-2); const dt=localISO(desde).slice(0,10);
       const sin=S.filter(s=>isVenta(s)&&(s.date||'')>=dt&&!ids.has(String(s.id))&&!cola.some(c=>c.ventaId===String(s.id)));
-      if(sin.length) add('media',sin.length+' venta(s) cobrada(s) sin comprobante','Últimos 2 días · '+fmt(sin.reduce((a,s)=>a+(+s.total||0),0))+'. Toda venta debe tener factura o comprobante.','Facturar',()=>irA('facturas'),'facturas');
+      if(false&&sin.length) add('media',sin.length+' venta(s) cobrada(s) sin comprobante','Últimos 2 días · '+fmt(sin.reduce((a,s)=>a+(+s.total||0),0))+'. Toda venta debe tener factura o comprobante.','Facturar',()=>irA('facturas'),'facturas');
     } else if(admin && view==='inicio' && !_iniSriPedido && !sriCargando){
       _iniSriPedido=true;
       setTimeout(()=>{ sriCargarFacturas().then(()=>{ if(view==='inicio') render(); else actualizarNavBadges(); }); },0);
@@ -9071,10 +9070,7 @@ function sriCedulaValida(c){
 }
 function sriValidarComprador(c, total){
   if(!c.tipo) return 'Selecciona el tipo de identificación.';
-  if(c.tipo==='Consumidor Final'){
-    if(total > sriLimiteCF()) return 'Las facturas de más de $'+sriLimiteCF()+' deben llevar los datos del comprador.';
-    return '';
-  }
+  if(c.tipo==='Consumidor Final') return 'No se emiten facturas a consumidor final. Ingresa los datos del comprador (cédula, RUC o pasaporte).';
   const id=(c.identificacion||'').replace(/\s+/g,'').toUpperCase();
   if(!c.nombre) return 'Ingresa el nombre o razón social.';
   if(c.tipo==='Cédula' && !sriCedulaValida(id)) return 'La cédula no es válida (revisa los 10 dígitos).';
@@ -9379,7 +9375,7 @@ function sriKpisHTML(k){
   const c=(t,v,s,col)=>`<div class="scard"><div class="slbl">${t}</div><div class="sval"${col?` style="color:${col}"`:''}>${v}</div><div class="ssub">${s}</div></div>`;
   return `<div class="sg4" style="margin-bottom:12px">
     ${c('Facturado hoy',sriUSD(k.facHoy),k.nFac+' factura(s) autorizada(s)'+(k.nNc?' · NC −'+sriUSD(k.ncHoy):''))}
-    ${c('Ventas sin comprobante hoy',sriUSD(k.sin),k.nSin?(k.nSin+' venta(s) · '+pct+'% de lo vendido'):'Todo lo vendido hoy tiene comprobante',k.nSin?'var(--red)':'var(--grn)')}
+    ${c('Consumidor final hoy (sin factura)',sriUSD(k.sin),k.nSin?(k.nSin+' venta(s) · '+pct+'% de lo vendido'):'Sin ventas a consumidor final hoy','inherit')}
     ${c('Devueltas o no autorizadas',String(k.rech),k.tram?(k.tram+' en trámite con el SRI'):'Ninguna en trámite',k.rech?'var(--red)':'')}
     ${c('Correo (RIDE) sin entregar',String(k.corr),'Facturas autorizadas con correo pendiente o fallido',k.corr?'var(--amb)':'')}
   </div>`;
@@ -9425,17 +9421,17 @@ function sriBrechaHTML(){
   const sin=sinL.reduce((a,v)=>a+sriCent(v.total),0), con=vendido-sin, pct=vendido?Math.round(sin*1000/vendido)/10:0;
   const per=[[1,'Hoy'],[2,'2 días'],[7,'7 días']];
   return `<div class="card" id="sri-brecha" style="margin-bottom:12px">
-    <div class="rb" style="gap:8px;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:14px">Ventas cobradas sin comprobante</b>
+    <div class="rb" style="gap:8px;flex-wrap:wrap;margin-bottom:6px"><b style="font-size:14px">Ventas a consumidor final (sin factura)</b>
       <div class="inv-vistas">${per.map(([n,t])=>`<button class="inv-vista${sriBrechaDias===n?' on':''}" data-sri-dias="${n}">${t}</button>`).join('')}</div></div>
     <div class="sri-ecu"><span>Vendido <b>${sriUSD(vendido)}</b></span><span>−</span><span>con comprobante <b>${sriUSD(con)}</b></span><span>=</span>
-      <span class="${sin?'mal':'ok'}">sin comprobante <b>${sriUSD(sin)}</b>${vendido?' ('+pct.toString().replace('.',',')+'%)':''}</span></div>
-    <div style="font-size:11.5px;color:var(--text2);margin:4px 0 8px">Toda venta cobrada debe tener factura. Se emite como consumidor final (hasta $${sriLimiteCF()}) o con los datos del cliente; la venta ya está cobrada y no se vuelve a cobrar.</div>
+      <span>consumidor final <b>${sriUSD(sin)}</b>${vendido?' ('+pct.toString().replace('.',',')+'%)':''}</span></div>
+    <div style="font-size:11.5px;color:var(--text2);margin:4px 0 8px">No se emite factura a consumidor final. Si un cliente pide factura, usa «Facturar con datos» con su cédula, RUC o pasaporte; la venta ya está cobrada y no se vuelve a cobrar.</div>
     ${sinL.length?sinL.slice(0,60).map(s=>{ const fr=rech.get(String(s.id));
       return `<div class="mrow" style="margin-top:5px;gap:8px"><div style="min-width:0;flex:1;font-size:12px"><b>${esc(s.tableName||'Venta')}</b> · ${esc((s.date||'').replace('T',' ').slice(0,16))}
         <div style="font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((s.items||[]).map(i=>(i.qty||1)+'× '+i.name).join(', '))}</div></div>
         <span style="font-weight:700;font-size:13px">${fmt(s.total)}</span>
-        ${fr?`<button class="btn btn-w btn-sm" data-sri-verf="${esc(fr.id)}">Factura ${esc((SRI_ETQ[fr.estado]||[fr.estado])[0]).toLowerCase()} · ver</button>`:`<button class="btn btn-b btn-sm" data-sri-facturar="${esc(s.id)}">Facturar</button>`}</div>`; }).join('')
-      :`<div style="padding:12px;text-align:center;color:var(--grn);font-size:13px">✓ Todas las ventas del período tienen comprobante.</div>`}
+        ${fr?`<button class="btn btn-w btn-sm" data-sri-verf="${esc(fr.id)}">Factura ${esc((SRI_ETQ[fr.estado]||[fr.estado])[0]).toLowerCase()} · ver</button>`:`<button class="btn btn-b btn-sm" data-sri-facturar="${esc(s.id)}">Facturar con datos</button>`}</div>`; }).join('')
+      :`<div style="padding:12px;text-align:center;color:var(--grn);font-size:13px">No hay ventas a consumidor final en el período.</div>`}
     ${sinL.length>60?`<div style="font-size:11px;color:var(--text3);margin-top:6px">Se muestran 60 de ${sinL.length}.</div>`:''}
   </div>`;
 }
@@ -10098,12 +10094,14 @@ function ivaAbiertoGuardado(){ if(ivaAbierto===null){ try{ ivaAbierto = localSto
 const ivaC = x => Math.round((+x||0)*100);
 const ivaD = c => (c<0?'-':'')+'$'+(Math.abs(c)/100).toFixed(2);
 function ivaFechaISO(ddmmyyyy){ const m=String(ddmmyyyy||'').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m?m[3]+'-'+m[2]+'-'+m[1]:''; }
+// 31-oct-2026: solo la comida (Platos fuertes, Postres) y Bebidas graban IVA 15%.
+const IVA_CAT_DEF = {'Platos fuertes':'IVA15','Postres':'IVA15','Bebidas':'IVA15','Café':'IVA0','Bubble Tea':'IVA0','Bebidas con alcohol':'IVA0','Taller & Merch':'IVA0','Libros':'IVA0','Consignados':'IVA0'};
 function ivaClaseItem(it){
   const p = P.find(x=>x.id===it.productId);
   if(p && p.claseIVA) return p.claseIVA;
   const cat = catDeItem(it);
-  const porCat = (sriInfo && sriInfo.ivaPorCategoria) || {Libros:'IVA0', Consignados:'IVA0'};
-  return porCat[cat] || (/libro|consign/i.test(cat)?'IVA0':'IVA15');
+  const porCat = (sriInfo && sriInfo.ivaPorCategoria) || IVA_CAT_DEF;
+  return porCat[cat] || IVA_CAT_DEF[cat] || 'IVA0';
 }
 
 async function ivaCalcular(mes){
