@@ -1179,6 +1179,15 @@ function attachBitacora(){
   });
 }
 let sq='',scat='Todos';
+// Buscador unificado: sin tildes ni mayúsculas, varias palabras en cualquier orden,
+// busca en nombre, código/ISBN (con o sin guiones), autor, editorial, subcategoría y categoría.
+function _normB(s){ return String(s??'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim(); }
+function buscaCoincide(p,q){
+  const pal=_normB(q).split(' ').filter(Boolean); if(!pal.length) return true; if(!p) return false;
+  const txt=_normB([p.name,p.code,p.isbn,p.author,p.editorial,p.proveedor,p.subcategory,p.category].filter(v=>v!=null&&v!=='').join(' '));
+  const comp=txt.replace(/ /g,'');
+  return pal.every(w=>txt.includes(w)||comp.includes(w));
+}
 let vtarget=null,vsize='Mediano',vmilk='Entera';
 
 let _writing=false;
@@ -2125,17 +2134,11 @@ function rPOS(){
   let filtered=active;
   if(scat!=='Todos') filtered=filtered.filter(p=>p.category===scat);
   if(sq.trim()){
-    const q=sq.trim().toLowerCase();
-    filtered=filtered.filter(p=>
-      p.name.toLowerCase().includes(q)||
-      (p.code&&p.code.toLowerCase().includes(q))||
-      (p.author&&p.author.toLowerCase().includes(q))||
-      (p.subcategory&&p.subcategory.toLowerCase().includes(q))
-    );
+    filtered=filtered.filter(p=>buscaCoincide(p,sq));
   }
 
   const rows=filtered.length===0
-    ?`<div class="nores">Sin resultados${sq?` para "${sq}"`:''}</div>`
+    ?`<div class="nores">Sin resultados${sq?` para "${esc(sq)}"`:''}</div>`
     :filtered.map(p=>{
       const [bg,tx]=(CAT_COLORS[p.category]||'#f0ede6|#666').split('|');
       const meta=p.category==='Libros'
@@ -2292,7 +2295,7 @@ function rPOS(){
           <div class="swr" style="display:flex;gap:6px;align-items:center">
             <div style="position:relative;flex:1">
               <span class="sic">🔍</span>
-              <input id="si" type="text" placeholder="Buscar nombre, ISBN, autor o escanea código..." value="${sq}" autocomplete="off" autocorrect="off">
+              <input id="si" type="text" placeholder="Buscar nombre, ISBN, autor o escanea código..." value="${esc(sq)}" autocomplete="off" autocorrect="off">
             </div>
             <button id="bscan" title="Escanear código de barras" style="padding:8px 10px;border-radius:var(--rs);border:1.5px solid var(--b2);background:var(--bg3);cursor:pointer;font-size:16px;flex-shrink:0;line-height:1" >📷</button>
           </div>
@@ -3108,16 +3111,10 @@ function rResults(){
     filtered=active.filter(p=>topNames.includes(p.name)).sort((a,b)=>(ventaCount[b.name]||0)-(ventaCount[a.name]||0));
   } else if(scat!=='Todos')filtered=filtered.filter(p=>p.category===scat);
   if(sq.trim()){
-    const q=sq.trim().toLowerCase();
-    filtered=filtered.filter(p=>
-      p.name.toLowerCase().includes(q)||
-      (p.code&&p.code.toLowerCase().includes(q))||
-      (p.author&&p.author.toLowerCase().includes(q))||
-      (p.subcategory&&p.subcategory.toLowerCase().includes(q))
-    );
+    filtered=filtered.filter(p=>buscaCoincide(p,sq));
   }
   const res=document.getElementById('results');if(!res)return;
-  if(filtered.length===0){res.innerHTML=`<div class="nores">Sin resultados${sq?` para "${sq}"`:''}</div>`;return;}
+  if(filtered.length===0){res.innerHTML=`<div class="nores">Sin resultados${sq?` para "${esc(sq)}"`:''}</div>`;return;}
   res.innerHTML=filtered.map(p=>{
     const [bg,tx]=(CAT_COLORS[p.category]||'#f0ede6|#666').split('|');
     const meta=p.category==='Libros'
@@ -3312,8 +3309,7 @@ function rProductos(){
     </div>`;
   }
   const filteredP = prodSearch
-    ? P.filter(p=>p.name.toLowerCase().includes(prodSearch.toLowerCase())||
-        (p.code&&p.code.includes(prodSearch))||(p.author&&p.author.toLowerCase().includes(prodSearch.toLowerCase())))
+    ? P.filter(p=>buscaCoincide(p,prodSearch))
     : P;
   return `<div>
     <div class="rb" style="margin-bottom:10px">
@@ -3330,14 +3326,15 @@ function rProductos(){
     </div>
     <div class="swr" style="margin-bottom:12px">
       <span class="sic">🔍</span>
-      <input id="prod-search" type="text" placeholder="Buscar por nombre, ISBN o autor..." value="${prodSearch}" autocomplete="off">
+      <input id="prod-search" type="text" placeholder="Buscar por nombre, ISBN o autor..." value="${esc(prodSearch)}" autocomplete="off">
     </div>
     <div id="import-panel" style="display:none"></div>
-    ${prodSearch?`<div style="font-size:11px;color:var(--text3);margin-bottom:8px">${filteredP.length} resultado${filteredP.length!==1?'s':''} para "${prodSearch}"</div>`:''}
+    ${prodSearch?`<div style="font-size:11px;color:var(--text3);margin-bottom:8px">${filteredP.length} resultado${filteredP.length!==1?'s':''} para "${esc(prodSearch)}"</div>`:''}
     ${form}
-    ${cats.map(cat=>`<div style="margin-bottom:16px">
-      <div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${cat} (${P.filter(p=>p.category===cat).length})</div>
-      ${P.filter(p=>p.category===cat).map(p=>`<div class="mrow" style="opacity:${p.active?1:.5}">
+    ${prodSearch&&!filteredP.length?`<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Sin resultados para «${esc(prodSearch)}»</div>`:''}
+    ${cats.filter(cat=>!prodSearch||filteredP.some(p=>p.category===cat)).map(cat=>`<div style="margin-bottom:16px">
+      <div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${cat} (${filteredP.filter(p=>p.category===cat).length})</div>
+      ${filteredP.filter(p=>p.category===cat).map(p=>`<div class="mrow" style="opacity:${p.active?1:.5}">
         <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>
           ${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:7px">${p.code}</span>`:''}
           ${p.hasVariants?'<span class="badge ba" style="margin-left:5px;font-size:9px">var</span>':''}
@@ -5460,7 +5457,7 @@ function invFiltrados(){
     if(invVista==='inactivos' && (p.active || !admin)) return false;
     if(invVista==='todos' && !p.active && !admin) return false;
     if(invCat!=='Todas' && p.category!==invCat) return false;
-    if(q && !((p.name||'').toLowerCase().includes(q)||String(p.code||'').toLowerCase().includes(q)||(p.author||'').toLowerCase().includes(q))) return false;
+    if(q && !buscaCoincide(p,q)) return false;
     return true;
   }).sort((a,b)=>(a.name||'').localeCompare(b.name||'','es'));
 }
