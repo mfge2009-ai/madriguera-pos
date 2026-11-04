@@ -350,27 +350,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
   </div>
 </div>
 <div id="loading"><div class="spin"></div>
-
-    <!-- Por negocio (Librería vs Cafetería) + IVA -->
-    <div class="card" style="margin-bottom:12px">
-      <div style="font-weight:600;font-size:12px;margin-bottom:10px">Por negocio e IVA</div>
-      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
-        <span>📚 Librería (libros, IVA 0%)</span>
-        <span style="font-weight:700;color:var(--acc)">${fmt(revLibreria)}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
-        <span>☕ Cafetería (con IVA 15%)</span>
-        <span style="font-weight:700;color:var(--acc)">${fmt(revCafeteria)}</span>
-      </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--text3)">
-        <div style="display:flex;justify-content:space-between;padding:3px 0">
-          <span>Base imponible cafetería:</span><span>${fmt(baseCafeteria)}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding:3px 0">
-          <span>IVA 15% cafetería:</span><span style="font-weight:700">${fmt(ivaCafeteria)}</span>
-        </div>
-      </div>
-    </div><div style="font-size:12px;color:#999;margin-top:8px">Cargando La Madriguera...</div></div>
+<div id="loading-msg" style="font-size:12px;color:#999;margin-top:8px">Cargando La Madriguera...</div></div>
 <div id="app">
   <header>
     <div class="logo">La Madriguera</div>
@@ -526,7 +506,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
 
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
@@ -629,6 +609,17 @@ const fbapp=initializeApp(firebaseConfig);
 // se cae a la version de siempre en vez de dejar la caja sin abrir.
 let CACHE_LOCAL=false;
 const db=(()=>{
+  // Pestana abierta con "Abrir solo en esta pestana" (vigilante de carga):
+  // copia en memoria, sin compartir con otras pestanas. Dura lo que dure la pestana.
+  let soloMemoria=false;
+  try{ soloMemoria=sessionStorage.getItem('madu_cache_memoria')==='1'; }catch(e){}
+  if(soloMemoria){
+    try{
+      const d=initializeFirestore(fbapp,{localCache:memoryLocalCache()});
+      console.warn('Pestana con copia en memoria (sin compartir con otras pestanas).');
+      return d;
+    }catch(e){ console.warn('No se pudo usar copia en memoria:',e); }
+  }
   try{
     const d=initializeFirestore(fbapp,{
       localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})
@@ -1701,6 +1692,7 @@ function showApp(){
   if(_appShown)return;
   _appShown=true;
   online=true;
+  if(_vigilaCarga){ clearTimeout(_vigilaCarga); _vigilaCarga=null; }
   const ldg=document.getElementById('loading');
   const app=document.getElementById('app');
   const cdot=document.getElementById('cdot');
@@ -2310,7 +2302,7 @@ function rPOS(){
           <span id="omesa">${t?esc(t.name):'Sin mesa'}</span>
           <div style="display:flex;gap:5px;align-items:center">
             ${t&&t.order.length>0?`<button class="btn btn-sm" id="breimprimir" title="Reimprimir comanda" style="background:var(--bg3);border:1px solid var(--border);color:var(--text2);font-size:13px;padding:4px 8px">🖨</button>`:''}
-            
+            ${t&&t.order.length>0&&!personaMode&&!cobConf&&!splitMode?`<button class="btn btn-sm" id="bpersona" title="Mesa compartida: asignar ítems y cobrar por persona" style="background:var(--bg3);border:1px solid var(--border);color:var(--text2);font-size:11px;padding:4px 8px;font-weight:600">👥 Por persona</button>`:''}
             ${t?`<button class="btn btn-g btn-sm" id="bcm">✕</button>`:''}
           </div>
         </div>
@@ -2429,7 +2421,7 @@ function attachPOS(){
     window.openFacturaModal(ref);
   });
   mc.querySelector('#bccc')?.addEventListener('click',()=>{cobConf=false;modoParcial=false;pagosParciales=[];itemSel=null;render();});
-  mc.querySelector('#bpersona')?.addEventListener('click',()=>{personaMode=!personaMode;if(!personaMode){personaActual=1;}render();});
+  mc.querySelector('#bpersona')?.addEventListener('click',()=>{personaMode=!personaMode;if(personaMode){ personaActual=1; const t=T.find(x=>x.id===selT); const mx=t?Math.max(0,...t.order.map(i=>i.persona||0)):0; numPersonas=Math.max(2,mx); } else { personaActual=1; } render();});
   mc.querySelector('#breimprimir')?.addEventListener('click',()=>{
     const t=T.find(x=>x.id===selT);if(!t||t.order.length===0)return;
     // Reprint full comanda grouped by item
@@ -10843,9 +10835,46 @@ async function _prepararBitacora(user){
   bitacora('inicio_sesion',{accion:'Abrio el POS', rol:MI_ROL});
   if(MI_ROL==='admin') await cargarBitacora(30);
 }
+// ── VIGILANTE DE CARGA (2-nov-2026) ──────────────────────────
+// La copia local de Firestore es compartida entre pestanas: una sola (la
+// "principal") habla con el servidor y las demas esperan por ella. Si la
+// principal quedo congelada en segundo plano, la pestana nueva se quedaba en
+// "Cargando..." para siempre, sin aviso. Ahora, si a los 12 s la app no abrio,
+// se explica la causa y se ofrece: reintentar, o abrir ESTA pestana con copia
+// propia en memoria (solo esta pestana y solo hasta cerrarla).
+// No se fuerza la apertura con datos vacios: mostrar mesas vacias y guardar
+// encima borraria los pedidos reales.
+const _MEMCACHE_KEY='madu_cache_memoria';
+let _vigilaCarga=null;
+function vigilarCarga(){
+  if(_vigilaCarga||_appShown) return;
+  _vigilaCarga=setTimeout(()=>{
+    if(_appShown) return;
+    const ldg=document.getElementById('loading'); if(!ldg) return;
+    const enMemoria=!CACHE_LOCAL;
+    console.warn('[carga] La app no abrio en 12 s. Copia local:',CACHE_LOCAL,'online:',navigator.onLine);
+    ldg.innerHTML=`<div style="text-align:center;padding:28px;max-width:440px;font-family:inherit">
+      <div style="font-size:30px;margin-bottom:10px">⏳</div>
+      <div style="font-size:14px;font-weight:700;color:#5c4a2a;margin-bottom:10px">La carga está tardando más de lo normal</div>
+      <div style="font-size:12px;color:#555;line-height:1.6;margin-bottom:16px;text-align:left;background:#f8f6f1;border:1px solid #ddd;border-radius:8px;padding:12px">
+        ${!navigator.onLine?'<b>Este equipo no tiene internet.</b> Revisa la conexión y reintenta.':(enMemoria?'No hay respuesta del servidor. Revisa la conexión y reintenta.':'Lo más probable es que haya <b>otra pestaña o ventana del POS abierta</b> en este navegador y esté en pausa. Ciérrala y pulsa <b>Reintentar</b>.<br><br>Si no la encuentras, usa <b>Abrir solo en esta pestaña</b>.')}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button id="bcarga-reintentar" style="padding:10px 16px;background:#5c4a2a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Reintentar</button>
+        ${!enMemoria&&navigator.onLine?'<button id="bcarga-memoria" style="padding:10px 16px;background:#fff;color:#5c4a2a;border:1.5px solid #5c4a2a;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">Abrir solo en esta pestaña</button>':''}
+      </div>
+    </div>`;
+    document.getElementById('bcarga-reintentar')?.addEventListener('click',()=>location.reload());
+    document.getElementById('bcarga-memoria')?.addEventListener('click',()=>{
+      try{ sessionStorage.setItem(_MEMCACHE_KEY,'1'); }catch(e){}
+      location.reload();
+    });
+  },12000);
+}
 onAuthStateChanged(auth,async user=>{
   const lg=document.getElementById('login-screen');
   if(user){
+    vigilarCarga();
     await _cargarRol(user);
     if(MI_ROL==='cocina'){ location.replace('cocina/'); return; }
     // Cuentas que solo marcan asistencia (o la pantalla del QR): no abren el POS.
