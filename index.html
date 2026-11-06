@@ -566,7 +566,7 @@ function metodoPago(m){
 // Efectivo cobrado en una venta, contemplando el pago dividido
 function efectivoDe(s){
   if(s.pagosParciales&&s.pagosParciales.length>0)
-    return s.pagosParciales.filter(p=>metodoPago(p.metodo)==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
+    return s.pagosParciales.filter(p=>!p.anticipoId&&metodoPago(p.metodo)==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
   return metodoPago(s.paymentMethod)==='Efectivo' ? (+s.total||0) : 0;
 };
 // Categorías de gasto: [nombre, tipo] donde tipo = 'fijo' o 'variable'
@@ -1563,10 +1563,19 @@ const VENTAS_DESDE=(()=>{
 let S_live=[];                 // ventana en vivo (snapshot de Firestore)
 const S_old=new Map();         // meses antiguos cargados bajo demanda (id -> registro)
 const S_pending=new Map();     // escrituras locales aun no confirmadas (p.ej. sin internet)
+// 6-nov-2026: lo que el servidor YA confirmo pero la suscripcion de ventas aun no
+// devolvio. Antes se soltaba al confirmar: si la suscripcion estaba congelada
+// (otra pestana del POS como principal), la apertura, el gasto o la venta
+// desaparecian de la pantalla en el siguiente guardado y la caja "se cerraba".
+const S_conf=new Map();        // id -> {r, t}
+let _ventasSrvTs=0;            // ultima vez que llego una lista de ventas DESDE EL SERVIDOR
+let _ventasErr=null;           // error de la suscripcion de ventas
+function _confirmado(r){ if(!r||!r.id) return; const id=String(r.id); if(S_live.some(x=>x&&String(x.id)===id)) return; /* la suscripcion ya lo trajo */ S_conf.set(id,{r,t:Date.now()}); }
 
 function rebuildS(){
   const m=new Map();
   S_old.forEach(v=>{if(v&&v.id)m.set(String(v.id),v);});
+  S_conf.forEach(o=>{const v=o&&o.r; if(v&&v.id)m.set(String(v.id),v);});
   S_live.forEach(v=>{if(v&&v.id)m.set(String(v.id),v);});
   S_pending.forEach(v=>{if(v&&v.id)m.set(String(v.id),v);});
   S=[...m.values()];
@@ -1595,6 +1604,7 @@ async function saveVenta(r,dbX){
   try{
     await conLimite(setDoc(doc(db,VENTAS_COL,String(r.id)),r));
     S_pending.delete(String(r.id));
+    _confirmado(r);
     return true;
   }catch(e){
     console.error('saveVenta error:',e);
@@ -1616,7 +1626,7 @@ async function saveVentas(arr){
       arr.slice(i,i+400).forEach(r=>{if(r&&r.id)batch.set(doc(db,VENTAS_COL,String(r.id)),r);});
       await batch.commit();
     }
-    arr.forEach(r=>{if(r&&r.id)S_pending.delete(String(r.id));});
+    arr.forEach(r=>{if(r&&r.id){S_pending.delete(String(r.id));_confirmado(r);}});
   }catch(e){
     console.error('saveVentas error:',e);
     avisoError(msgError(e,'guardar el cierre de caja'));
@@ -1626,7 +1636,7 @@ async function saveVentas(arr){
 
 async function deleteVenta(id){
   id=String(id);
-  S_pending.delete(id); S_old.delete(id);
+  S_pending.delete(id); S_old.delete(id); S_conf.delete(id);
   S_live=S_live.filter(s=>String(s.id)!==id);
   rebuildS();
   try{ await conLimite(deleteDoc(doc(db,VENTAS_COL,id))); }
@@ -1943,19 +1953,57 @@ function subRT(){
     },()=>{online=false;showErr();});
   });
   // FASE 2 - Ventas: coleccion con un documento por venta, ventana desde el 1ro del mes anterior
-  onSnapshot(query(collection(db,VENTAS_COL),where('date','>=',VENTAS_DESDE)),snap=>{
+  onSnapshot(query(collection(db,VENTAS_COL),where('date','>=',VENTAS_DESDE)),{includeMetadataChanges:true},snap=>{
     S_live=snap.docs.map(d=>d.data());
+    if(S_conf.size){ const vistos=new Set(snap.docs.map(d=>d.id)); [...S_conf.keys()].forEach(id=>{ if(vistos.has(id)) S_conf.delete(id); }); }
+    if(!snap.metadata.fromCache){ _ventasSrvTs=Date.now(); _ventasErr=null; }
+    syncRevisar();
     rebuildS();
     _loaded['sales']=true;
     if(_loaded['tables']&&_loaded['sales']){
       showApp();
     }
     if(_appShown&&!_writing) debouncedRender();
-  },()=>{online=false;showErr();});
+  },e=>{ online=false; _ventasErr=(e&&(e.code||e.message))||'error'; console.error('[sync] suscripcion de ventas:',e); showErr(); syncRevisar(); });
   // Pantalla de cocina: lotes pendientes y listos recientes (no bloquea el POS)
   cocinaSuscribir(debouncedRender);
   // Fallback: show app after 4 seconds no matter what
   setTimeout(function(){ showApp(); }, 4000);
+  // 6-nov: vigila que la pantalla siga recibiendo datos del servidor
+  setInterval(syncRevisar, 10000);
+  setTimeout(syncRevisar, 20000);
+}
+
+// ── AVISO DE SINCRONIZACION (6-nov-2026) ─────────────────────
+// Si la suscripcion de ventas no recibe datos del servidor (error, o la
+// copia local compartida con otra pestana quedo congelada), lo que se
+// guarda SI llega al servidor pero la pantalla no lo refleja. Se avisa en
+// rojo y se ofrece abrir esta pestana con su propia copia en memoria.
+const _syncT0=Date.now();
+function syncRevisar(){
+  try{
+    if(!auth.currentUser) return;
+    const ahora=Date.now();
+    let motivo='';
+    if(_ventasErr) motivo='La conexión con las ventas se cortó ('+_ventasErr+').';
+    else if(!_ventasSrvTs && ahora-_syncT0>20000) motivo='Esta pantalla no ha recibido datos del servidor desde que se abrió.';
+    else { const viejo=[...S_conf.values()].some(o=>ahora-o.t>20000); if(viejo) motivo='Lo que acabas de registrar se guardó en el servidor, pero esta pantalla no recibe la actualización.'; }
+    let b=document.getElementById('aviso-sync');
+    if(!motivo){ if(b){ b.remove(); _ajustarAvisos(); } return; }
+    if(b) return;
+    b=document.createElement('div'); b.id='aviso-sync';
+    b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:12100;background:#8b1a1a;color:#fff;font-family:inherit;font-size:13px;line-height:1.4;padding:12px 14px;box-shadow:0 -2px 10px rgba(0,0,0,.3)';
+    b.innerHTML='<b>⚠ Este equipo no está sincronizado con el servidor.</b> '+esc(motivo)+
+      ' Por eso la caja puede verse cerrada o un registro puede desaparecer de la pantalla. <b>No vuelvas a registrar lo mismo</b>: ya está guardado.'+
+      '<div style="margin-top:6px;font-size:12px;opacity:.9">Cierra las otras pestañas del POS o de la pantalla de cocina abiertas en este equipo y pulsa «Abrir solo en esta pestaña».</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'+
+      '<button id="bsync-mem" style="padding:8px 14px;background:#fff;color:#8b1a1a;border:none;border-radius:7px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Abrir solo en esta pestaña</button>'+
+      '<button id="bsync-rec" style="padding:8px 14px;background:transparent;color:#fff;border:1.5px solid #fff;border-radius:7px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Recargar</button></div>';
+    document.body.appendChild(b);
+    b.querySelector('#bsync-mem').addEventListener('click',()=>{ try{ sessionStorage.setItem(_MEMCACHE_KEY,'1'); }catch(e){} location.reload(); });
+    b.querySelector('#bsync-rec').addEventListener('click',()=>location.reload());
+    try{ bitacora('sync_sin_servidor',{accion:'Aviso de pantalla sin sincronizar: '+motivo}); }catch(e){}
+  }catch(e){}
 }
 
 function showErr(){
@@ -3067,9 +3115,13 @@ async function confirmarCobro(){
       return;
     }
   }
+  if(modoParcial){
+    const errAnt=antValidarPagos(pagosParciales);
+    if(errAnt){ alert(errAnt); return; }
+  }
   cobrando=true;
   try{
-    const metodo=modoParcial?pagosParciales.map(p=>p.metodo+' '+fmt(p.monto)).join(' / '):selPay;
+    const metodo=modoParcial?pagosParciales.map(p=>(p.anticipoId?'Anticipo ('+p.metodo+')':p.metodo)+' '+fmt(p.monto)).join(' / '):selPay;
     const venta={id:`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),subtotal,descuento:descMonto>0?descMonto:0,descuentoTipo:descMonto>0?descuentoTipo:null,descuentoMotivo:descMonto>0?(descuentoMotivo||null):null,descuentoAutor:descMonto>0?(descuentoAutor||null):null,descuentoAutorAuth:descMonto>0?(descuentoAutorAuth||null):null,total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:localISO(),closed:false,user:turnoUser,userAuth:authUser()};
     // Id del registro de bitacora firmado por el administrador que autorizo el
     // descuento: las reglas de Firestore lo verifican al guardar la venta.
@@ -3224,7 +3276,7 @@ function rFooter(){
       <div class="tot" style="font-weight:700"><span>Total a pagar</span><span>${fmt(tot)}</span></div>
       ${pagosParciales.length>0?`<div style="background:var(--bg3);border-radius:var(--rs);padding:8px 10px;margin-bottom:8px">
         ${pagosParciales.map((p,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:3px 0">
-          <span>${p.metodo}</span>
+          <span>${p.anticipoId?'🎟 Anticipo · '+esc(p.anticipoCliente||'')+' <span style="color:var(--text3)">('+esc(p.metodo)+')</span>':esc(p.metodo)}</span>
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-weight:700">${fmt(p.monto)}</span>
             <button class="btn btn-r btn-sm" style="padding:1px 7px;font-size:11px" data-rp="${i}">✕</button>
@@ -3240,13 +3292,14 @@ function rFooter(){
       <div style="display:flex;gap:5px;margin-bottom:8px">
         <input id="monto-parcial" type="number" step="0.01" placeholder="${pendiente.toFixed(2)}" style="flex:1;padding:6px 8px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:12px;font-family:inherit">
         <button class="btn btn-b btn-sm" id="badd-pago">+ Agregar</button>
-      </div>`:''}
+      </div>${antBotonHTML()}`:''}
       <div style="display:flex;gap:6px">
         <button class="btn btn-g btn-sm" id="bccc">Atrás</button>
         <button class="btn btn-ok" style="flex:2;padding:9px;${cubierto?'':'opacity:.4;cursor:not-allowed'}" id="bconf" data-disabled="${cubierto?'0':'1'}">✓ Confirmar pago</button>
       </div>
       ${cubierto?`<button class="btn btn-full" style="padding:9px;margin-top:6px;background:#1a3f8b;color:#fff;border:none;font-weight:700" id="bcobrar-fac">🧾 Confirmar pago y emitir factura</button>`:''}`;
     ftr.querySelector('#bcobrar-fac')?.addEventListener('click',()=>sriCobrarYFacturar(tot));
+    ftr.querySelector('#bant-aplicar')?.addEventListener('click',()=>antElegir(tot));
     // Attach events
     ftr.querySelectorAll('.payb').forEach(el=>el.addEventListener('click',()=>{selPay=el.dataset.pay;rFooter();}));
     ftr.querySelector('#badd-pago')?.addEventListener('click',()=>{
@@ -3291,7 +3344,9 @@ function rFooter(){
         <button class="btn btn-ok" style="flex:2;padding:9px" id="bconf">✓ Cobrar ${fmt(totalConDesc)}</button>
       </div>
       <button class="btn btn-full" style="padding:9px;margin-bottom:6px;background:#1a3f8b;color:#fff;border:none;font-weight:700" id="bcobrar-fac">🧾 Cobrar ${fmt(totalConDesc)} y emitir factura</button>
-      <button class="btn btn-g btn-full" style="font-size:11px" id="bparcial">Dividir en varios métodos de pago</button>`;
+      <button class="btn btn-g btn-full" style="font-size:11px" id="bparcial">Dividir en varios métodos de pago</button>
+      ${antBotonHTML()}`;
+    ftr.querySelector('#bant-aplicar')?.addEventListener('click',()=>antElegir(tot));
     ftr.querySelectorAll('.payb').forEach(el=>el.addEventListener('click',()=>{selPay=el.dataset.pay;rFooter();}));
     ftr.querySelector('#bccc')?.addEventListener('click',()=>{cobConf=false;modoParcial=false;pagosParciales=[];render();});
     ftr.querySelector('#bconf')?.addEventListener('click',async()=>await confirmarCobro(),{once:true});
@@ -4482,7 +4537,7 @@ function rCaja(){
     ts.forEach(s=>{
       if(s.pagosParciales&&s.pagosParciales.length>0){
         s.pagosParciales.forEach(p=>{
-          const mm=metodoPago(p.metodo);
+          const mm=p.anticipoId?'Anticipo aplicado':metodoPago(p.metodo);
           const fila=base.find(x=>x.m===mm)||otros;
           fila.t+=(+p.monto||0);
         });
@@ -4511,7 +4566,7 @@ function rCaja(){
 
   const cierresAnteriores=S.filter(s=>s.esCierre&&s.date).sort((a,b)=>b.date.localeCompare(a.date));
   const tabs=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto;scrollbar-width:none">
-    ${['resumen','gastos','contabilidad','cierre','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?(estadoCaja().e==='abierta'?'\uD83D\uDFE2 Cerrar caja':'\uD83D\uDD34 Abrir / cerrar caja'):t==='historial'?('Historial ('+cierresAnteriores.length+')'):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
+    ${['resumen','gastos','contabilidad','cierre','anticipos','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?(estadoCaja().e==='abierta'?'\uD83D\uDFE2 Cerrar caja':'\uD83D\uDD34 Abrir / cerrar caja'):t==='historial'?('Historial ('+cierresAnteriores.length+')'):t==='anticipos'?('🎟 Anticipos'+(antPendientes().length?' ('+antPendientes().length+')':'')):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
   </div>`;
 
   let body='';
@@ -4731,6 +4786,7 @@ function rCaja(){
     `;
   }
   else if(cajaTab==='cierre'){ body=rCuadre(); }
+  else if(cajaTab==='anticipos'){ body=rAnticipos(); }
 
   if(cajaTab==='reconstruccion'){ body=rReconstruccion(); }
 
@@ -4824,7 +4880,7 @@ function filasReconstruccion(desde,hasta){
     if(d<desde||d>hasta) return;
     if(isVenta(x)){ const f=tocar(d); f.ventas+=+x.total||0; f.efectivo+=efectivoDeVenta(x); f.pedidos++; f.descuentos+=+x.descuento||0; }
     else if(x.anulada&&x.items){ const f=tocar(d); f.anuladas++; f.montoAnulado+=+x.total||0; }
-    else if(x.esMovCaja&&x.tipo==='ingreso'&&!x.anulada){ const f=tocar(d); f.ingresosEf+=+x.monto||0; }
+    else if(_esIngresoEf(x)){ const f=tocar(d); f.ingresosEf+=+x.monto||0; }
     else if(x.esGasto&&!x.anulada){ const f=tocar(d); f.gastosTot+=+x.total||0; if(metodoPago(x.paymentMethod)==='Efectivo') f.gastosEf+=+x.total||0; }
   });
   const cierres={};
@@ -5012,7 +5068,7 @@ const _cjNum=v=>{ const s=String(v??'').trim().replace(',','.'); if(s==='') retu
 function cjAperturas(){ return S.filter(x=>x&&x.esApertura&&x.v===2&&x.date).sort((a,b)=>a.date.localeCompare(b.date)); }
 function cjCierres(){ return S.filter(x=>x&&x.esCierre&&x.date).sort((a,b)=>a.date.localeCompare(b.date)); }
 function cjAbierta(){
-  const cerr=new Set(cjCierres().map(c=>c.aperturaId).filter(Boolean));
+  const cerr=new Set(); cjCierres().forEach(c=>{ if(c.aperturaId) cerr.add(c.aperturaId); (c.aperturaIds||[]).forEach(id=>cerr.add(id)); });
   const ab=cjAperturas().filter(a=>!cerr.has(a.id));
   return ab.length?ab[ab.length-1]:null;
 }
@@ -5060,13 +5116,13 @@ function cjCalcular(est){
     if(antiguos.some(c=>c.date.slice(0,10)===dia&&x.date<=c.date)) return;
     if(isVenta(x)) ventas.push(x);
     else if(x.esGasto&&!x.anulada&&metodoPago(x.paymentMethod)==='Efectivo') gastos.push(x);
-    else if(x.esMovCaja&&x.tipo==='ingreso'&&!x.anulada) ingresos.push(x);
+    else if(_esIngresoEf(x)) ingresos.push(x);
   });
   const porMetodo={}; let efV=0, tot=0;
   ventas.forEach(v=>{
     tot+=+v.total||0; efV+=efectivoDe(v);
     if(v.pagosParciales&&v.pagosParciales.length){
-      v.pagosParciales.forEach(p=>{ const m=metodoPago(p.metodo)||'Otros'; porMetodo[m]=(porMetodo[m]||0)+(+p.monto||0); });
+      v.pagosParciales.forEach(p=>{ const m=p.anticipoId?'Anticipo aplicado':(metodoPago(p.metodo)||'Otros'); porMetodo[m]=(porMetodo[m]||0)+(+p.monto||0); });
     } else { const m=metodoPago(v.paymentMethod)||'Otros'; porMetodo[m]=(porMetodo[m]||0)+(+v.total||0); }
   });
   const efG=gastos.reduce((a,g)=>a+(+g.total||0),0);
@@ -5226,8 +5282,8 @@ function rCuadre(){
 // La caja crea el registro; solo administración puede anularlo.
 function cjIngresosHTML(c){
   const lista=c.ingresos.map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11.5px;padding:5px 0;border-bottom:.5px solid var(--border)">
-      <span>${_cjHora(m.date)} · ${esc(m.motivo||'Cambio')} <span style="color:var(--text3)">· ${esc(m.user||'')}</span></span>
-      <span style="display:flex;gap:8px;align-items:center"><b style="color:var(--blu)">+${fmt(m.monto)}</b>${MI_ROL==='admin'?`<a href="#" data-cjanul="${esc(m.id)}" style="color:var(--red);font-size:11px">Anular</a>`:''}</span></div>`).join('');
+      <span>${_cjHora(m.date)} · ${m.tipo==='anticipo'?'🎟 Anticipo de cliente: '+esc((m.cliente&&m.cliente.nombre)||'')+(m.evento?' · '+esc(m.evento):''):esc(m.motivo||'Cambio')} <span style="color:var(--text3)">· ${esc(m.user||'')}</span></span>
+      <span style="display:flex;gap:8px;align-items:center"><b style="color:var(--blu)">+${fmt(m.monto)}</b>${MI_ROL==='admin'&&m.tipo!=='anticipo'?`<a href="#" data-cjanul="${esc(m.id)}" style="color:var(--red);font-size:11px">Anular</a>`:''}</span></div>`).join('');
   return `<div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="font-weight:700;font-size:13px">Ingreso de efectivo a la caja</div>
@@ -5274,6 +5330,252 @@ async function cjAnularIngreso(id){
   bitacora('anular_ingreso_caja',{accion:'Anulo el ingreso de efectivo de '+fmt(m.monto)+' ('+(m.motivo||'')+'): '+motivo,monto:m.monto,obs:motivo});
   render();
   if(ok) alert('✓ Ingreso anulado.');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ANTICIPOS DE CLIENTES (4-nov-2026) · experiencias inmersivas y reservas
+//  El cliente paga su cupo por adelantado. Ese pago NO es una venta ni lleva
+//  factura: es un anticipo (pasivo). El dia de la funcion se cobra lo que
+//  consume (items del menu a precio de carta; la pelicula no se cobra) y el
+//  anticipo se aplica como forma de pago. La factura sale ese dia, por los
+//  items realmente entregados, con la forma de pago original del anticipo
+//  (efectivo 01, transferencia 20, tarjeta 16/19).
+//  · Registro: ventas/{antcli…} con esMovCaja:true, tipo:'anticipo'.
+//    En efectivo se suma a la caja el dia que se recibe (como un ingreso).
+//  · Aplicacion: parte de pagosParciales con anticipoId. No cuenta como
+//    efectivo del dia (ya entro a la caja cuando se recibio).
+//  · Saldo = monto - lo aplicado en ventas no anuladas. Si sobra, queda a
+//    favor del cliente; nunca se convierte en ingreso sin factura.
+// ═══════════════════════════════════════════════════════════════════════
+const esAntCli=x=>!!(x&&x.esMovCaja&&x.tipo==='anticipo');
+function _esIngresoEf(x){
+  if(!x||!x.esMovCaja||x.anulada) return false;
+  if(x.tipo==='ingreso') return true;
+  return x.tipo==='anticipo' && metodoPago(x.metodo)==='Efectivo';
+}
+function antAplicado(id, exceptoVentaId){
+  let t=0;
+  S.forEach(v=>{
+    if(!isVenta(v)||!v.pagosParciales||String(v.id)===String(exceptoVentaId||'')) return;
+    v.pagosParciales.forEach(p=>{ if(p&&String(p.anticipoId||'')===String(id)) t+=(+p.monto||0); });
+  });
+  return _r2(t);
+}
+function aclSaldo(a){ return a&&!a.anulada ? _r2((+a.monto||0)-antAplicado(a.id)) : 0; }
+function antPendientes(){
+  return S.filter(esAntCli).filter(a=>aclSaldo(a)>0.004)
+    .sort((a,b)=>String(a.fechaEvento||'').localeCompare(String(b.fechaEvento||''))||String(a.date).localeCompare(String(b.date)));
+}
+function _antTipoId(id){
+  const d=String(id||'').replace(/\s+/g,'').toUpperCase();
+  if(/^\d{13}$/.test(d)) return 'RUC';
+  if(/^\d{10}$/.test(d)) return 'Cédula';
+  return d?'Pasaporte':'';
+}
+function antCompradorDePagos(pagos){
+  const p=(pagos||[]).find(x=>x&&x.anticipoId); if(!p) return null;
+  const a=S.find(x=>esAntCli(x)&&String(x.id)===String(p.anticipoId)); if(!a||!a.cliente) return null;
+  const c=a.cliente;
+  return {tipo:c.tipo||_antTipoId(c.identificacion), identificacion:c.identificacion||'', nombre:c.nombre||'', email:c.email||'', telefono:c.telefono||'', direccion:''};
+}
+// Antes de guardar la venta: cada anticipo debe tener saldo (otro equipo pudo usarlo)
+function antValidarPagos(pagos){
+  const uso={};
+  (pagos||[]).forEach(p=>{ if(p&&p.anticipoId) uso[p.anticipoId]=_r2((uso[p.anticipoId]||0)+(+p.monto||0)); });
+  for(const id in uso){
+    const a=S.find(x=>esAntCli(x)&&String(x.id)===String(id));
+    if(!a||a.anulada) return 'El anticipo seleccionado ya no está disponible (fue anulado). Quítalo del pago.';
+    const sal=aclSaldo(a);
+    if(uso[id]>sal+0.005) return 'El anticipo de '+((a.cliente&&a.cliente.nombre)||'')+' solo tiene saldo '+fmt(sal)+' (ya se usó en otro cobro). Ajusta el pago.';
+  }
+  return '';
+}
+function antBotonHTML(){
+  const n=antPendientes().length;
+  if(!n) return '';
+  return `<button class="btn btn-full" id="bant-aplicar" style="margin-top:6px;font-size:11.5px;padding:8px;background:#f3ecdf;color:#5c4a2a;border:1px dashed #b89a63;font-weight:700">🎟 Aplicar anticipo de cliente (${n} con saldo)</button>`;
+}
+// Elegir el anticipo a aplicar en el cobro de la mesa seleccionada
+function antElegir(totalCobro){
+  const lista=antPendientes();
+  const usados=new Set((pagosParciales||[]).filter(p=>p.anticipoId).map(p=>String(p.anticipoId)));
+  const disp=lista.filter(a=>!usados.has(String(a.id)));
+  if(!disp.length){ alert('No hay anticipos con saldo disponibles.'); return; }
+  const hoy=today();
+  document.getElementById('ant-modal')?.remove();
+  const m=document.createElement('div');
+  m.id='ant-modal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+  m.innerHTML=`<div style="background:#fff;border-radius:12px;max-width:460px;width:100%;max-height:85vh;overflow:auto;padding:16px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:4px">🎟 Aplicar anticipo</div>
+    <div style="font-size:11.5px;color:#666;margin-bottom:10px">Se cobran los ítems consumidos a precio de carta y el anticipo cuenta como pago. La factura sale hoy, con los datos del cliente del anticipo.</div>
+    <input id="ant-buscar" placeholder="Buscar por nombre, cédula o evento" style="width:100%;padding:8px 10px;border:1.5px solid #ddd;border-radius:8px;font-size:12px;margin-bottom:8px;font-family:inherit;box-sizing:border-box">
+    <div id="ant-lista">${disp.map(a=>{
+      const c=a.cliente||{}; const sal=aclSaldo(a); const otroDia=a.fechaEvento&&a.fechaEvento!==hoy;
+      const txt=[c.nombre,c.identificacion,a.evento].join(' ').toLowerCase();
+      return `<button data-antsel="${esc(a.id)}" data-anttxt="${esc(txt)}" style="display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:6px;border:1.5px solid #e2d9c6;border-radius:10px;background:#fffdf8;cursor:pointer;font-family:inherit">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">${esc(c.nombre||'')}</b><b style="color:#1f6b45">${fmt(sal)}</b></div>
+        <div style="font-size:11px;color:#666">${esc(a.evento||'Sin evento')} · ${a.fechaEvento?esc(a.fechaEvento):'sin fecha'} · pagó ${fmt(a.monto)} (${esc(a.metodo||'')})</div>
+        ${otroDia?`<div style="font-size:10.5px;color:#a86b00;margin-top:2px">⚠ El evento es el ${esc(a.fechaEvento)}, no hoy.</div>`:''}
+      </button>`;}).join('')}</div>
+    <button id="ant-cerrar" class="btn btn-g btn-full" style="margin-top:4px">Cancelar</button>
+  </div>`;
+  document.body.appendChild(m);
+  const cerrar=()=>m.remove();
+  m.addEventListener('click',e=>{ if(e.target===m) cerrar(); });
+  m.querySelector('#ant-cerrar').addEventListener('click',cerrar);
+  m.querySelector('#ant-buscar').addEventListener('input',e=>{
+    const q=e.target.value.trim().toLowerCase();
+    m.querySelectorAll('[data-antsel]').forEach(b=>{ b.style.display=!q||b.dataset.anttxt.includes(q)?'block':'none'; });
+  });
+  m.querySelectorAll('[data-antsel]').forEach(b=>b.addEventListener('click',()=>{
+    const a=disp.find(x=>String(x.id)===b.dataset.antsel); if(!a) return;
+    if(a.fechaEvento&&a.fechaEvento!==hoy&&!confirm('Este anticipo es para el evento del '+a.fechaEvento+'.\n¿Aplicarlo hoy de todas formas?')) return;
+    const yaPagado=modoParcial?(pagosParciales||[]).reduce((s,p)=>s+(+p.monto||0),0):0;
+    const pendiente=_r2(Math.max(0,totalCobro-yaPagado));
+    if(pendiente<=0.004){ alert('El total ya está cubierto.'); cerrar(); return; }
+    const aplicar=_r2(Math.min(aclSaldo(a),pendiente));
+    if(!modoParcial){ modoParcial=true; pagosParciales=[]; }
+    pagosParciales.push({metodo:metodoPago(a.metodo)||'Transferencia', monto:aplicar, anticipoId:String(a.id), anticipoCliente:(a.cliente&&a.cliente.nombre)||''});
+    cerrar();
+    rFooter();
+    const resto=_r2(pendiente-aplicar);
+    if(resto>0.004) setTimeout(()=>alert('El anticipo cubre '+fmt(aplicar)+'. Falta cobrar '+fmt(resto)+': elige el método y pulsa «+ Agregar».'),50);
+    else if(_r2(aclSaldo(a)-aplicar)>0.004) setTimeout(()=>alert('El consumo es menor que el anticipo. Al cliente le queda un saldo a favor de '+fmt(_r2(aclSaldo(a)-aplicar))+' (no se factura).'),50);
+  }));
+  setTimeout(()=>m.querySelector('#ant-buscar')?.focus(),50);
+}
+
+// ── Pestaña Caja → 🎟 Anticipos ──────────────────────────────────────────
+let antD={nombre:'',identificacion:'',telefono:'',email:'',evento:'',fechaEvento:'',monto:'',metodo:'Transferencia',referencia:'',verTodos:false};
+function rAnticipos(){
+  const est=estadoCaja();
+  const pend=antPendientes();
+  const todos=S.filter(esAntCli).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const hoy=today();
+  const vencidos=pend.filter(a=>a.fechaEvento&&a.fechaEvento<hoy);
+  const fila=a=>{
+    const c=a.cliente||{}; const apl=antAplicado(a.id); const sal=aclSaldo(a);
+    const estado=a.anulada?'<span style="color:var(--red)">Anulado</span>':sal<=0.004?'<span style="color:var(--grn)">Aplicado</span>':(apl>0?'Saldo '+fmt(sal):'Pendiente');
+    return `<div style="padding:9px 0;border-bottom:.5px solid var(--border);font-size:12px">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(c.nombre||'')}</b><span><b>${fmt(a.monto)}</b> · ${estado}</span></div>
+      <div style="color:var(--text3);font-size:11px">${esc(a.evento||'Sin evento')} · evento ${a.fechaEvento?esc(a.fechaEvento):'sin fecha'} · ${esc(a.metodo||'')}${a.referencia?' ref. '+esc(a.referencia):''} · recibido ${esc(String(a.date).slice(0,10))} por ${esc(a.user||'')}${a.anulada&&a.motivoAnulacion?' · motivo: '+esc(a.motivoAnulacion):''}</div>
+      <div style="display:flex;gap:10px;margin-top:4px;font-size:11px">
+        <a href="#" data-antrec="${esc(a.id)}" style="color:var(--acc)">🖨 Recibo</a>
+        ${MI_ROL==='admin'&&!a.anulada&&apl<=0.004?`<a href="#" data-antanul="${esc(a.id)}" style="color:var(--red)">Anular / devolver</a>`:''}
+      </div></div>`;
+  };
+  const lista=antD.verTodos?todos:pend;
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">🎟 Anticipos de clientes</div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:12px;line-height:1.5">Para reservas pagadas por adelantado (por ejemplo, experiencias inmersivas). El anticipo <b>no es venta ni lleva factura</b>: se entrega un recibo. El día del evento se cobran los ítems consumidos a precio de carta, se aplica el anticipo como pago y se emite la factura con los datos del cliente.</div>
+    ${est.e!=='abierta'?`<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:10px">Abre la caja para registrar anticipos (los de efectivo se suman al cuadre del turno).</div>`:''}
+    <div class="fgrid">
+      <div class="fg"><label>Cliente (nombre completo) *</label><input id="ant-nombre" value="${esc(antD.nombre)}"></div>
+      <div class="fg"><label>Cédula / RUC / pasaporte *</label><input id="ant-id" value="${esc(antD.identificacion)}" placeholder="Para la factura"></div>
+      <div class="fg"><label>Teléfono</label><input id="ant-tel" value="${esc(antD.telefono)}"></div>
+      <div class="fg"><label>Correo (para la factura)</label><input id="ant-email" value="${esc(antD.email)}"></div>
+      <div class="fg"><label>Evento *</label><input id="ant-evento" value="${esc(antD.evento)}" placeholder="Ej.: Experiencia inmersiva"></div>
+      <div class="fg"><label>Fecha del evento *</label><input id="ant-fecha" type="date" value="${esc(antD.fechaEvento)}"></div>
+      <div class="fg"><label>Monto recibido ($) *</label><input id="ant-monto" type="number" step="0.01" min="0" value="${esc(antD.monto)}"></div>
+      <div class="fg"><label>Forma de pago *</label><select id="ant-metodo">${PAY.map(x=>`<option${antD.metodo===x?' selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="fg"><label>N.º de transferencia / voucher</label><input id="ant-ref" value="${esc(antD.referencia)}"></div>
+    </div>
+    <button class="btn btn-acc btn-full" id="ant-reg" style="margin-top:8px" ${est.e!=='abierta'?'disabled style="margin-top:8px;opacity:.5"':''}>+ Registrar anticipo e imprimir recibo</button>
+  </div>
+  ${vencidos.length?`<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:12px">⚠ ${vencidos.length} anticipo(s) de eventos ya pasados siguen con saldo (${fmt(vencidos.reduce((s,a)=>s+aclSaldo(a),0))}). Aplícalos en un consumo o devuélvelos; no se registran como ingreso sin factura.</div>`:''}
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div style="font-weight:700;font-size:13px">${antD.verTodos?'Todos los anticipos':'Con saldo pendiente'} (${lista.length})</div>
+      <a href="#" id="ant-vertodos" style="font-size:11px;color:var(--acc)">${antD.verTodos?'Ver solo pendientes':'Ver todos'}</a>
+    </div>
+    ${lista.length?lista.map(fila).join(''):'<div style="font-size:12px;color:var(--text3);padding:12px 0">No hay anticipos '+(antD.verTodos?'registrados en el período cargado':'pendientes')+'.</div>'}
+    <div style="font-size:10.5px;color:var(--text3);margin-top:8px">Para aplicarlo: en la mesa, «Cobrar» → «🎟 Aplicar anticipo de cliente».</div>
+  </div>`;
+}
+function attachAnticipos(mc){
+  const b=(id,k)=>mc.querySelector(id)?.addEventListener('input',e=>{antD[k]=e.target.value;});
+  b('#ant-nombre','nombre'); b('#ant-id','identificacion'); b('#ant-tel','telefono'); b('#ant-email','email');
+  b('#ant-evento','evento'); b('#ant-fecha','fechaEvento'); b('#ant-monto','monto'); b('#ant-ref','referencia');
+  mc.querySelector('#ant-metodo')?.addEventListener('change',e=>{antD.metodo=e.target.value;});
+  mc.querySelector('#ant-reg')?.addEventListener('click',antRegistrar);
+  mc.querySelector('#ant-vertodos')?.addEventListener('click',e=>{e.preventDefault();antD.verTodos=!antD.verTodos;render();});
+  mc.querySelectorAll('[data-antrec]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();const x=S.find(y=>esAntCli(y)&&String(y.id)===a.dataset.antrec); if(x) antImprimirRecibo(x);}));
+  mc.querySelectorAll('[data-antanul]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();antAnular(a.dataset.antanul);}));
+}
+let _antOcupado=false;
+async function antRegistrar(){
+  if(_antOcupado) return;
+  const est=estadoCaja();
+  if(est.e!=='abierta'){ alert('Abre la caja antes de registrar un anticipo.'); irACaja(); return; }
+  const nombre=antD.nombre.replace(/\s+/g,' ').trim();
+  const ident=antD.identificacion.replace(/\s+/g,'').toUpperCase();
+  const tipo=_antTipoId(ident);
+  const monto=_cjNum(antD.monto);
+  const email=antD.email.trim();
+  if(nombre.length<3){ alert('Escribe el nombre completo del cliente.'); return; }
+  if(!ident){ alert('Escribe la cédula, RUC o pasaporte: se usará en la factura del día del evento.'); return; }
+  if(tipo==='Cédula'&&typeof sriCedulaValida==='function'&&!sriCedulaValida(ident)){ alert('La cédula no es válida (revisa los 10 dígitos).'); return; }
+  if(tipo==='RUC'&&(ident.slice(10)==='000')){ alert('El RUC debe terminar en 001.'); return; }
+  if(email&&!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(email)){ alert('El correo no es válido.'); return; }
+  if(!antD.evento.trim()){ alert('Indica el evento.'); return; }
+  if(!antD.fechaEvento){ alert('Indica la fecha del evento.'); return; }
+  if(isNaN(monto)||monto<=0){ alert('Escribe el monto recibido.'); return; }
+  const metodo=metodoPago(antD.metodo)||'Transferencia';
+  if(metodo!=='Efectivo'&&!antD.referencia.trim()&&!confirm('No escribiste el número de transferencia o voucher.\n¿Registrar igual?')) return;
+  if(!confirm('¿Registrar el anticipo?\n\nCliente: '+nombre+' ('+ident+')\nEvento: '+antD.evento.trim()+' · '+antD.fechaEvento+'\nMonto: '+fmt(monto)+' en '+metodo+
+    '\n\nNo es una venta ni se factura hoy. Se entrega un recibo y la factura se emite el día del evento por lo que consuma.'+(metodo==='Efectivo'?'\nEl efectivo se suma al cuadre de este turno.':''))) return;
+  _antOcupado=true;
+  try{
+    const rec={id:'antcli'+Date.now()+Math.random().toString(36).slice(2,5),esMovCaja:true,tipo:'anticipo',esAnticipoCliente:true,
+      monto:_r2(monto),metodo,referencia:antD.referencia.trim(),
+      cliente:{nombre,identificacion:ident,tipo,telefono:antD.telefono.trim(),email},
+      evento:antD.evento.trim(),fechaEvento:antD.fechaEvento,
+      motivo:'Anticipo '+nombre+' · '+antD.evento.trim(),
+      aperturaId:est.ap?est.ap.id:null,date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
+    const ok=await saveVenta(rec);
+    bitacora('anticipo_cliente',{accion:'Registro anticipo de '+nombre+' por '+fmt(monto)+' ('+metodo+') para '+rec.evento+' del '+rec.fechaEvento,monto:rec.monto,obs:rec.referencia||''});
+    antD={nombre:'',identificacion:'',telefono:'',email:'',evento:antD.evento,fechaEvento:antD.fechaEvento,monto:'',metodo:antD.metodo,referencia:'',verTodos:false};
+    render();
+    if(ok){ antImprimirRecibo(rec); }
+  } finally { _antOcupado=false; }
+}
+function antImprimirRecibo(a){
+  const c=a.cliente||{}; const now=new Date(a.date||Date.now());
+  let b='';
+  b+='<div class="c b" style="font-size:13pt">LA MADRIGUERA</div>';
+  b+='<div class="c">Cafe-Libreria - Urdesa Central</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="c b">RECIBO DE ANTICIPO</div>';
+  b+='<div class="c">NO ES COMPROBANTE DE VENTA</div>';
+  b+='<div class="line"></div>';
+  b+='<div>Fecha: '+now.toLocaleDateString('es-EC')+' '+now.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})+'</div>';
+  b+='<div>Cliente: '+sanitize(c.nombre||'')+'</div>';
+  b+='<div>Identificacion: '+sanitize(c.identificacion||'')+'</div>';
+  b+='<div>Evento: '+sanitize(a.evento||'')+'</div>';
+  b+='<div>Fecha del evento: '+sanitize(a.fechaEvento||'')+'</div>';
+  b+='<div class="line"></div>';
+  b+='<div class="row b"><span>ANTICIPO</span><span>$'+(+a.monto||0).toFixed(2)+'</span></div>';
+  b+='<div>Forma de pago: '+sanitize(a.metodo||'')+(a.referencia?' ref. '+sanitize(a.referencia):'')+'</div>';
+  b+='<div>Recibido por: '+sanitize(a.user||'')+'</div>';
+  b+='<div class="line"></div>';
+  b+='<div style="font-size:8pt">Se aplicara a los consumos del dia del evento. La factura se emite ese dia por los productos consumidos, a nombre del cliente.</div>';
+  b+='<div style="font-size:8pt">Ref. interna: '+sanitize(String(a.id))+'</div>';
+  printViaIframe(b);
+}
+async function antAnular(id){
+  if(MI_ROL!=='admin') return;
+  const a=S.find(x=>esAntCli(x)&&String(x.id)===String(id));
+  if(!a||a.anulada) return;
+  if(antAplicado(a.id)>0.004){ alert('Este anticipo ya se aplicó en un cobro: no se puede anular. Si hay que devolver algo, hazlo desde la venta (nota de crédito).'); return; }
+  const enCierre=cjCubiertos().has(String(a.id));
+  const motivo=(prompt('Motivo para anular / devolver el anticipo de '+fmt(a.monto)+' de '+((a.cliente&&a.cliente.nombre)||'')+' (obligatorio):')||'').trim();
+  if(motivo.length<4){ alert('Debes indicar el motivo.'); return; }
+  const rec=Object.assign({},a,{anulada:true,fechaAnulacion:localISO(),anuladaPor:authUser(),motivoAnulacion:motivo});
+  const ok=await saveVenta(rec);
+  bitacora('anular_anticipo_cliente',{accion:'Anulo el anticipo de '+((a.cliente&&a.cliente.nombre)||'')+' por '+fmt(a.monto)+': '+motivo,monto:a.monto,obs:motivo});
+  render();
+  if(ok) alert('✓ Anticipo anulado.'+(enCierre&&metodoPago(a.metodo)==='Efectivo'?'\n\nEse efectivo ya entró en un cierre de caja: si devuelves el dinero en efectivo, regístralo como gasto en efectivo con la descripción «Devolución de reserva de cliente» (no uses la palabra «anticipo»: el sistema la reserva para Nómina) para que la caja cuadre.':''));
 }
 
 function rCjApertura(){
@@ -5393,7 +5695,11 @@ async function cjCerrar(sinConteo){
       await saveVenta(ap);
     }
     const ahora=localISO();
-    const rec={id:'cierre'+Date.now(),esCierre:true,v:2,aperturaId:ap.id,desde:ap.desde||ap.date,hasta:ahora,date:ahora,
+    // 6-nov: si quedaron varias aperturas abiertas (p. ej. pantalla sin sincronizar), el cierre las cubre todas
+    const _cerrAp=new Set(); cjCierres().forEach(c=>{ if(c.aperturaId) _cerrAp.add(c.aperturaId); (c.aperturaIds||[]).forEach(id=>_cerrAp.add(id)); });
+    const aperturaIds=cjAperturas().filter(a=>!_cerrAp.has(a.id)&&a.date<=ahora).map(a=>a.id);
+    if(!aperturaIds.includes(ap.id)) aperturaIds.push(ap.id);
+    const rec={id:'cierre'+Date.now(),esCierre:true,v:2,aperturaId:ap.id,aperturaIds,desde:ap.desde||ap.date,hasta:ahora,date:ahora,
       inicio:fondo,sueltos:0,conteo,conteoInicial:(cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo)?cjD.conteoInicial:null,
       efectivoEsperado:c.efV,gastosEfectivo:c.efG,ingresosEfectivo:c.efI,nIngresosEf:c.ingresos.length,esperadoEnCaja:esperado,diferencia:dif,
       retiro,fondoSiguiente:sinConteo?null:_r2(conteo-retiro),
@@ -5416,6 +5722,7 @@ function attachCaja(){
   attachCuadre(mc);
   mc.querySelector('#bctcambio')?.addEventListener('click',()=>cerrarSesionPOS('cambio de turno'));
   if(cajaTab==='reconstruccion') attachReconstruccion();
+  if(cajaTab==='anticipos') attachAnticipos(mc);
   mc.querySelector('#bhistmes')?.addEventListener('click',async()=>{
     if(!histMesPtr)histMesPtr=VENTAS_DESDE.slice(0,7);
     const d=new Date(histMesPtr+'-15');d.setMonth(d.getMonth()-1);
@@ -6378,7 +6685,7 @@ function rReportes(){
     ventas.forEach(s=>{
       if(s.pagosParciales&&s.pagosParciales.length>0){
         s.pagosParciales.forEach(p=>{
-          const mm=metodoPago(p.metodo);
+          const mm=p.anticipoId?'Anticipo aplicado':metodoPago(p.metodo);
           const fila=base.find(x=>x.m===mm)||otros;
           fila.t+=(+p.monto||0);
         });
@@ -8773,6 +9080,10 @@ function iniAlertas(){
     else if(ec.e==='pendiente') add('alta','Hay un turno de caja sin cerrar','Quedó abierta la caja del '+ec.dia+'. Ciérrela contando el efectivo.','Ir al cierre',()=>irACaja(),'caja');
   }catch(e){}
   try{
+    const hoyA=today(), venc=antPendientes().filter(a=>a.fechaEvento&&a.fechaEvento<hoyA);
+    if(venc.length) add('media',venc.length+' anticipo(s) de clientes con saldo de eventos pasados',fmt(venc.reduce((s,a)=>s+aclSaldo(a),0))+' a favor de clientes. Aplícalos en un consumo o devuélvelos.','Revisar',()=>irA('caja',()=>{cajaTab='anticipos';}),'caja');
+  }catch(e){}
+  try{
     const d=diasSinCierre();
     if(d.length) add('alta',d.length+' día(s) con ventas sin cierre de caja','Sin conteo físico un faltante no se puede detectar. Más reciente: '+d[0]+'.','Revisar',()=>irA('caja',()=>{cajaTab='cierre';}),'caja');
   }catch(e){}
@@ -9318,7 +9629,8 @@ setInterval(()=>{ if(navigator.onLine && sriCola().some(x=>!x.requiereRevision))
 function sriCobrarYFacturar(total){
   if(sriOcupado || cobrando) return;
   if(!sriConfigurado()){ alert('La facturación electrónica aún no está configurada.\nCobra normalmente y registra la factura como antes.'); return; }
-  abrirModalSri({ titulo:'Cobrar '+fmt(total)+' y emitir factura', total, alConfirmar: async (comprador)=>{
+  const _antPre=antCompradorDePagos(modoParcial?pagosParciales:[]);
+  abrirModalSri({ titulo:'Cobrar '+fmt(total)+' y emitir factura', total, prellenar:_antPre, alConfirmar: async (comprador)=>{
     sriOcupado = true;
     try{
       const venta = await confirmarCobro();
