@@ -47,6 +47,8 @@ button,input{font:inherit}
 .caja input{width:100%;padding:12px;border:1px solid #ddd8ce;border-radius:10px;font-size:16px}
 .caja button{width:100%;margin-top:14px;padding:14px;border:0;border-radius:10px;background:#5c4a2a;color:#fff;font-weight:800;font-size:17px;cursor:pointer}
 .err{color:#b3261e;font-size:14px;margin-top:10px;display:none}
+.wifiest{margin-top:8px;font-size:13px;padding:6px 10px;border-radius:8px;background:#eef6ee;color:#1f6b45}
+.wifiest.mal{background:#fde8e8;color:#8b1a1a}
 </style>
 </head>
 <body>
@@ -62,6 +64,7 @@ button,input{font:inherit}
   <section class="lado">
     <div class="reloj" id="reloj">--:--</div>
     <div class="fecha" id="fecha"></div>
+    <div class="wifiest" id="wifiest" style="display:none"></div>
     <h2>Personal hoy</h2>
     <div id="lista"><div class="vacio">Cargando…</div></div>
     <div class="btns">
@@ -173,8 +176,39 @@ function pintarLista() {
   }).sort((a, b) => a.orden - b.orden);
   $('lista').innerHTML = filas.map(f => f.html).join('');
 }
+// ── Wi-Fi del local ───────────────────────────────────────────
+// Esta pantalla está fija en el local: cada 5 minutos le informa al
+// servicio Wi-Fi cuál es la conexión a internet de La Madriguera.
+// Así el personal puede marcar directo desde su celular conectado al Wi-Fi.
+let _anclaTimer = null, _anclaOk = 0;
+const urlWifi = () => (CFG && typeof CFG.wifiUrl === 'string' && /^https:\/\//.test(CFG.wifiUrl)) ? CFG.wifiUrl.replace(/\/+$/, '') : '';
+async function registrarAncla() {
+  const el = $('wifiest');
+  if (!urlWifi() || !auth.currentUser) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  try {
+    const tok = await auth.currentUser.getIdToken();
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
+    const r = await fetch(urlWifi() + '/ancla', {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok}, body: '{}', signal: ctl.signal, cache: 'no-store'});
+    clearTimeout(t);
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    _anclaOk = Date.now();
+    el.className = 'wifiest'; el.textContent = '📶 Wi-Fi del local registrado · ' + A.horaDe(_anclaOk);
+  } catch (e) {
+    el.className = 'wifiest mal';
+    el.textContent = '📶 No se pudo registrar el Wi-Fi (' + (e.message || e) + ')' + (_anclaOk ? ' · último ' + A.horaDe(_anclaOk) : '') + '. Se reintenta solo.';
+  }
+}
+function iniciarAncla() {
+  if (_anclaTimer || !urlWifi()) return;
+  registrarAncla();
+  _anclaTimer = setInterval(registrarAncla, 5 * 60 * 1000);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && _anclaTimer && Date.now() - _anclaOk > 4 * 60 * 1000) registrarAncla(); });
+
 function escuchar() {
-  onSnapshot(doc(db, 'lm_asist_cfg', 'local'), s => { CFG = s.exists() ? s.data() : {}; pintarLista(); }, () => {});
+  onSnapshot(doc(db, 'lm_asist_cfg', 'local'), s => { CFG = s.exists() ? s.data() : {}; pintarLista(); if (urlWifi()) iniciarAncla(); }, () => {});
   onSnapshot(collection(db, 'lm_asist_personal'), s => { PERS = {}; s.docs.forEach(d => PERS[d.id] = d.data()); pintarLista(); }, () => {});
   const desde = Timestamp.fromMillis(A.inicioDia(A.diaDe(Date.now())));
   onSnapshot(query(collection(db, 'lm_asist_marcas'), where('ts', '>=', desde)), s => {
