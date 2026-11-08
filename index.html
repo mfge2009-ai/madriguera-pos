@@ -3385,6 +3385,56 @@ function rFooter(){
   }
 }
 
+// ── PRODUCTOS CREADOS DESDE CAJA (7-nov-2026) ────────────────
+const _pNorm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+async function crearProductoCaja(obj){
+  const nombre=obj.name.replace(/\s+/g,' ').trim();
+  if(nombre.length<3){ alert('Escribe el nombre completo del producto (mínimo 3 letras).'); return; }
+  if(nombre.length>120){ alert('El nombre es demasiado largo (máximo 120 caracteres).'); return; }
+  if(!(obj.price>0)){ alert('El precio debe ser mayor que cero.'); return; }
+  if(obj.stock<0){ alert('El stock inicial no puede ser negativo.'); return; }
+  // Duplicados: mismo codigo o mismo nombre (sin tildes ni mayusculas) => se usa el existente
+  const cod=String(obj.code||'').trim();
+  const dupCod=cod?P.find(x=>x&&!x.esConsignado&&String(x.code||'').trim()===cod):null;
+  const dupNom=P.find(x=>x&&!x.esConsignado&&_pNorm(x.name)===_pNorm(nombre)&&_pNorm(x.subcategory)===_pNorm(obj.subcategory));
+  const dup=dupCod||dupNom;
+  if(dup){
+    alert('Ya existe «'+dup.name+'»'+(dup.code?' (código '+dup.code+')':'')+' a '+fmt(dup.price)+(dup.active?'':' — está INACTIVO')+'.\n\n'+
+      'No se crea un duplicado. Usa ese producto'+(dup.active?'':' (pide a administración que lo active)')+'; si el precio no es correcto, pide a administración que lo cambie.');
+    return;
+  }
+  if(!confirm('¿Crear el producto?\n\n'+nombre+'\nCategoría: '+obj.category+'\nPrecio: '+fmt(obj.price)+(obj.stockControl==='unidad'?'\nStock inicial: '+obj.stock:'')+
+    '\n\nQueda registrado a tu nombre y administración lo revisará.')) return;
+  const id='p'+Date.now();
+  const rec={...obj,name:nombre,id,claseIVA:'',active:true,revisado:false,creadoPorAuth:authUser(),creadoPor:turnoUser,creadoEn:localISO()};
+  try{
+    await conLimite(setDoc(doc(db,PRODUCTOS_COL,id),_marca(rec)),ESPERA_SERVIDOR_MS*2);
+  }catch(e){
+    console.error('crearProductoCaja',e);
+    alert(e&&e.code==='permission-denied'
+      ?'El servidor no permitió crear el producto. Falta publicar en Firebase la regla de productos del 7-nov (creación desde caja).'
+      :'El producto NO se guardó en el servidor ('+((e&&(e.code||e.message))||'error')+'). Revisa la conexión e inténtalo de nuevo.');
+    return;
+  }
+  P.push(rec); _lastPSync.set(id,JSON.stringify(rec));
+  try{ await registrarCambioPrecio({id},{name:nombre,price:obj.price},'alta'); }catch(e){}
+  bitacora('producto_creado_caja',{accion:'Creo el producto «'+nombre+'» ('+obj.category+') a '+fmt(obj.price)+(cod?' · código '+cod:''),productoId:id,producto:nombre,monto:obj.price});
+  window._prefillCodigo='';
+  if(window._revVolver){ window._revVolver=false; editP=null; irA('inventario',()=>{invModo='revision';}); return; }
+  editP=null; render();
+  alert('✓ Producto «'+nombre+'» creado. Ya se puede vender.');
+}
+async function marcarProductoRevisado(id){
+  if(MI_ROL!=='admin') return;
+  const p=P.find(x=>x&&String(x.id)===String(id)); if(!p) return;
+  try{
+    await conLimite(updateDoc(doc(db,PRODUCTOS_COL,String(id)),{revisado:true,revisadoPor:authUser(),revisadoEn:localISO(),updatedAt:serverTimestamp()}),ESPERA_SERVIDOR_MS*2);
+    p.revisado=true; p.revisadoPor=authUser(); p.revisadoEn=localISO(); _lastPSync.set(String(id),JSON.stringify(p));
+    bitacora('producto_revisado',{accion:'Revisó el producto «'+p.name+'» creado desde caja',productoId:String(id),producto:p.name});
+    render();
+  }catch(e){ alert('No se pudo marcar como revisado: '+((e&&(e.code||e.message))||'error')); }
+}
+
 // ── PRODUCTOS ─────────────────────────────────────────────────
 function rProductos(){
   const cats=[...new Set(P.map(p=>p.category))].sort();
@@ -3405,11 +3455,14 @@ function rProductos(){
         <div class="fg"><label>Autor / Proveedor</label><input id="fauth" value="${(p.author||'').replace(/"/g,'&quot;')}"></div>
         <div class="fg"><label>Control stock</label><select id="fctrl"><option value="sin_control"${p.stockControl==='sin_control'?' selected':''}>Sin control (café, comida)</option><option value="unidad"${p.stockControl==='unidad'?' selected':''}>Por unidad (libros, merch, postres)</option></select></div>
         <div class="fg"><label>Variantes café</label><select id="fvar"><option value="0"${!p.hasVariants?' selected':''}>No</option><option value="1"${p.hasVariants?' selected':''}>Sí (tamaño + leche)</option></select></div>
-        <div class="fg"><label>IVA (factura electrónica)</label><select id="fiva">${[['','Según su categoría'],['IVA15','IVA 15%'],['IVA0','IVA 0%'],['IVA5','IVA 5%'],['IVA8','IVA diferenciado 8%'],['NO_OBJETO','No objeto de IVA'],['EXENTO','Exento de IVA']].map(([v,t])=>`<option value="${v}"${(p.claseIVA||'')===v?' selected':''}>${t}</option>`).join('')}</select></div>
+        ${MI_ROL!=='admin'&&editP==='new'?`<div class="fg"><label>IVA (factura electrónica)</label><div style="font-size:11.5px;color:var(--text2);padding:7px 0">Según su categoría (lo ajusta administración)</div></div>`:''}
+        <div class="fg" style="${MI_ROL!=='admin'&&editP==='new'?'display:none':''}"><label>IVA (factura electrónica)</label><select id="fiva">${[['','Según su categoría'],['IVA15','IVA 15%'],['IVA0','IVA 0%'],['IVA5','IVA 5%'],['IVA8','IVA diferenciado 8%'],['NO_OBJETO','No objeto de IVA'],['EXENTO','Exento de IVA']].map(([v,t])=>`<option value="${v}"${(p.claseIVA||'')===v?' selected':''}>${t}</option>`).join('')}</select></div>
       </div>
+      ${MI_ROL!=='admin'&&editP==='new'?'<div style="font-size:11px;color:var(--text3);margin:-4px 0 10px">El producto queda creado al instante y administración lo revisa después. Una vez creado, cambiar su precio o ficha requiere la clave de administración.</div>':''}
       <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="bpc">Cancelar</button><button class="btn btn-acc" id="bps">Guardar</button></div>
     </div>`;
   }
+  const _porRevisar=MI_ROL==='admin'?P.filter(x=>x&&x.revisado===false):[];
   const filteredP = prodSearch
     ? P.filter(p=>buscaCoincide(p,prodSearch))
     : P;
@@ -3433,6 +3486,14 @@ function rProductos(){
     <div id="import-panel" style="display:none"></div>
     ${prodSearch?`<div style="font-size:11px;color:var(--text3);margin-bottom:8px">${filteredP.length} resultado${filteredP.length!==1?'s':''} para "${esc(prodSearch)}"</div>`:''}
     ${form}
+    ${_porRevisar.length?`<div class="card" style="margin-bottom:12px;border:1px solid var(--abrd);background:var(--abg)">
+      <div style="font-weight:700;font-size:12.5px;margin-bottom:4px;color:var(--amb)">Productos creados desde caja por revisar (${_porRevisar.length})</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">Revise nombre, categoría, precio e IVA. «Editar» para corregir; «✓ Revisado» si está bien.</div>
+      ${_porRevisar.map(x=>`<div class="mrow"><div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(x.name)}</span>
+        <span style="font-size:10.5px;color:var(--text3);margin-left:6px">${esc(x.category||'')}${x.code?' · '+esc(x.code):''} · creado por ${esc(x.creadoPor||x.creadoPorAuth||'')} ${x.creadoEn?esc(String(x.creadoEn).slice(0,16).replace('T',' ')):''}</span></div>
+        <div style="display:flex;gap:5px;align-items:center;flex-shrink:0"><span style="font-weight:700;color:var(--acc);font-size:12px">${fmt(x.price)}</span>
+        <button class="btn btn-g btn-sm" data-pe="${x.id}">Editar</button><button class="btn btn-ok btn-sm" data-prev="${x.id}">✓ Revisado</button></div></div>`).join('')}
+    </div>`:''}
     ${prodSearch&&!filteredP.length?`<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Sin resultados para «${esc(prodSearch)}»</div>`:''}
     ${cats.filter(cat=>!prodSearch||filteredP.some(p=>p.category===cat)).map(cat=>`<div style="margin-bottom:16px">
       <div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${cat} (${filteredP.filter(p=>p.category===cat).length})</div>
@@ -3479,6 +3540,12 @@ function attachProd(){
     if(!name||isNaN(price))return alert('Nombre y precio son requeridos');
     const obj={name,category,subcategory,price,cost,stock,code,author,active:true,stockControl,hasVariants,claseIVA};
     const _pPrev=editP!=='new'?P.find(x=>x.id===editP):null;
+    // 7-nov-2026: la cuenta de CAJA crea productos nuevos sin clave de administracion
+    // (controles: duplicados bloqueados, IVA segun categoria, revisado:false para
+    // revision de administracion, bitacora y regla de servidor). Editar despues
+    // sigue pidiendo la clave.
+    if(editP==='new' && MI_ROL!=='admin'){ await crearProductoCaja(obj); return; }
+    if(_pPrev && _pPrev.revisado===false && MI_ROL==='admin'){ obj.revisado=true; obj.revisadoPor=authUser(); obj.revisadoEn=localISO(); }
     // CONTROL INTERNO: crear producto o cambiar precio/IVA exige administracion.
     // Con cuenta 'pos' TODA edicion de ficha la pide, porque el servidor solo
     // le permite tocar el stock; se guarda con la sesion del administrador.
@@ -3519,6 +3586,7 @@ function attachProd(){
     editP=null;render();
   });
   mc.querySelectorAll('[data-pe]').forEach(el=>el.addEventListener('click',()=>{editP=el.dataset.pe;render();}));
+  mc.querySelectorAll('[data-prev]').forEach(el=>el.addEventListener('click',()=>marcarProductoRevisado(el.dataset.prev)));
   mc.querySelectorAll('[data-pt]').forEach(el=>el.addEventListener('click',async()=>{
     const p=P.find(x=>x.id===el.dataset.pt);if(!p)return;
     const aut=await pedirAutorizacionAdmin((p.active?'Desactivar':'Activar')+' el producto "'+p.name+'"',{producto:p.name});
@@ -9167,6 +9235,10 @@ let _iniSriPedido=false;
 function iniAlertas(){
   const admin=MI_ROL==='admin', out=[];
   const add=(sev,titulo,desc,label,fn,badgeKey)=>out.push({sev,titulo,desc,label,fn,badgeKey});
+  try{
+    const pr=admin?P.filter(x=>x&&x.revisado===false):[];
+    if(pr.length) add('media',pr.length+' producto(s) creado(s) desde caja por revisar',pr.slice(0,3).map(x=>x.name+' '+fmt(x.price)).join(', ')+(pr.length>3?'…':'')+'. Revise precio, categoría e IVA.','Revisar',()=>irA('productos'),'productos');
+  }catch(e){}
   try{
     const ec=estadoCaja();
     if(ec.e==='cerrada') add('alta','La caja está cerrada','Para cobrar hay que abrirla contando el efectivo inicial.','Abrir caja',()=>irACaja(),'caja');
