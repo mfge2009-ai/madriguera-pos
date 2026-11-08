@@ -3424,6 +3424,31 @@ async function crearProductoCaja(obj){
   editP=null; render();
   alert('✓ Producto «'+nombre+'» creado. Ya se puede vender.');
 }
+// 8-nov-2026: la caja sube un precio con su propia sesion (sin clave de administracion)
+async function subirPrecioCaja(p,precio){
+  const ant=+p.price||0;
+  if(!(precio>ant)){ alert('Solo puedes SUBIR el precio. Para bajarlo se necesita la clave de administración.'); return; }
+  let msg='¿Subir el precio de «'+p.name+'»?\n\nDe '+fmt(ant)+' a '+fmt(precio)+' (+'+fmt(precio-ant)+')';
+  if(ant>0 && precio>ant*3) msg+='\n\n⚠ El precio nuevo es más del TRIPLE del actual. Revisa que no falte el punto decimal (por ejemplo 4.50 y no 450).';
+  if(!confirm(msg+'\n\nQueda registrado a tu nombre en la Bitácora.')) return;
+  const cambios={price:precio,updatedAt:serverTimestamp(),precioSubidoPor:authUser(),precioSubidoEn:localISO()};
+  try{
+    await conLimite(updateDoc(doc(db,PRODUCTOS_COL,String(p.id)),cambios),ESPERA_SERVIDOR_MS*2);
+  }catch(e){
+    console.error('subirPrecioCaja',e);
+    alert(e&&e.code==='permission-denied'
+      ?'El servidor no permitió cambiar el precio. Falta publicar en Firebase la regla de productos del 8-nov (la caja sube precios).'
+      :'El precio NO se guardó en el servidor ('+((e&&(e.code||e.message))||'error')+'). Revisa la conexión e inténtalo de nuevo.');
+    return;
+  }
+  p.price=precio; p.precioSubidoPor=cambios.precioSubidoPor; p.precioSubidoEn=cambios.precioSubidoEn;
+  try{ _lastPSync.set(String(p.id),JSON.stringify(p)); }catch(e){}
+  try{ await registrarCambioPrecio(p,{name:p.name,price:precio,precioAnterior:ant},'cambio'); }catch(e){}
+  bitacora('precio_subido_caja',{accion:'Subio el precio de «'+p.name+'» de '+fmt(ant)+' a '+fmt(precio),productoId:String(p.id),producto:p.name,precioAnterior:ant,precioNuevo:precio,monto:precio});
+  window._prefillCodigo='';
+  editP=null; render();
+  alert('✓ Precio de «'+p.name+'» actualizado a '+fmt(precio)+'.');
+}
 async function marcarProductoRevisado(id){
   if(MI_ROL!=='admin') return;
   const p=P.find(x=>x&&String(x.id)===String(id)); if(!p) return;
@@ -3552,6 +3577,18 @@ function attachProd(){
     const cambioIVA=!!_pPrev && (_pPrev.claseIVA||'')!==claseIVA;
     const precioAnterior=_pPrev?(+_pPrev.price||0):0;
     const cambioPrecio=!!_pPrev && Math.abs(precioAnterior-price)>0.001;
+    // 8-nov-2026: la CAJA puede SUBIR el precio sin clave (lista nueva del proveedor),
+    // siempre que solo cambie el precio. Bajarlo, cambiar el IVA u otros datos de la
+    // ficha sigue pidiendo la clave de administracion. Regla del servidor: solo
+    // 'price' (mayor al anterior), 'updatedAt', 'precioSubidoPor' y 'precioSubidoEn'.
+    if(MI_ROL!=='admin' && _pPrev && cambioPrecio && price>precioAnterior && !cambioIVA){
+      const _s=v=>String(v??'').trim(), _n=v=>+v||0;
+      const soloPrecio=_s(_pPrev.name)===_s(name)&&_s(_pPrev.category)===_s(category)&&_s(_pPrev.subcategory)===_s(subcategory)
+        &&_n(_pPrev.cost)===_n(cost)&&_n(_pPrev.stock)===_n(stock)&&_s(_pPrev.code)===_s(code)&&_s(_pPrev.author)===_s(author)
+        &&_s(_pPrev.stockControl)===_s(stockControl)&&!!_pPrev.hasVariants===!!hasVariants;
+      if(soloPrecio){ await subirPrecioCaja(_pPrev,price); return; }
+      if(!confirm('Para SUBIR el precio sin clave de administración, cambia SOLO el precio.\n\nTambién cambiaste otros datos de la ficha: eso requiere la clave de administración.\n\n¿Continuar y pedir la clave?')) return;
+    }
     let accionAut='';
     if(editP==='new') accionAut='Crear el producto "'+name+'" a '+fmt(price);
     else if(cambioPrecio) accionAut='Cambiar el precio de "'+_pPrev.name+'"\nde '+fmt(precioAnterior)+' a '+fmt(price);
@@ -11523,7 +11560,12 @@ async function cerrarSesionPOS(motivo){
   try{ await bitacora('cierre_sesion',{accion:'Cerro sesion ('+(motivo||'manual')+')'}); }catch(e){}
   try{ localStorage.removeItem('madu_turno'); }catch(e){}
   turnoUser=''; MI_NOMBRE=''; MI_ROL=''; _admOK=null; _diaSesion='';
-  try{ await signOut(auth); }catch(e){ location.reload(); }
+  try{ await signOut(auth); }catch(e){}
+  // 8-nov-2026: al cerrar sesion, las suscripciones a Firestore quedan rechazadas
+  // (permission-denied) y NO se vuelven a abrir al entrar otra persona en la misma
+  // pestana: la pantalla quedaba sin datos nuevos (caja que "se cierra"). Se
+  // recarga la pagina para que cada ingreso empiece limpio.
+  location.reload();
 }
 window.cerrarSesionPOS=cerrarSesionPOS;
 
@@ -11608,6 +11650,9 @@ onAuthStateChanged(auth,async user=>{
     if(lg)lg.style.display='none';
     if(!_initDone){_initDone=true;init();}
   } else {
+    // 8-nov: si la sesion se cerro con la app ya cargada (caducidad, otra pestana),
+    // se recarga para no reutilizar suscripciones muertas en el proximo ingreso.
+    if(_initDone){ location.reload(); return; }
     if(lg)lg.style.display='flex';
     setTimeout(()=>document.getElementById('login-email')?.focus(),100);
   }
