@@ -182,6 +182,12 @@ function pintarLista() {
 // Así el personal puede marcar directo desde su celular conectado al Wi-Fi.
 let _anclaTimer = null, _anclaOk = 0;
 const urlWifi = () => (CFG && typeof CFG.wifiUrl === 'string' && /^https:\/\//.test(CFG.wifiUrl)) ? CFG.wifiUrl.replace(/\/+$/, '') : '';
+// Direcciones públicas de esta conexión (IPv4 e IPv6): la red del local
+// suele tener ambas y cada celular usa una u otra.
+async function otrasIPs() {
+  const q = u => fetch(u, {cache: 'no-store', signal: AbortSignal.timeout(5000)}).then(r => r.json()).then(j => j.ip).catch(() => null);
+  return (await Promise.all([q('https://api.ipify.org?format=json'), q('https://api6.ipify.org?format=json')])).filter(Boolean);
+}
 async function registrarAncla() {
   const el = $('wifiest');
   if (!urlWifi() || !auth.currentUser) { el.style.display = 'none'; return; }
@@ -189,12 +195,13 @@ async function registrarAncla() {
   try {
     const tok = await auth.currentUser.getIdToken();
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
-    const r = await fetch(urlWifi() + '/ancla', {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok}, body: '{}', signal: ctl.signal, cache: 'no-store'});
+    const extra = await otrasIPs();
+    const r = await fetch(urlWifi() + '/ancla', {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok}, body: JSON.stringify({extra}), signal: ctl.signal, cache: 'no-store'});
     clearTimeout(t);
     const j = await r.json().catch(() => ({}));
     if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status));
     _anclaOk = Date.now();
-    el.className = 'wifiest'; el.textContent = '📶 Wi-Fi del local registrado · ' + A.horaDe(_anclaOk);
+    el.className = 'wifiest'; el.textContent = '📶 Wi-Fi del local registrado · ' + A.horaDe(_anclaOk) + (Array.isArray(j.claves) ? ' (' + [...new Set(j.claves)].map(c => c === 'v4' ? 'IPv4' : 'IPv6').join(' + ') + ')' : '');
   } catch (e) {
     el.className = 'wifiest mal';
     el.textContent = '📶 No se pudo registrar el Wi-Fi (' + (e.message || e) + ')' + (_anclaOk ? ' · último ' + A.horaDe(_anclaOk) : '') + '. Se reintenta solo.';
