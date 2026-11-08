@@ -5697,6 +5697,239 @@ async function resLiberarVenta(venta,dbX){
   return fallos;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  MENÚS DE LAS FUNCIONES + «🧾 Facturar» reservas sin abrir mesa (8-nov-2026)
+//  Cada función (Coraline, Shrek 2…) tiene un menú temático por persona. Sus
+//  platos son PRODUCTOS reales del catálogo (precio de carta e IVA por su
+//  categoría; el servicio SRI valida el precio contra el catálogo). La
+//  composición del menú la edita administración y se guarda en madu/experiencias:
+//    [{id, nombre, nombres:[nombres del evento en la app de reservas], items:[{productId, qty}]}]
+//  Facturar una reserva = platos del menú × personas, pagado con la reserva
+//  (reclamo en lm_entradas como en el cobro de mesa), factura con los datos del
+//  cliente. La película no se factura.
+// ═══════════════════════════════════════════════════════════════════════
+let EXP={list:null,cargando:false,err:'',draft:null};
+const _expK=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+async function expCargar(force){
+  if(EXP.cargando||(EXP.list&&!force)) return;
+  EXP.cargando=true;
+  try{ const v=await conLimite(fbGetStrict('experiencias'),15000); EXP.list=Array.isArray(v)?v:[]; EXP.err=''; }
+  catch(e){ EXP.err='No se pudieron leer los menús de las funciones ('+((e&&(e.code||e.message))||'error')+').'; if(!EXP.list) EXP.list=null; }
+  finally{ EXP.cargando=false; }
+}
+function expDe(evento){
+  const k=_expK(evento); if(!k||!EXP.list) return null;
+  return EXP.list.find(m=>[m.nombre].concat(m.nombres||[]).some(n=>_expK(n)===k))||null;
+}
+function expLineas(m){
+  const out=[]; const faltan=[];
+  (m.items||[]).forEach(it=>{
+    const p=P.find(x=>x&&String(x.id)===String(it.productId));
+    if(!p||!p.active){ faltan.push(it.nombre||it.productId); return; }
+    out.push({p,qty:+it.qty||1});
+  });
+  return {out,faltan,porPersona:_r2(out.reduce((s,x)=>s+(+x.p.price||0)*x.qty,0))};
+}
+// Precio de la entrada según la app de reservas (lo más frecuente pagado por persona)
+function expPrecioEntrada(m){
+  const c={};
+  const ks=new Set([m.nombre].concat(m.nombres||[]).map(_expK));
+  RES.list.filter(r=>ks.has(_expK(r.evento))&&r.pagado>0&&r.cantidad>0&&r.estadoPago==='pagado').forEach(r=>{ const k=_r2(r.pagado/r.cantidad).toFixed(2); c[k]=(c[k]||0)+1; });
+  const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];
+  return top?+top[0]:null;
+}
+// Revisa si una reserva se puede facturar con su menú; devuelve {ok, err, lineas, total, comprador}
+function resPrepararFactura(r){
+  const m=expDe(r.evento);
+  if(!m) return {err:'No hay menú configurado para «'+r.evento+'». Administración lo configura en Caja → Reservas → Menús de las funciones.'};
+  const L=expLineas(m);
+  if(L.faltan.length) return {err:'El menú de «'+m.nombre+'» tiene platos que no existen o están inactivos en el catálogo: '+L.faltan.join(', ')+'.'};
+  if(!L.out.length) return {err:'El menú de «'+m.nombre+'» no tiene platos.'};
+  const total=_r2(L.porPersona*r.cantidad);
+  if(Math.abs(total-r.disp)>0.009) return {err:'El menú de «'+m.nombre+'» suma '+fmt(L.porPersona)+' por persona × '+r.cantidad+' = '+fmt(total)+', pero la reserva tiene '+fmt(r.disp)+' por facturar'+(r.estadoPago==='parcial'?' (pago parcial)':'')+'. Ajusta el menú o factura esta reserva desde una mesa.'};
+  const lineas=L.out.map(x=>({lid:x.p.id+'_base',productId:x.p.id,name:x.p.name,price:+x.p.price,cost:(typeof x.p.cost==='number')?x.p.cost:null,proveedor:null,editorial:x.p.subcategory||null,isbn:x.p.code||null,category:x.p.category||'',qty:x.qty*r.cantidad,variant:null,stockControl:x.p.stockControl||'sin_control',persona:null}));
+  const comprador={tipo:_antTipoId(r.cedula),identificacion:r.cedula,nombre:r.nombre,email:r.email,telefono:r.telefono,direccion:''};
+  return {ok:true,m,lineas,total,comprador};
+}
+async function resCrearVentaReserva(r,prep){
+  const id=`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+  const parte={metodo:r.metodo,monto:prep.total,reservaId:r.id,reservaCliente:r.nombre,reservaEvento:r.evento+' '+r.fecha};
+  if(!(await resReclamar(id,[parte]))) return null;
+  const venta={id,tableId:null,tableName:'Reserva · '+r.nombre,items:prep.lineas,subtotal:prep.total,descuento:0,total:prep.total,
+    paymentMethod:'Reserva ('+r.metodo+') '+fmt(prep.total),pagosParciales:[parte],date:localISO(),closed:false,user:turnoUser,userAuth:authUser(),
+    esVentaReserva:true,reservaFuncion:(r.evento+' '+r.fecha+' '+(r.hora||'')).trim()};
+  prep.lineas.forEach(i=>{ if(i.stockControl==='unidad'&&i.productId) ajustarStock(i.productId,-i.qty); });
+  S.push(venta);
+  await _appendSale(venta);
+  try{ bitacora('factura_reserva',{accion:'Facturó la reserva de '+r.nombre+' ('+r.evento+' '+r.fecha+', '+r.cantidad+' pers.) por '+fmt(prep.total),ventaId:id,monto:prep.total}); }catch(e){}
+  return venta;
+}
+let _resFacOcupado=false;
+async function resFacturar(id){
+  if(_resFacOcupado) return;
+  if(typeof sriConfigurado==='function'&&!sriConfigurado()){ alert('La facturación electrónica no está configurada en este equipo.'); return; }
+  await expCargar();
+  const r=RES.list.find(x=>x.id===id); if(!r) return;
+  if(r.disp<=0.004){ alert('Esta reserva ya está facturada.'); return; }
+  const prep=resPrepararFactura(r);
+  if(!prep.ok){ alert(prep.err); return; }
+  if(r.metodoApp==='transferencia'&&!r.acreditada&&!confirm('La transferencia de esta reserva NO está confirmada como acreditada en la app de reservas.\n¿Facturar de todas formas?')) return;
+  abrirModalSri({titulo:'Facturar reserva de '+r.nombre+' · '+r.cantidad+' × '+prep.m.nombre+' · '+fmt(prep.total), total:prep.total, prellenar:prep.comprador, textoBoton:'🧾 Emitir factura '+fmt(prep.total),
+    alConfirmar: async (c)=>{
+      _resFacOcupado=true;
+      try{
+        const v=await resCrearVentaReserva(r,prep);
+        if(!v){ sriPanel(`<div style="color:#8b1a1a">No se facturó: la reserva no se pudo reclamar.</div>`,'red'); return; }
+        await sriRecordarCliente(c);
+        await sriEmitir(v.id,c);
+      } finally { _resFacOcupado=false; render(); }
+    }});
+}
+async function resFacturarFuncion(clave){
+  if(_resFacOcupado) return;
+  if(typeof sriConfigurado==='function'&&!sriConfigurado()){ alert('La facturación electrónica no está configurada en este equipo.'); return; }
+  await expCargar();
+  const grupo=RES.list.filter(r=>resUtil(r)&&r.disp>0.004&&(r.evento+'|'+r.fecha+'|'+r.hora)===clave);
+  const listos=[], omitidos=[];
+  grupo.forEach(r=>{
+    const prep=resPrepararFactura(r);
+    if(!prep.ok){ omitidos.push(r.nombre+': '+prep.err); return; }
+    const e=sriValidarComprador(prep.comprador,prep.total);
+    if(e){ omitidos.push(r.nombre+': '+e); return; }
+    if(r.metodoApp==='transferencia'&&!r.acreditada){ omitidos.push(r.nombre+': transferencia no confirmada en la app de reservas.'); return; }
+    listos.push({r,prep});
+  });
+  if(!listos.length){ alert('No hay reservas listas para facturar en esta función.'+(omitidos.length?'\n\n'+omitidos.join('\n'):'')); return; }
+  const tot=_r2(listos.reduce((s,x)=>s+x.prep.total,0));
+  if(!confirm('Se emitirán '+listos.length+' factura(s) por '+fmt(tot)+', una por reserva, con los datos de cada cliente.'+
+    (omitidos.length?'\n\nSe omiten '+omitidos.length+' (facturarlas una por una):\n• '+omitidos.slice(0,8).join('\n• ')+(omitidos.length>8?'\n…':''):'')+'\n\n¿Continuar?')) return;
+  _resFacOcupado=true;
+  let ok=0, cola=0, mal=[];
+  try{
+    for(const {r,prep} of listos){
+      sriPanel(`<div style="font-weight:700">🧾 Facturando reservas… ${ok+cola+mal.length+1} de ${listos.length}</div><div>${esc(r.nombre)}</div>`,'blu');
+      const v=await resCrearVentaReserva(r,prep);
+      if(!v){ mal.push(r.nombre+' (no se pudo reclamar la reserva)'); continue; }
+      await sriRecordarCliente(prep.comprador);
+      const res=await sriEmitir(v.id,prep.comprador);
+      if(res&&res.ok) ok++; else if(sriCola().some(q=>q.ventaId===String(v.id)&&!q.requiereRevision)) cola++; else mal.push(r.nombre+(res&&res.mensaje?' ('+res.mensaje+')':''));
+    }
+  } finally { _resFacOcupado=false; render(); }
+  alert('Facturación de la función terminada.\n\n✓ Enviadas al SRI: '+ok+(cola?'\n⏳ En cola (se reintentan solas): '+cola:'')+(mal.length?'\n✗ Con problema ('+mal.length+'), revisar en Facturación:\n• '+mal.join('\n• '):''));
+}
+
+// ── Menús propuestos (8-nov-2026, aprobados por Mafer; precios editables) ──
+const EXP_PROPUESTA=[
+  {nombre:'Coraline',items:[['Limonada de rosas Pink Palace','Bebidas',2.5],['Pollito con puré de la Otra Madre','Platos fuertes',6.5],['Mini malteada de mango «Deseo concedido»','Bebidas',2.5],['Mini cake «Welcome Home»','Postres',2],['Chocoescarabajos rellenos de caramelo','Postres',1.5]]},
+  {nombre:'Shrek 2',items:[['Cajita Feliz Medieval (burrito y sorpresa)','Platos fuertes',7],['Poción «Happily Ever After»','Bebidas',3.5],['Postre del Pantano','Postres',3],['Galletitas de Jengi','Postres',1.5]]},
+  {nombre:'Kung Fu Panda',items:[['Soda italiana de maracuyá','Bebidas',2.5],['Sopa de Fideos con el Ingrediente Secreto','Platos fuertes',5.5],['Bao de cerdo','Platos fuertes',5],['Galleta de Mono','Postres',2]]}
+];
+async function expCrearPropuesta(){
+  if(MI_ROL!=='admin') return;
+  await expCargar(true);
+  const existentes=new Set((EXP.list||[]).map(m=>_expK(m.nombre)));
+  const nuevos=EXP_PROPUESTA.filter(m=>!existentes.has(_expK(m.nombre)));
+  if(!nuevos.length){ alert('Los menús propuestos ya existen.'); return; }
+  if(!confirm('Se crearán los menús de: '+nuevos.map(m=>m.nombre).join(', ')+'.\n\nCada plato se crea como producto del catálogo (categoría e IVA según la carta) si no existe. Después puedes cambiar precios en Productos y la composición aquí.\n\n¿Continuar?')) return;
+  const menus=[];
+  for(const m of nuevos){
+    const items=[];
+    for(const [nombre,cat,precio] of m.items){
+      let p=P.find(x=>x&&!x.esConsignado&&_expK(x.name)===_expK(nombre));
+      if(!p){
+        p={id:'p'+Date.now()+Math.floor(Math.random()*1000),name:nombre,category:cat,subcategory:'Experiencia '+m.nombre,price:precio,cost:null,stock:0,code:'',author:'',active:true,stockControl:'sin_control',hasVariants:false,claseIVA:''};
+        P.push(p);
+        try{ await registrarCambioPrecio(p,{name:nombre,price:precio},'alta'); }catch(e){}
+      }
+      items.push({productId:p.id,qty:1,nombre:p.name});
+      await new Promise(r=>setTimeout(r,3));
+    }
+    menus.push({id:'exp'+Date.now()+Math.floor(Math.random()*1000),nombre:m.nombre,nombres:[m.nombre],items});
+  }
+  const okP=await sP();
+  if(!okP){ alert('No se pudieron guardar los productos en el servidor. Revisa la conexión.'); return; }
+  EXP.list=(EXP.list||[]).concat(menus);
+  await expGuardar(EXP.list,'Creó los menús propuestos: '+menus.map(m=>m.nombre).join(', '));
+  render();
+}
+async function expGuardar(list,accion){
+  const limpio=list.map(m=>({id:m.id,nombre:String(m.nombre||'').trim(),nombres:(m.nombres||[]).map(n=>String(n).trim()).filter(Boolean),
+    items:(m.items||[]).filter(it=>it&&it.productId).map(it=>({productId:String(it.productId),qty:Math.max(1,parseInt(it.qty)||1),nombre:it.nombre||''}))}));
+  await fbSet('experiencias',limpio);
+  EXP.list=limpio;
+  try{ bitacora('menus_funciones',{accion:accion||'Actualizó los menús de las funciones',obs:limpio.map(m=>m.nombre+': '+m.items.length+' platos').join(' | ')}); }catch(e){}
+}
+
+// ── Vista: menús (lectura para todos, edición solo administración) ──
+function rExpMenus(){
+  if(EXP.list===null&&!EXP.cargando) expCargar().then(()=>{ if(view==='caja'&&cajaTab==='reservas') render(); });
+  const admin=MI_ROL==='admin';
+  const D=EXP.draft;
+  if(D&&admin){
+    const prods=P.filter(p=>p&&p.active&&!p.esConsignado&&p.category!=='Libros');
+    return `<div class="card" style="margin-top:12px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:4px">🍽 Menús de las funciones — editar</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Cada plato es un producto del catálogo: su <b>precio</b> se cambia en Productos. Aquí se elige qué platos y cuántos lleva cada persona. «Nombres en la app de reservas»: cómo se llama la función allí (separe con comas si hay variantes).</div>
+      <datalist id="exp-prods">${prods.map(p=>`<option value="${esc(p.name)}">${esc(p.category)} · ${fmt(p.price)}</option>`).join('')}</datalist>
+      ${D.map((m,mi)=>{
+        const L=expLineas(m); const ref=expPrecioEntrada(m);
+        return `<div style="border:1px solid var(--border);border-radius:var(--rs);padding:10px;margin-bottom:10px">
+          <div class="fgrid" style="margin-bottom:6px">
+            <div class="fg"><label>Menú</label><input data-expnom="${mi}" value="${esc(m.nombre||'')}"></div>
+            <div class="fg"><label>Nombres en la app de reservas</label><input data-expalias="${mi}" value="${esc((m.nombres||[]).join(', '))}"></div>
+          </div>
+          ${(m.items||[]).map((it,ii)=>{ const p=P.find(x=>x&&String(x.id)===String(it.productId)); return `<div style="display:flex;gap:6px;align-items:center;font-size:12px;padding:4px 0;border-bottom:.5px solid var(--border)">
+            <span style="flex:1">${p?esc(p.name)+' <span style="color:var(--text3)">· '+esc(p.category)+(p.active?'':' · INACTIVO')+'</span>':'<span style="color:var(--red)">'+esc(it.nombre||it.productId)+' (no existe)</span>'}</span>
+            <span style="color:var(--text3)">${p?fmt(p.price):''} ×</span>
+            <input data-expqty="${mi}|${ii}" type="number" min="1" step="1" value="${+it.qty||1}" style="width:52px;padding:4px">
+            <button class="btn btn-r btn-sm" data-expdel="${mi}|${ii}" style="padding:1px 7px">✕</button></div>`; }).join('')}
+          <div style="display:flex;gap:6px;margin-top:6px"><input list="exp-prods" data-expadd="${mi}" placeholder="Agregar plato: escriba y elija del catálogo" style="flex:1;padding:6px 8px;border:1.5px solid var(--b2);border-radius:var(--rs);font-size:12px;font-family:inherit"><button class="btn btn-b btn-sm" data-expaddbtn="${mi}">+ Agregar</button></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px">
+            <span><b>Por persona: ${fmt(L.porPersona)}</b>${ref!==null?` · entrada en la app: ${fmt(ref)} ${Math.abs(ref-L.porPersona)>0.009?'<b style="color:var(--red)">· no coincide</b>':'<span style="color:var(--grn)">✓</span>'}`:''}</span>
+            <button class="btn btn-g btn-sm" data-expborrar="${mi}" style="color:var(--red);font-size:11px">Eliminar menú</button></div>
+        </div>`; }).join('')}
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-g btn-sm" id="exp-nuevo">+ Nuevo menú</button><span style="flex:1"></span><button class="btn btn-g btn-sm" id="exp-cancelar">Cancelar</button><button class="btn btn-acc btn-sm" id="exp-guardar">Guardar menús</button></div>
+    </div>`;
+  }
+  const L=EXP.list||[];
+  return `<div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div style="font-weight:700;font-size:13px">🍽 Menús de las funciones</div>
+      ${admin?`<div style="display:flex;gap:6px">${L.length<EXP_PROPUESTA.length?'<button class="btn btn-g btn-sm" id="exp-propuesta" style="font-size:11px">Crear menús propuestos</button>':''}<button class="btn btn-g btn-sm" id="exp-editar" style="font-size:11px">✏️ Editar menús</button></div>`:''}
+    </div>
+    ${EXP.err?`<div style="color:var(--red);font-size:11.5px">${esc(EXP.err)}</div>`:''}
+    ${EXP.list===null?'<div style="font-size:12px;color:var(--text3)">Leyendo…</div>':!L.length?`<div style="font-size:12px;color:var(--text3)">Aún no hay menús. ${admin?'Use «Crear menús propuestos» o «Editar menús».':'Administración debe configurarlos.'}</div>`:
+      L.map(m=>{ const X=expLineas(m); const ref=expPrecioEntrada(m); return `<div style="padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
+        <div style="display:flex;justify-content:space-between"><b>${esc(m.nombre)}</b><span><b>${fmt(X.porPersona)}</b> por persona${ref!==null&&Math.abs(ref-X.porPersona)>0.009?' <b style="color:var(--red)">(la entrada cuesta '+fmt(ref)+')</b>':''}</span></div>
+        <div style="color:var(--text3);font-size:11px">${X.out.map(x=>(x.qty>1?x.qty+'× ':'')+esc(x.p.name)+' '+fmt(x.p.price)).join(' · ')}${X.faltan.length?' · <span style="color:var(--red)">falta: '+esc(X.faltan.join(', '))+'</span>':''}</div></div>`; }).join('')}
+  </div>`;
+}
+function attachExpMenus(mc){
+  mc.querySelector('#exp-propuesta')?.addEventListener('click',expCrearPropuesta);
+  mc.querySelector('#exp-editar')?.addEventListener('click',async()=>{ await expCargar(true); EXP.draft=JSON.parse(JSON.stringify(EXP.list||[])); render(); });
+  if(!EXP.draft) return;
+  const D=EXP.draft;
+  mc.querySelectorAll('[data-expnom]').forEach(el=>el.addEventListener('input',()=>{ D[+el.dataset.expnom].nombre=el.value; }));
+  mc.querySelectorAll('[data-expalias]').forEach(el=>el.addEventListener('input',()=>{ D[+el.dataset.expalias].nombres=el.value.split(',').map(x=>x.trim()).filter(Boolean); }));
+  mc.querySelectorAll('[data-expqty]').forEach(el=>el.addEventListener('change',()=>{ const [a,b]=el.dataset.expqty.split('|').map(Number); D[a].items[b].qty=Math.max(1,parseInt(el.value)||1); render(); }));
+  mc.querySelectorAll('[data-expdel]').forEach(el=>el.addEventListener('click',()=>{ const [a,b]=el.dataset.expdel.split('|').map(Number); D[a].items.splice(b,1); render(); }));
+  mc.querySelectorAll('[data-expaddbtn]').forEach(el=>el.addEventListener('click',()=>{
+    const mi=+el.dataset.expaddbtn; const inp=mc.querySelector(`[data-expadd="${mi}"]`); const v=_expK(inp&&inp.value);
+    const p=P.find(x=>x&&x.active&&!x.esConsignado&&_expK(x.name)===v);
+    if(!p){ alert('Elija un producto de la lista (escriba y seleccione). Si el plato no existe, créelo primero en Productos.'); return; }
+    const ex=D[mi].items.find(it=>String(it.productId)===String(p.id)); if(ex) ex.qty=(+ex.qty||1)+1; else D[mi].items.push({productId:p.id,qty:1,nombre:p.name});
+    render();
+  }));
+  mc.querySelectorAll('[data-expborrar]').forEach(el=>el.addEventListener('click',()=>{ const mi=+el.dataset.expborrar; if(confirm('¿Eliminar el menú «'+(D[mi].nombre||'')+'»? Los productos no se borran.')){ D.splice(mi,1); render(); } }));
+  mc.querySelector('#exp-nuevo')?.addEventListener('click',()=>{ const n=(prompt('Nombre de la función (como aparece en la app de reservas):')||'').trim(); if(!n) return; D.push({id:'exp'+Date.now(),nombre:n,nombres:[n],items:[]}); render(); });
+  mc.querySelector('#exp-cancelar')?.addEventListener('click',()=>{ EXP.draft=null; render(); });
+  mc.querySelector('#exp-guardar')?.addEventListener('click',async()=>{
+    const vacios=D.filter(m=>!String(m.nombre||'').trim()); if(vacios.length){ alert('Cada menú necesita un nombre.'); return; }
+    try{ await expGuardar(D,'Editó los menús de las funciones'); EXP.draft=null; render(); alert('✓ Menús guardados.'); }
+    catch(e){ alert('No se guardaron los menús: '+((e&&(e.code||e.message))||'error')); }
+  });
+}
+
 // ── Pestaña Caja → 🎟 Reservas ──
 let resTabVer='hoy';
 function rReservasPOS(){
@@ -5709,7 +5942,7 @@ function rReservasPOS(){
   const fila=r=>{
     const est=r.disp<=0.004?'<span style="color:var(--grn);font-weight:700">🧾 Facturada</span>':r.aplicado>0?'<span style="color:var(--amb);font-weight:700">Facturada en parte · faltan '+fmt(r.disp)+'</span>':'<span style="color:var(--acc);font-weight:700">Por facturar '+fmt(r.disp)+'</span>';
     return `<div style="padding:9px 0;border-bottom:.5px solid var(--border);font-size:12px">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.nombre)}</b>${est}</div>
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>${esc(r.nombre)}</b><span style="display:flex;gap:8px;align-items:center">${est}${r.disp>0.004?`<button class="btn btn-sm" data-resfac="${esc(r.id)}" style="background:#1a3f8b;color:#fff;border:none;font-size:11px;padding:4px 9px">🧾 Facturar</button>`:''}</span></div>
       <div style="color:var(--text3);font-size:11px">${esc(r.evento)} · ${esc(r.fecha)}${r.hora?' '+esc(r.hora):''} · ${r.cantidad} ${r.cantidad===1?'persona':'personas'} · pagó ${fmt(r.pagado)} (${esc(r.metodoApp||'')}${r.metodoApp==='transferencia'?(r.acreditada?', acreditada':', por confirmar'):''})${r.estadoPago==='parcial'?' · pago parcial':''}${r.cedula?' · '+esc(r.cedula):' · ⚠ sin cédula/RUC'}</div>
     </div>`;
   };
@@ -5720,12 +5953,20 @@ function rReservasPOS(){
       <div style="font-weight:700;font-size:13px">🎟 Reservas pagadas (app de reservas)</div>
       <button class="btn btn-g btn-sm" id="res-actualizar" style="font-size:11px">${RES.cargando?'Leyendo…':'↻ Actualizar'}</button>
     </div>
-    <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px;line-height:1.5">El pago y los datos de facturación se registran en la <b>app de reservas</b>. El día de la función, en el cobro de la mesa, usa <b>«🎟 Aplicar reserva pagada»</b>: se cobran los ítems del menú a precio de carta, la reserva cuenta como forma de pago y la factura sale con los datos del cliente. Este dinero no entra al cuadre de la caja.</div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px;line-height:1.5">El pago y los datos de facturación se registran en la <b>app de reservas</b>. Para facturar, pulse <b>«🧾 Facturar»</b> en la reserva (o «Facturar las N» de una función): la factura lleva los platos del menú de esa función × personas, con los datos del cliente; la película no se factura. Si el cliente consumió algo más, cóbrelo aparte en una mesa. Este dinero no entra al cuadre de la caja.</div>
     ${RES.err?`<div style="background:var(--rbg,#fdecea);border:1px solid #f5c2c0;color:#8b1a1a;padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:10px">${esc(RES.err)}</div>`:''}
     ${pasadasSinFac.length?`<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:10px">⚠ ${pasadasSinFac.length} reserva(s) pagada(s) de funciones de los últimos 7 días sin facturar (${fmt(pasadasSinFac.reduce((s,r)=>s+r.disp,0))}). Si el cliente asistió y consumió, falta la factura.</div>`:''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tabBtn('hoy','Hoy',grupos.hoy.length)}${tabBtn('proximas','Próximas',grupos.proximas.length)}${tabBtn('pasadas','Últimos 7 días',grupos.pasadas.length)}</div>
-    ${!RES.ts?'<div style="font-size:12px;color:var(--text3);padding:12px 0">Leyendo reservas…</div>':(lista.length?lista.map(fila).join(''):'<div style="font-size:12px;color:var(--text3);padding:12px 0">No hay reservas pagadas en este grupo.</div>')}
+    ${!RES.ts?'<div style="font-size:12px;color:var(--text3);padding:12px 0">Leyendo reservas…</div>':(lista.length?(()=>{
+      const g={}; lista.forEach(r=>{ const k=r.evento+'|'+r.fecha+'|'+r.hora; (g[k]=g[k]||[]).push(r); });
+      return Object.entries(g).map(([k,rs])=>{ const pend=rs.filter(r=>r.disp>0.004); const r0=rs[0];
+        return `<div style="margin-top:10px;padding:7px 9px;background:var(--bg3);border-radius:var(--rs);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:12px"><b>${esc(r0.evento)}</b> · ${esc(r0.fecha)}${r0.hora?' '+esc(r0.hora):''} · ${rs.length} reserva(s)${pend.length?' · <b>'+pend.length+' por facturar ('+fmt(pend.reduce((s,r)=>s+r.disp,0))+')</b>':' · todas facturadas'}${r0.fecha<hoy&&pend.length?' <span style="color:var(--amb)">· la factura saldrá con fecha de hoy</span>':''}</span>
+          ${pend.length>1?`<button class="btn btn-sm" data-resfacfun="${esc(k)}" style="background:#1a3f8b;color:#fff;border:none;font-size:11px;padding:4px 9px">🧾 Facturar las ${pend.length}</button>`:''}
+        </div>`+rs.map(fila).join(''); }).join('');
+    })():'<div style="font-size:12px;color:var(--text3);padding:12px 0">No hay reservas pagadas en este grupo.</div>')}
   </div>
+  ${rExpMenus()}
   ${leg.length?`<div class="card"><div style="font-weight:700;font-size:12.5px;margin-bottom:4px">Abonos registrados en el POS (versión del 4-nov)</div>
     <div style="font-size:11px;color:var(--text3);margin-bottom:6px">Ese registro manual se reemplazó por la app de reservas. Estos registros se pueden aplicar o anular.</div>
     ${leg.map(a=>{ const c=a.cliente||{}; const sal=aclSaldo(a); return `<div style="padding:7px 0;border-bottom:.5px solid var(--border);font-size:11.5px"><div style="display:flex;justify-content:space-between"><b>${esc(c.nombre||'')}</b><span>${fmt(a.monto)} · ${a.anulada?'Anulado':sal<=0.004?'Aplicado':'Saldo '+fmt(sal)}</span></div>
@@ -5733,6 +5974,9 @@ function rReservasPOS(){
       <div style="display:flex;gap:10px;font-size:11px"><a href="#" data-antrec="${esc(a.id)}" style="color:var(--acc)">🖨 Recibo</a>${MI_ROL==='admin'&&!a.anulada&&antAplicado(a.id)<=0.004?`<a href="#" data-antanul="${esc(a.id)}" style="color:var(--red)">Anular</a>`:''}</div></div>`; }).join('')}</div>`:''}`;
 }
 function attachReservasPOS(mc){
+  mc.querySelectorAll('[data-resfac]').forEach(b=>b.addEventListener('click',()=>resFacturar(b.dataset.resfac)));
+  mc.querySelectorAll('[data-resfacfun]').forEach(b=>b.addEventListener('click',()=>resFacturarFuncion(b.dataset.resfacfun)));
+  attachExpMenus(mc);
   mc.querySelector('#res-actualizar')?.addEventListener('click',async()=>{ const p=resCargar(true); render(); await p; render(); });
   mc.querySelectorAll('[data-restab]').forEach(b=>b.addEventListener('click',()=>{ resTabVer=b.dataset.restab; render(); }));
   mc.querySelectorAll('[data-antrec]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();const x=S.find(y=>esAntCli(y)&&String(y.id)===a.dataset.antrec); if(x) antImprimirRecibo(x);}));
