@@ -8338,7 +8338,8 @@ function attachNomina(){
 //  Horas aprobadas: NOM.horas (documento madu/nomina, solo admin).
 // ══════════════════════════════════════════════════════════════
 let AC=null;                       // asistencia/asist-core.js
-const ASIST={per:{},cfg:null,sol:[],hoy:[],dia:'',subs:false,err:''};
+const ASIST={per:{},cfg:null,sol:[],hoy:[],dia:'',subs:false,err:'',wifi:null};
+let asistWifiMsg='';               // resultado de «Registrar el Wi-Fi de este equipo»
 let asistTab='hoy';
 let asistCorr=null;                // formulario de marca manual abierto
 let asistHorUid=null;              // horario en edición
@@ -8370,6 +8371,7 @@ async function asistIniciar(){
   onSnapshot(collection(db,'lm_asist_personal'),s=>{ASIST.per={};s.docs.forEach(d=>ASIST.per[d.id]=d.data());asistRepintar();},e=>{ASIST.err=msgError(e,'leer el personal de asistencia');asistRepintar();});
   onSnapshot(doc(db,'lm_asist_cfg','local'),s=>{ASIST.cfg=s.exists()?s.data():null;asistRepintar();},()=>{});
   onSnapshot(collection(db,'lm_asist_solicitudes'),s=>{ASIST.sol=s.docs.map(asistNorm);asistRepintar();},()=>{});
+  onSnapshot(doc(db,'lm_asist_wifi','ancla'),s=>{ASIST.wifi=s.exists()?s.data():null;asistRepintar();},()=>{});
   asistEscucharHoy();
 }
 function asistEscucharHoy(){
@@ -8455,7 +8457,7 @@ function asistChip(est){const e=AS_EST[est]||AS_EST.fuera;return `<span class="b
 function asistMarcaFila(m,anulable){
   return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--bg3);font-size:12px">
     <span><b style="font-variant-numeric:tabular-nums">${AC.horaDe(m.ts)}</b> · ${esc(AC.TIPO_TXT[m.tipo]||m.tipo)}${m.tipo==='permiso'?` · «${esc(m.motivo||'')}» · vuelve ${m.regreso?AC.horaDe(m.regreso):'?'}`:''}
-      ${m.origen==='admin'?`<span style="color:var(--amb);font-size:10px"> · registrada por administración: ${esc(m.motivo||'')}</span>`:`<span style="color:var(--text3);font-size:10px"> · ${m.dist!=null?m.dist+' m':''}${m.prec!=null?' ±'+Math.round(m.prec)+' m':''}</span>`}</span>
+      ${m.origen==='admin'?`<span style="color:var(--amb);font-size:10px"> · registrada por administración: ${esc(m.motivo||'')}</span>`:`<span style="color:var(--text3);font-size:10px"> · ${m.origen==='wifi'?'📶 Wi-Fi · ':m.origen==='qr'?'QR · ':''}${m.dist!=null?m.dist+' m':''}${m.prec!=null?' ±'+Math.round(m.prec)+' m':''}</span>`}</span>
     ${anulable?`<button class="btn btn-g btn-sm" style="font-size:10px;padding:2px 8px" data-asanular="${esc(m.id)}">Anular</button>`:''}
   </div>`;
 }
@@ -8611,6 +8613,16 @@ function rAsistConfig(){
     <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:6px 0"><input type="checkbox" id="ag-desc" ${c.descansoExtra!==false?'checked':''}> Horas en día de descanso del trabajador = extraordinarias (100 %)</label>
     <div class="fg" style="margin-top:8px"><label>Feriados (uno por línea, AAAA-MM-DD)</label><textarea id="ag-fer" rows="4" style="width:100%;font-family:inherit">${esc((c.feriados||[]).join('\n'))}</textarea></div>
   </div>
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">📶 Marcar con el Wi-Fi del local</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Con esto el personal marca directo desde su celular, sin escanear el QR: además de la ubicación, el celular debe estar conectado al Wi-Fi de La Madriguera. La pantalla del local (reloj) registra sola la conexión cada 5 minutos. El QR sigue disponible como respaldo. Deje el campo vacío para volver a usar solo el QR.</div>
+    <div class="fg"><label>Dirección del servicio Wi-Fi (Cloudflare)</label><input id="ag-wifi" type="url" placeholder="https://asistencia-wifi.….workers.dev" value="${esc(c.wifiUrl||'')}"></div>
+    ${(()=>{const ips=(ASIST.wifi&&ASIST.wifi.ips)||{};const lista=Object.entries(ips).map(([k,v])=>[k,asistMs(v)]).sort((a,b)=>b[1]-a[1]);
+      return lista.length?`<div style="font-size:12px;margin:6px 0">Conexiones del local registradas: ${lista.map(([k,t])=>`<span class="badge" style="font-size:10px">${esc(k.startsWith('v6_')?'IPv6':'IPv4')} · ${esc(new Date(t).toLocaleString('es-EC',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</span>`).join(' ')}</div>`
+        :`<div style="font-size:12px;color:${c.wifiUrl?'var(--amb)':'var(--text3)'};margin:6px 0">${c.wifiUrl?'Aún no hay conexión registrada: abra la pantalla del local (reloj) o pulse el botón estando en el local.':'Sin configurar.'}</div>`;})()}
+    ${c.wifiUrl?`<button class="btn btn-g btn-sm" id="ag-wifireg">📶 Registrar el Wi-Fi de este equipo (solo estando en el local)</button>`:''}
+    ${asistWifiMsg?`<div style="font-size:12px;margin-top:6px">${esc(asistWifiMsg)}</div>`:''}
+  </div>
   <button class="btn btn-acc" id="ag-guardar">Guardar configuración</button>
   <div class="card" style="margin-top:14px;font-size:12px;color:var(--text2)">
     <b>Pantalla del QR:</b> ábrala en una tablet o celular fijo en el local (no en una pestaña oculta: el código solo cambia mientras la pantalla está visible). Conviene una cuenta propia con rol «reloj» para esa pantalla; también funciona con la de administración.<br>
@@ -8701,22 +8713,38 @@ function attachAsist(){
   }));
   // Configuración
   q('#ag-leer')?.addEventListener('click',asistLeerUbicacion);
+  q('#ag-wifireg')?.addEventListener('click',async e=>{
+    const url=((ASIST.cfg&&ASIST.cfg.wifiUrl)||'').replace(/\/+$/,''); if(!url)return;
+    if(!confirm('¿Está ahora en La Madriguera, conectado a su Wi-Fi?\nLa conexión de este equipo quedará registrada como la del local.'))return;
+    e.target.disabled=true; asistWifiMsg='Registrando…'; render();
+    try{
+      const tok=await auth.currentUser.getIdToken();
+      const r=await fetch(url+'/ancla',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:'{}',cache:'no-store'});
+      const j=await r.json().catch(()=>({}));
+      if(!j.ok) throw new Error(j.error||('HTTP '+r.status));
+      asistWifiMsg='✓ Conexión registrada '+new Date().toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})+'.';
+      bitacora('asistencia_wifi_registrado',{accion:'Registró manualmente la conexión Wi-Fi del local para asistencia'});
+    }catch(err){ asistWifiMsg='No se pudo registrar ('+(err.message||err)+'). Revise la dirección del servicio y que tenga internet.'; }
+    render();
+  });
   q('#ag-usar')?.addEventListener('click',()=>{ if(asistGeo&&asistGeo.lat!=null){ q('#ag-lat').value=asistGeo.lat.toFixed(6); q('#ag-lng').value=asistGeo.lng.toFixed(6); } });
   q('#ag-guardar')?.addEventListener('click',async()=>{
     const lat=parseFloat(q('#ag-lat').value), lng=parseFloat(q('#ag-lng').value);
     const radio=Math.round(+q('#ag-radio').value||80), precMax=Math.round(+q('#ag-prec').value||150);
     if(!isFinite(lat)||!isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180){alert('Latitud o longitud inválida. Use «Leer mi ubicación aquí» estando en el local.');return;}
     if(radio<30||radio>500){alert('El radio debe estar entre 30 y 500 m.');return;}
+    const wifiUrl=(q('#ag-wifi').value||'').trim().replace(/\/+$/,'');
+    if(wifiUrl&&!/^https:\/\/[a-z0-9.-]+(\/[\w./-]*)?$/i.test(wifiUrl)){alert('La dirección del servicio Wi-Fi debe empezar con https:// (por ejemplo https://asistencia-wifi.su-cuenta.workers.dev).');return;}
     const fer=q('#ag-fer').value.split(/\s+/).map(s=>s.trim()).filter(Boolean);
     if(fer.some(f=>!/^\d{4}-\d{2}-\d{2}$/.test(f))){alert('Los feriados deben ir como AAAA-MM-DD, uno por línea.');return;}
     const cfg=Object.assign({lat:+lat.toFixed(7),lng:+lng.toFixed(7),radio,precMax:Math.max(20,precMax),
       tolEntrada:Math.max(0,+q('#ag-tole').value||0),tolRetorno:Math.max(0,+q('#ag-tolr').value||0),pausaMax:Math.max(10,+q('#ag-pmax').value||60),
-      nocturno:q('#ag-noc').checked,descansoExtra:q('#ag-desc').checked,feriados:[...new Set(fer)].sort(),
+      nocturno:q('#ag-noc').checked,descansoExtra:q('#ag-desc').checked,feriados:[...new Set(fer)].sort(),wifiUrl,
       por:auth.currentUser.uid,actualizado:serverTimestamp()},AC.cajaGeocerca(lat,radio));
     const antes=ASIST.cfg||{};
     try{
       await conLimite(setDoc(doc(db,'lm_asist_cfg','local'),cfg));
-      bitacora('asistencia_config',{accion:'Configuró asistencia: radio '+radio+' m, ubicación '+cfg.lat+','+cfg.lng+(typeof antes.lat==='number'?' (antes '+antes.lat+','+antes.lng+', '+antes.radio+' m)':'')});
+      bitacora('asistencia_config',{accion:'Configuró asistencia: radio '+radio+' m, ubicación '+cfg.lat+','+cfg.lng+(typeof antes.lat==='number'?' (antes '+antes.lat+','+antes.lng+', '+antes.radio+' m)':'')+((antes.wifiUrl||'')!==wifiUrl?' · servicio Wi-Fi: '+(wifiUrl||'desactivado'):'')});
       asistGeo=null; render(); alert('Configuración guardada.');
     }catch(err){ avisoError(msgError(err,'guardar la configuración de asistencia')); }
   });
