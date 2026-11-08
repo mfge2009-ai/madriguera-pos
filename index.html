@@ -8719,7 +8719,10 @@ function attachAsist(){
     e.target.disabled=true; asistWifiMsg='Registrando…'; render();
     try{
       const tok=await auth.currentUser.getIdToken();
-      const r=await fetch(url+'/ancla',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:'{}',cache:'no-store'});
+      // Se informan las dos direcciones de esta conexión (IPv4 e IPv6): cada celular usa una u otra.
+      const ipq=u=>fetch(u,{cache:'no-store',signal:AbortSignal.timeout(5000)}).then(r=>r.json()).then(j=>j.ip).catch(()=>null);
+      const extra=(await Promise.all([ipq('https://api.ipify.org?format=json'),ipq('https://api6.ipify.org?format=json')])).filter(Boolean);
+      const r=await fetch(url+'/ancla',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({extra}),cache:'no-store'});
       const j=await r.json().catch(()=>({}));
       if(!j.ok) throw new Error(j.error||('HTTP '+r.status));
       asistWifiMsg='✓ Conexión registrada '+new Date().toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})+'.';
