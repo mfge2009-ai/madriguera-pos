@@ -8903,6 +8903,14 @@ function injectConsignaProducts(){
       category:'Consignados',
       subcategory:nombreConsignante(l.consignanteId),
       price:l.precio,
+      // 9-nov-2026: costo = lo que se le paga al CONSIGNANTE PARTICULAR (Segunda Vida,
+      // libros USADOS, 70/30). Solo afecta el reporte "Utilidad bruta por categoria":
+      // asi la categoria Consignados deja de verse como 100% de margen.
+      // OJO: esto NO aplica a los libros NUEVOS en consignacion de proveedores
+      // (Editorial Oceano y similares). Esos entran por Inventario > Ingreso de
+      // mercaderia como productos reales de la coleccion productos/, con su propio
+      // costo (precio neto) y categoria Libros. Son reglas y costos distintos.
+      cost:+(l.precio*PCT_CONSIGNANTE).toFixed(2),
       stock:1,
       code:l.code||'',
       author:l.autor||'',
