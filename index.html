@@ -365,6 +365,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
     <div class="ngrp">Operación</div>
     <button data-v="pos" title="Punto de venta"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h8.6a2 2 0 0 0 2-1.6L22 7H6"/></svg><span class="nl">Punto de venta</span></button>
     <button data-v="monitor" title="Monitor de mesas"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span class="nl">Monitor de mesas</span><span class="nbadge" data-badge="monitor"></span></button>
+    <button data-v="pedidosweb" title="Pedidos web"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span class="nl">Pedidos web</span><span class="nbadge" data-badge="pedidosweb"></span></button>
     <div class="ngrp">Caja</div>
     <button data-v="caja" title="Turno y cuadre"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M16 15h2"/></svg><span class="nl">Turno y cuadre</span><span class="nbadge" data-badge="caja"></span></button>
     <button data-v="nomina" title="Nómina"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="12" r="2.5"/><path d="M14 10h4M14 14h4"/></svg><span class="nl">Nómina</span></button>
@@ -372,6 +373,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
     <div class="ngrp">Inventario</div>
     <button data-v="inventario" title="Inventario"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span class="nl">Inventario</span><span class="nbadge" data-badge="inventario"></span></button>
     <button data-v="productos" title="Productos"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span class="nl">Productos</span></button>
+    <button data-v="cartaweb" title="Carta web"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span class="nl">Carta web</span></button>
     <button id="nav-insumos" title="Insumos y recetas"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20A7 7 0 0 1 4 13c0-5 4-9 16-10-1 12-5 16-9 17z"/><path d="M4 21c4-4 7-7 10-9"/></svg><span class="nl">Insumos y recetas</span></button>
     <button data-v="consigna" title="Consignación"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg><span class="nl">Consignación</span></button>
     <div class="ngrp">Clientes y SRI</div>
@@ -764,6 +766,10 @@ function avisoPendientes(){
 
 // ── Estado ───────────────────────────────────────────────────
 let P=[],T=[],S=[];
+// Carta web y pedidos web (9-nov-2026)
+const CARTA_COL='lm_carta', CARTA_FOTOS='lm_carta_fotos', PW_COL='lm_pedidos_web';
+const CARTA={list:[],ts:0,t0:0,err:'',sub:null,edit:null,q:'',guardando:false,fotos:{},enviado:{}};
+const PW={list:[],ts:0,t0:0,err:'',sub:null,hist:null,ocupado:false};
 // El turno YA NO se elige de una lista: se deriva de la cuenta con la que se
 // inicio sesion. Antes era un boton que cualquiera pulsaba, asi que el campo
 // "quien atendio" se podia falsear en dos clics; ahora es la identidad real.
@@ -2058,6 +2064,7 @@ function render(){
   const mc=document.getElementById('mc');
   if(!mc)return;
   try{ actualizarNavBadges(); }catch(e){}
+  try{ cartaIniciar(); pwIniciar(); cartaSyncPronto(); }catch(e){}
   if(view==='inicio'){mc.innerHTML=`<div class="sc">${rInicio()}</div>`;attachInicio();}
   else if(view==='pos'){
     if(!turnoUser){ turnoUser = MI_NOMBRE || authUser() || ''; }
@@ -2075,6 +2082,8 @@ function render(){
   else if(view==='facturas'){mc.innerHTML=`<div class="sc">${rFacturas()}</div>`;attachFacturas();}
   else if(view==='clientes'){mc.innerHTML=`<div class="sc">${rClientes()}</div>`;attachClientes();}
   else if(view==='consigna'){mc.innerHTML=`<div class="sc">${rConsigna()}</div>`;attachConsigna();}
+  else if(view==='cartaweb'){mc.innerHTML=`<div class="sc">${rCartaWeb()}</div>`;attachCartaWeb();}
+  else if(view==='pedidosweb'){mc.innerHTML=`<div class="sc">${rPedidosWeb()}</div>`;attachPedidosWeb();}
 }
 
 // ── Turno modal ───────────────────────────────────────────────
@@ -2167,11 +2176,15 @@ function rPOS(){
 
   // Category tabs
   const cats=['Todos','Café','Bebidas','Bubble Tea','Platos fuertes','Postres','Bebidas con alcohol','Taller & Merch','Libros','Consignados'];
+  // 9-nov-2026: productos de temporada vigentes (Carta web) al inicio, para ofrecerlos
+  const _temp=cartaTempSet();
+  if(_temp.size) cats.splice(1,0,CARTA_TAB); else if(scat===CARTA_TAB) scat='Todos';
   const ctabs=cats.map(c=>`<button class="ctab${scat===c?' on':''}" data-cat="${c}">${c}</button>`).join('');
 
   // Filter products
   let filtered=active;
-  if(scat!=='Todos') filtered=filtered.filter(p=>p.category===scat);
+  if(scat===CARTA_TAB) filtered=filtered.filter(p=>_temp.has(String(p.id)));
+  else if(scat!=='Todos') filtered=filtered.filter(p=>p.category===scat);
   if(sq.trim()){
     filtered=filtered.filter(p=>buscaCoincide(p,sq));
   }
@@ -3144,8 +3157,11 @@ async function confirmarCobro(){
     t.order.forEach(i=>{
       if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,-i.qty); }
     });
+    // Pedido web cargado a esta mesa (solo si es de ESTA apertura de la mesa)
+    const _pw=(t.pedidoWeb&&t.pedidoWeb.openedAt===t.openedAt)?t.pedidoWeb:null;
+    if(_pw) venta.pedidoWebId=_pw.id;
     // Clear table
-    t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;
+    t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;t.pedidoWeb=null;
     cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};descuento=0;descuentoTipo='monto';descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';descuentoAutId='';
     selT=null;
     // Marcar ventas de libros consignados y actualizar saldo del consignante
@@ -3157,6 +3173,7 @@ async function confirmarCobro(){
     // Save: transaction-safe append for the sale, regular write for tables/products
     await _appendSale(venta);
     sT();
+    if(_pw) pwMarcarCobrado(_pw,venta);
     return venta;
   }catch(err){
     console.error('Error en cobro:',err);
@@ -3208,7 +3225,8 @@ function rResults(){
     }));
     const topNames=Object.entries(ventaCount).sort((a,b)=>b[1]-a[1]).slice(0,20).map(e=>e[0]);
     filtered=active.filter(p=>topNames.includes(p.name)).sort((a,b)=>(ventaCount[b.name]||0)-(ventaCount[a.name]||0));
-  } else if(scat!=='Todos')filtered=filtered.filter(p=>p.category===scat);
+  } else if(scat===CARTA_TAB){ const _t=cartaTempSet(); filtered=filtered.filter(p=>_t.has(String(p.id))); }
+  else if(scat!=='Todos')filtered=filtered.filter(p=>p.category===scat);
   if(sq.trim()){
     filtered=filtered.filter(p=>buscaCoincide(p,sq));
   }
@@ -3488,6 +3506,7 @@ function rProductos(){
     </div>`;
   }
   const _porRevisar=MI_ROL==='admin'?P.filter(x=>x&&x.revisado===false):[];
+  const _enCartaWeb=new Set(CARTA.list.map(c=>String(c.id)));
   const filteredP = prodSearch
     ? P.filter(p=>buscaCoincide(p,prodSearch))
     : P;
@@ -3526,6 +3545,7 @@ function rProductos(){
         <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>
           ${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:7px">${p.code}</span>`:''}
           ${p.hasVariants?'<span class="badge ba" style="margin-left:5px;font-size:9px">var</span>':''}
+          ${_enCartaWeb.has(String(p.id))?'<span class="badge" style="margin-left:5px;font-size:9px;background:var(--bbg);color:var(--blu)" title="Se muestra en la página web (Carta web)">🌐 web</span>':''}
           ${p.stockControl==='unidad'?'<span class="badge bg" style="margin-left:5px;font-size:9px">stk</span>':''}
           ${!p.active?'<span class="badge br" style="margin-left:5px;font-size:9px">inactivo</span>':''}
         </div>
@@ -8903,14 +8923,6 @@ function injectConsignaProducts(){
       category:'Consignados',
       subcategory:nombreConsignante(l.consignanteId),
       price:l.precio,
-      // 9-nov-2026: costo = lo que se le paga al CONSIGNANTE PARTICULAR (Segunda Vida,
-      // libros USADOS, 70/30). Solo afecta el reporte "Utilidad bruta por categoria":
-      // asi la categoria Consignados deja de verse como 100% de margen.
-      // OJO: esto NO aplica a los libros NUEVOS en consignacion de proveedores
-      // (Editorial Oceano y similares). Esos entran por Inventario > Ingreso de
-      // mercaderia como productos reales de la coleccion productos/, con su propio
-      // costo (precio neto) y categoria Libros. Son reglas y costos distintos.
-      cost:+(l.precio*PCT_CONSIGNANTE).toFixed(2),
       stock:1,
       code:l.code||'',
       author:l.autor||'',
@@ -9534,6 +9546,426 @@ function attachConsigna(){
 // Inicio reune lo que requiere atencion y lleva directo a la pantalla donde se
 // corrige. No escribe nada: solo lee datos que el POS ya tiene en memoria
 // (ventas, mesas, gastos fijos, bitacora) y las facturas SRI de 45 dias.
+
+// ══════════════════════════════════════════════════════════════
+//  CARTA WEB Y PEDIDOS WEB (9-nov-2026)
+//  1) Carta web: administración marca qué productos de comida y bebida
+//     se muestran en lamadriguera.ec y cuáles son «de temporada» (con
+//     fecha de inicio y fin). El POS escribe una copia pública mínima en
+//     lm_carta (nombre, descripción, sección, precio, disponible, fechas)
+//     y la foto en lm_carta_fotos. El catálogo «productos» NO se toca ni
+//     se abre al público (tiene costos y stock).
+//     Cualquier caja mantiene al día precio y disponibilidad (cartaSync).
+//  2) Pedidos web: la web deja una copia del pedido del carrito en
+//     lm_pedidos_web. La caja lo carga a una mesa y lo cobra como
+//     cualquier venta (factura, stock y caja por el flujo normal).
+// ══════════════════════════════════════════════════════════════
+const CARTA_SECCIONES=['Bebidas calientes','Bebidas frías','Bubble tea','Desayunos','Platos fuertes','Postres','Snacks'];
+const CARTA_SEC_DE={'Café':'Bebidas calientes','Bebidas':'Bebidas frías','Bubble Tea':'Bubble tea','Platos fuertes':'Platos fuertes','Postres':'Postres','Bebidas con alcohol':'Bebidas frías'};
+const CARTA_TAB='⭐ Temporada';
+const cartaElegible=p=>!!p&&!!p.id&&!p.esConsignado&&p.category!=='Libros'&&p.category!=='Consignados'&&p.category!=='Taller & Merch';
+function cartaDisponible(p){ return !!p&&p.active!==false&&(p.stockControl!=='unidad'||(+p.stock||0)>0); }
+function cartaEstadoTemp(c,hoy){
+  hoy=hoy||today();
+  if(!c||!c.temporada) return 'fija';
+  if(c.desde&&hoy<c.desde) return 'proxima';
+  if(c.hasta&&hoy>c.hasta) return 'vencida';
+  return 'vigente';
+}
+function cartaTempSet(){ const h=today(); return new Set(CARTA.list.filter(c=>cartaEstadoTemp(c,h)==='vigente').map(c=>String(c.id))); }
+function cartaIniciar(){
+  if(CARTA.sub||!MI_ROL) return;
+  if(CARTA.t0&&Date.now()-CARTA.t0<60000) return;
+  CARTA.t0=Date.now();
+  try{
+    CARTA.sub=onSnapshot(collection(db,CARTA_COL),snap=>{
+      CARTA.list=snap.docs.map(d=>Object.assign({},d.data(),{id:d.id}));
+      CARTA.ts=Date.now(); CARTA.err='';
+      cartaSyncPronto();
+      if(view==='cartaweb'&&!CARTA.edit) render();
+    },e=>{
+      CARTA.sub=null; CARTA.ts=Date.now();
+      CARTA.err=(e&&e.code==='permission-denied')
+        ?'Esta cuenta no puede leer la carta web. Falta publicar en Firebase las reglas «lm_carta» del 9-nov.'
+        :'No se pudo leer la carta web ('+((e&&(e.code||e.message))||'error')+').';
+      if(view==='cartaweb') render();
+    });
+  }catch(e){ CARTA.err='No se pudo leer la carta web.'; }
+}
+// Mantiene precio y disponibilidad de la carta iguales al catálogo. Solo escribe si hay diferencia.
+let _cartaSyncT=null,_cartaSyncUlt=0;
+function cartaSyncPronto(){
+  if(_cartaSyncT||!CARTA.list.length||!MI_ROL) return;
+  _cartaSyncT=setTimeout(()=>{ _cartaSyncT=null; cartaSync(); },Math.max(1500,5000-(Date.now()-_cartaSyncUlt)));
+}
+async function cartaSync(){
+  _cartaSyncUlt=Date.now();
+  if(!CARTA.ts||!P.length) return 0;
+  let n=0;
+  for(const c of CARTA.list){
+    const p=P.find(x=>x&&String(x.id)===String(c.id)); if(!p) continue;
+    const precio=_r2(+p.price||0), disp=cartaDisponible(p);
+    if(Math.abs((+c.precio||0)-precio)<0.005&&(c.disponible!==false)===disp) continue;
+    const k=c.id+'|'+precio+'|'+disp;
+    if(CARTA.enviado[k]&&Date.now()-CARTA.enviado[k]<60000) continue;
+    CARTA.enviado[k]=Date.now();
+    try{ await updateDoc(doc(db,CARTA_COL,String(c.id)),{precio,disponible:disp,actualizado:serverTimestamp()}); n++; }
+    catch(e){ console.warn('cartaSync:',e); }
+  }
+  return n;
+}
+function cartaLeerFoto(file){
+  return new Promise((res,rej)=>{
+    if(!file||!/^image\//.test(file.type||'')) return rej(new Error('El archivo no es una imagen.'));
+    const img=new Image(), url=URL.createObjectURL(file);
+    img.onload=()=>{
+      try{
+        const M=720, k=Math.min(1,M/Math.max(img.width,img.height));
+        const cv=document.createElement('canvas');
+        cv.width=Math.max(1,Math.round(img.width*k)); cv.height=Math.max(1,Math.round(img.height*k));
+        cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+        let q=0.78, d=cv.toDataURL('image/webp',q);
+        const tipo=d.indexOf('data:image/webp')===0?'image/webp':'image/jpeg';
+        if(tipo==='image/jpeg') d=cv.toDataURL(tipo,q);
+        while(d.length>170000&&q>0.4){ q-=0.1; d=cv.toDataURL(tipo,q); }
+        URL.revokeObjectURL(url);
+        if(d.length>230000) return rej(new Error('La foto es demasiado pesada. Use una más pequeña.'));
+        res(d);
+      }catch(e){ URL.revokeObjectURL(url); rej(e); }
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error('No se pudo leer la imagen. Si es HEIC del iPhone, expórtela como JPG.')); };
+    img.src=url;
+  });
+}
+function cartaVentasTemp(c){
+  // Unidades e importe vendidos dentro de la temporada, con las ventas que este equipo tiene cargadas
+  const d=c.desde||'0000', h=c.hasta||'9999';
+  let uds=0, tot=0;
+  S.forEach(s=>{ if(!isVenta(s)) return; const f=String(s.date||'').slice(0,10); if(f<d||f>h) return;
+    (s.items||[]).forEach(i=>{ if(String(i.productId)===String(c.id)){ uds+=(+i.qty||0); tot+=(+i.price||0)*(+i.qty||0); } }); });
+  return {uds,tot:_r2(tot)};
+}
+function cartaAbrirEditor(id){
+  const c=CARTA.list.find(x=>String(x.id)===String(id)), p=P.find(x=>x&&String(x.id)===String(id));
+  if(!c&&!p) return;
+  CARTA.edit={id:String(id),nuevo:!c,
+    nombre:c?(c.nombre||''):(p.name||''), descripcion:c?(c.descripcion||''):'',
+    seccion:c?(c.seccion||''):(CARTA_SEC_DE[p.category]||'Snacks'),
+    temporada:c?!!c.temporada:false, desde:c?(c.desde||''):'', hasta:c?(c.hasta||''):'',
+    orden:c?(+c.orden||0):0, fotoVer:c?(+c.foto||0):0, fotoData:null, fotoQuitar:false, fotoActual:CARTA.fotos[String(id)]||''};
+  if(c&&c.foto&&!CARTA.fotos[String(id)]){
+    getDoc(doc(db,CARTA_FOTOS,String(id))).then(s=>{ if(s.exists()){ CARTA.fotos[String(id)]=(s.data()||{}).data||''; if(CARTA.edit&&CARTA.edit.id===String(id)&&!CARTA.edit.fotoData){ CARTA.edit.fotoActual=CARTA.fotos[String(id)]; const im=document.getElementById('ce-prev'); if(im&&CARTA.edit.fotoActual){ im.src=CARTA.edit.fotoActual; im.style.display='block'; } } } }).catch(()=>{});
+  }
+  render();
+}
+function cartaLeerForm(){
+  const E=CARTA.edit; if(!E) return;
+  const g=i=>document.getElementById(i);
+  if(g('ce-nom')) E.nombre=g('ce-nom').value;
+  if(g('ce-desc')) E.descripcion=g('ce-desc').value;
+  if(g('ce-sec')) E.seccion=g('ce-sec').value;
+  if(g('ce-temp')) E.temporada=g('ce-temp').checked;
+  if(g('ce-desde')) E.desde=g('ce-desde').value;
+  if(g('ce-hasta')) E.hasta=g('ce-hasta').value;
+  if(g('ce-orden')) E.orden=parseInt(g('ce-orden').value)||0;
+}
+async function cartaGuardar(){
+  if(MI_ROL!=='admin'||CARTA.guardando) return;
+  cartaLeerForm();
+  const E=CARTA.edit; if(!E) return;
+  const p=P.find(x=>x&&String(x.id)===E.id);
+  if(!p){ alert('Ese producto ya no está en el catálogo del POS.'); return; }
+  const nombre=String(E.nombre||'').trim(), desc=String(E.descripcion||'').trim();
+  if(!nombre){ alert('Escriba el nombre que se verá en la web.'); return; }
+  if(nombre.length>80){ alert('El nombre no puede pasar de 80 caracteres.'); return; }
+  if(desc.length>220){ alert('La descripción no puede pasar de 220 caracteres (tiene '+desc.length+').'); return; }
+  if(!(+p.price>0)){ alert('El producto no tiene precio en el POS. Póngale precio antes de publicarlo.'); return; }
+  if(E.temporada){
+    if(!E.hasta){ alert('Un producto de temporada necesita fecha de fin: ese día deja de verse en la web por sí solo.'); return; }
+    if(E.desde&&E.desde>E.hasta){ alert('La fecha de inicio es posterior a la de fin.'); return; }
+  }
+  let fotoVer=E.fotoVer||0;
+  if(E.fotoData) fotoVer=Date.now(); else if(E.fotoQuitar) fotoVer=0;
+  const datos={productId:E.id,nombre,descripcion:desc,seccion:CARTA_SECCIONES.includes(E.seccion)?E.seccion:'Snacks',
+    temporada:!!E.temporada,desde:E.temporada?(E.desde||''):'',hasta:E.temporada?E.hasta:'',orden:+E.orden||0,
+    precio:_r2(+p.price||0),disponible:cartaDisponible(p),categoriaPos:p.category||'',foto:fotoVer,publicado:true,
+    actualizado:serverTimestamp(),por:authUser()};
+  CARTA.guardando=true; render();
+  try{
+    if(E.fotoData) await conLimite(setDoc(doc(db,CARTA_FOTOS,E.id),{data:E.fotoData,actualizado:serverTimestamp()}),20000);
+    else if(E.fotoQuitar&&E.fotoVer) await conLimite(deleteDoc(doc(db,CARTA_FOTOS,E.id)),15000);
+    await conLimite(setDoc(doc(db,CARTA_COL,E.id),datos,{merge:true}),15000);
+    if(E.fotoData) CARTA.fotos[E.id]=E.fotoData; else if(E.fotoQuitar) delete CARTA.fotos[E.id];
+    try{ bitacora('carta_web',{accion:(E.nuevo?'Publicó en la web: ':'Editó en la carta web: ')+nombre+' ('+fmt(datos.precio)+')'+(datos.temporada?' · temporada '+(datos.desde||'ya')+' a '+datos.hasta:''),productoId:E.id}); }catch(e){}
+    CARTA.edit=null;
+  }catch(e){
+    console.error('cartaGuardar:',e);
+    alert((e&&e.code==='permission-denied')?'No se guardó: falta publicar en Firebase las reglas «lm_carta» del 9-nov.':'No se guardó ('+((e&&(e.code||e.message))||'error')+'). Revise la conexión e inténtelo de nuevo.');
+  }finally{ CARTA.guardando=false; render(); }
+}
+async function cartaQuitar(id){
+  if(MI_ROL!=='admin') return;
+  const c=CARTA.list.find(x=>String(x.id)===String(id)); if(!c) return;
+  if(!confirm('«'+(c.nombre||'')+'» dejará de verse en la página web.\nEl producto sigue igual en el POS.\n\n¿Quitarlo de la carta web?')) return;
+  try{
+    await conLimite(deleteDoc(doc(db,CARTA_COL,String(id))),15000);
+    if(c.foto){ try{ await deleteDoc(doc(db,CARTA_FOTOS,String(id))); }catch(e){} }
+    delete CARTA.fotos[String(id)];
+    try{ bitacora('carta_web',{accion:'Quitó de la carta web: '+(c.nombre||''),productoId:String(id)}); }catch(e){}
+  }catch(e){ alert('No se pudo quitar ('+((e&&(e.code||e.message))||'error')+').'); }
+  render();
+}
+function rCartaWeb(){
+  const admin=MI_ROL==='admin', hoy=today();
+  const fechaC=f=>f?f.slice(8,10)+'/'+f.slice(5,7)+'/'+f.slice(0,4):'';
+  const E=CARTA.edit;
+  let form='';
+  if(E&&admin){
+    const p=P.find(x=>x&&String(x.id)===E.id)||{};
+    const prev=E.fotoData||(!E.fotoQuitar&&E.fotoActual)||'';
+    form=`<div class="card" id="ce-card" style="border:1.5px solid var(--acc)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:4px">${E.nuevo?'Publicar en la web':'Editar en la carta web'}</div>
+      <div style="font-size:11.5px;color:var(--text2);margin-bottom:12px">Producto del POS: <b>${esc(p.name||'')}</b> · ${esc(p.category||'')} · ${fmt(p.price||0)} <span style="color:var(--text3)">(el precio y si hay o no hay se copian solos del POS)</span></div>
+      <div class="fgrid">
+        <div class="fg"><label>Nombre en la web</label><input id="ce-nom" maxlength="80" value="${esc(E.nombre)}"></div>
+        <div class="fg"><label>Sección de la carta</label><select id="ce-sec">${CARTA_SECCIONES.map(s=>`<option${s===E.seccion?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="fg" style="grid-column:1/-1"><label>Descripción corta (opcional, hasta 220 caracteres)</label><input id="ce-desc" maxlength="220" value="${esc(E.descripcion)}" placeholder="Ej.: Chocolate caliente con canela y malvaviscos"></div>
+        <div class="fg" style="grid-column:1/-1"><label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text);cursor:pointer"><input type="checkbox" id="ce-temp"${E.temporada?' checked':''} style="width:auto"> Es un producto <b>de temporada</b></label>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px">Se destaca en la portada de la web y en el punto de venta, y deja de mostrarse solo al pasar la fecha de fin.</div></div>
+        ${E.temporada?`<div class="fg"><label>Se muestra desde (vacío = desde ya)</label><input id="ce-desde" type="date" value="${esc(E.desde)}"></div>
+        <div class="fg"><label>Hasta (último día)</label><input id="ce-hasta" type="date" value="${esc(E.hasta)}"></div>`:''}
+        <div class="fg"><label>Orden (menor sale primero)</label><input id="ce-orden" type="number" value="${E.orden||0}"></div>
+        <div class="fg"><label>Foto (opcional)</label><input id="ce-foto" type="file" accept="image/*">
+          <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px"><img id="ce-prev" alt="" src="${prev?esc(prev):''}" style="display:${prev?'block':'none'};width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid var(--border)">
+          ${prev?'<button class="btn btn-g btn-sm" id="ce-fotoq" type="button">Quitar foto</button>':''}</div></div>
+      </div>
+      <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="ce-cancel">Cancelar</button><button class="btn btn-acc" id="ce-ok"${CARTA.guardando?' disabled':''}>${CARTA.guardando?'Guardando…':(E.nuevo?'Publicar en la web':'Guardar cambios')}</button></div>
+    </div>`;
+  }
+  const filas=CARTA.list.map(c=>({c,p:P.find(x=>x&&String(x.id)===String(c.id)),est:cartaEstadoTemp(c,hoy)}))
+    .sort((a,b)=>(+a.c.orden||0)-(+b.c.orden||0)||String(a.c.nombre||'').localeCompare(String(b.c.nombre||'')));
+  const fila=({c,p,est})=>{
+    const disp=p?cartaDisponible(p):(c.disponible!==false);
+    const chipT=est==='vigente'?`<span class="badge ba" style="margin-left:5px;font-size:9px">temporada · hasta ${fechaC(c.hasta)}</span>`
+      :est==='proxima'?`<span class="badge" style="margin-left:5px;font-size:9px;background:var(--bbg);color:var(--blu)">empieza ${fechaC(c.desde)}</span>`
+      :est==='vencida'?`<span class="badge br" style="margin-left:5px;font-size:9px">temporada terminada ${fechaC(c.hasta)} · ya no se ve</span>`:'';
+    const v=c.temporada?cartaVentasTemp(c):null;
+    return `<div class="mrow" style="opacity:${est==='vencida'?.6:1}">
+      <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(c.nombre||'')}</span>${chipT}
+        ${c.foto?'<span title="Tiene foto" style="margin-left:5px;font-size:10px">📷</span>':''}
+        ${!p?'<span class="badge br" style="margin-left:5px;font-size:9px">ya no existe en el POS</span>':(!disp?'<span class="badge br" style="margin-left:5px;font-size:9px">agotado / inactivo</span>':'')}
+        <div style="font-size:10.5px;color:var(--text3);margin-top:2px">${esc(c.seccion||'')}${p&&p.name!==c.nombre?' · POS: '+esc(p.name):''}${c.descripcion?' · '+esc(c.descripcion):''}${v?' · vendido en la temporada: '+v.uds+' uds · '+fmt(v.tot):''}</div></div>
+      <div style="display:flex;gap:5px;align-items:center;flex-shrink:0"><span style="font-weight:700;color:var(--acc);font-size:12px">${fmt(p?p.price:(c.precio||0))}</span>
+        ${admin?`<button class="btn btn-g btn-sm" data-cwe="${esc(c.id)}">Editar</button><button class="btn btn-w btn-sm" data-cwq="${esc(c.id)}">Quitar</button>`:''}</div></div>`;
+  };
+  const temp=filas.filter(f=>f.c.temporada), fijos=filas.filter(f=>!f.c.temporada);
+  const enCarta=new Set(CARTA.list.map(c=>String(c.id)));
+  const q=(CARTA.q||'').trim();
+  const cand=admin&&q.length>=2?P.filter(p=>cartaElegible(p)&&p.active!==false&&!enCarta.has(String(p.id))&&buscaCoincide(p,q)).slice(0,12):[];
+  return `<div>
+    <div class="rb" style="margin-bottom:6px"><span class="stitle" style="margin:0">Carta web (${CARTA.list.length})</span>
+      <a class="btn btn-g" style="font-size:11px;text-decoration:none" href="https://lamadriguera.ec/#cafeteria" target="_blank" rel="noopener">Ver en la web ↗</a></div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:12px;line-height:1.5">Lo que está en esta lista se muestra en <b>lamadriguera.ec → Cafetería</b>. Los productos <b>de temporada</b> salen además en la portada de la web y en la pestaña «${CARTA_TAB}» del punto de venta. El precio y la disponibilidad se toman del catálogo del POS.${admin?'':' Solo administración puede agregar, editar o quitar.'}</div>
+    ${CARTA.err?`<div class="card" style="border:1px solid var(--rbrd,#e7b5b5);background:var(--rbg);color:var(--red);font-size:12px">${esc(CARTA.err)}</div>`:''}
+    ${form}
+    ${admin&&!E?`<div class="card"><div style="font-size:12.5px;font-weight:700;margin-bottom:6px">Agregar un producto a la carta web</div>
+      <div class="swr"><span class="sic">🔍</span><input id="cw-q" type="text" placeholder="Busque el producto del POS (comida o bebida)…" value="${esc(CARTA.q||'')}" autocomplete="off"></div>
+      ${q.length>=2?(cand.length?cand.map(p=>`<div class="mrow" style="margin-top:5px"><div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span><span style="font-size:10.5px;color:var(--text3);margin-left:6px">${esc(p.category||'')}</span></div>
+        <div style="display:flex;gap:5px;align-items:center"><span style="font-weight:700;color:var(--acc);font-size:12px">${fmt(p.price)}</span><button class="btn btn-acc btn-sm" data-cwa="${esc(p.id)}">+ Publicar</button></div></div>`).join('')
+        :'<div style="font-size:11.5px;color:var(--text3);padding:8px 2px">Sin resultados. Solo se listan productos activos de comida y bebida que aún no están en la carta.</div>'):''}
+    </div>`:''}
+    ${!CARTA.ts&&!CARTA.err?'<div style="font-size:12px;color:var(--text3);padding:10px">Cargando la carta…</div>':''}
+    ${temp.length?`<div style="margin-bottom:16px"><div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">De temporada (${temp.length})</div>${temp.map(fila).join('')}</div>`:''}
+    ${CARTA_SECCIONES.concat(['']).map(sec=>{ const l=fijos.filter(f=>(CARTA_SECCIONES.includes(f.c.seccion)?f.c.seccion:'')===sec); return l.length?`<div style="margin-bottom:16px"><div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${sec||'Sin sección'} (${l.length})</div>${l.map(fila).join('')}</div>`:''; }).join('')}
+    ${CARTA.ts&&!CARTA.list.length&&!CARTA.err?`<div style="padding:22px;text-align:center;color:var(--text3);font-size:12.5px">Todavía no hay productos en la carta web.${admin?' Busque arriba el primero y pulse «+ Publicar».':''}</div>`:''}
+  </div>`;
+}
+function attachCartaWeb(){
+  const mc=document.getElementById('mc'); if(!mc) return;
+  mc.querySelector('#cw-q')?.addEventListener('input',e=>{ CARTA.q=e.target.value; const pos=e.target.selectionStart; render(); const n=document.getElementById('cw-q'); if(n){ n.focus(); try{ n.setSelectionRange(pos,pos); }catch(_){} } });
+  mc.querySelectorAll('[data-cwa]').forEach(el=>el.addEventListener('click',()=>{ CARTA.q=''; cartaAbrirEditor(el.dataset.cwa); }));
+  mc.querySelectorAll('[data-cwe]').forEach(el=>el.addEventListener('click',()=>{ cartaAbrirEditor(el.dataset.cwe); const m=document.getElementById('mc'); if(m) m.scrollTop=0; }));
+  mc.querySelectorAll('[data-cwq]').forEach(el=>el.addEventListener('click',()=>cartaQuitar(el.dataset.cwq)));
+  mc.querySelector('#ce-cancel')?.addEventListener('click',()=>{ CARTA.edit=null; render(); });
+  mc.querySelector('#ce-ok')?.addEventListener('click',()=>cartaGuardar());
+  mc.querySelector('#ce-temp')?.addEventListener('change',()=>{ cartaLeerForm(); render(); });
+  mc.querySelector('#ce-fotoq')?.addEventListener('click',()=>{ cartaLeerForm(); CARTA.edit.fotoData=null; CARTA.edit.fotoQuitar=true; render(); });
+  mc.querySelector('#ce-foto')?.addEventListener('change',async e=>{
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    cartaLeerForm();
+    try{ const d=await cartaLeerFoto(f); if(!CARTA.edit) return; CARTA.edit.fotoData=d; CARTA.edit.fotoQuitar=false; render(); }
+    catch(err){ alert(err.message||'No se pudo leer la foto.'); e.target.value=''; }
+  });
+}
+
+// ── PEDIDOS WEB ───────────────────────────────────────────────
+function pwIniciar(){
+  if(PW.sub||!MI_ROL) return;
+  if(PW.t0&&Date.now()-PW.t0<60000) return;
+  PW.t0=Date.now();
+  try{
+    PW.sub=onSnapshot(query(collection(db,PW_COL),where('abierto','==',true)),snap=>{
+      PW.list=snap.docs.map(d=>Object.assign({},d.data(),{id:d.id})).sort((a,b)=>(+b.ts||0)-(+a.ts||0));
+      PW.ts=Date.now(); PW.err='';
+      if((view==='pedidosweb'&&!PW.ocupado)||view==='inicio') render(); else { try{ actualizarNavBadges(); }catch(e){} }
+    },e=>{
+      PW.sub=null; PW.ts=Date.now();
+      PW.err=(e&&e.code==='permission-denied')
+        ?'Esta cuenta no puede leer los pedidos web. Falta publicar en Firebase las reglas «lm_pedidos_web» del 9-nov.'
+        :'No se pudieron leer los pedidos web ('+((e&&(e.code||e.message))||'error')+').';
+      if(view==='pedidosweb') render();
+    });
+  }catch(e){ PW.err='No se pudieron leer los pedidos web.'; }
+}
+const pwNuevos=()=>PW.list.filter(x=>x.estado==='nuevo');
+const pwCod=c=>String(c||'').replace(/[^0-9A-Za-z]/g,'').toUpperCase();
+function pwBuscar(it){
+  const act=P.filter(p=>p&&p.active!==false);
+  if(it.posId){ const p=act.find(x=>String(x.id)===String(it.posId)); if(p) return p; }
+  const cods=[it.isbn,it.cod].map(pwCod).filter(c=>c.length>=4);
+  for(const c of cods){ const p=act.find(x=>pwCod(x.code)===c); if(p) return p; }
+  const n=_expK(it.titulo);
+  if(n){ const m=act.filter(x=>_expK(x.name)===n); if(m.length===1) return m[0]; }
+  return null;
+}
+function pwLineas(pd){
+  return (pd.items||[]).map(it=>{
+    const cant=Math.max(1,parseInt(it.cant)||1), p=pwBuscar(it);
+    let ok=!!p, nota='';
+    if(!p) nota='No está en el catálogo del POS: agréguelo a mano en la mesa.';
+    else if(p.hasVariants){ ok=false; nota='Tiene variantes (tamaño / leche): agréguelo a mano en la mesa.'; }
+    else if(p.stockControl==='unidad'&&(+p.stock||0)<cant){ ok=false; nota='Stock en el POS: '+(+p.stock||0)+'. No alcanza para '+cant+'.'; }
+    else if(Math.abs((+p.price||0)-(+it.precio||0))>0.005) nota='Precio en la web '+fmt(+it.precio||0)+'; en el POS '+fmt(p.price)+'. Se cobra el del POS.';
+    return {it,cant,p,ok,nota};
+  });
+}
+const pwWa=(cel,txt)=>{ let d=String(cel||'').replace(/[^0-9]/g,''); if(d.length===10&&d[0]==='0') d='593'+d.slice(1); else if(d.length===9) d='593'+d; return d.length>=10?'https://wa.me/'+d+(txt?'?text='+encodeURIComponent(txt):''):''; };
+async function pwCargar(id,mesaId){
+  if(PW.ocupado) return;
+  const pd=PW.list.find(x=>x.id===id); if(!pd) return;
+  if(pd.estado!=='nuevo'){ alert('Este pedido ya fue tomado'+(pd.mesa?' (mesa '+pd.mesa+')':'')+'.'); return; }
+  const t=T.find(x=>String(x.id)===String(mesaId));
+  if(!t){ alert('Elija una mesa libre para cargar el pedido.'); return; }
+  if(t.order&&t.order.length){ alert('La mesa '+t.name+' ya tiene un pedido. Elija una mesa libre.'); return; }
+  const lin=pwLineas(pd), buenas=lin.filter(l=>l.ok), faltan=lin.filter(l=>!l.ok);
+  if(!buenas.length){ alert('Ningún producto de este pedido se pudo ubicar en el catálogo del POS.\nAbra una mesa y agréguelos a mano; luego marque el pedido como atendido.'); return; }
+  PW.ocupado=true;
+  try{
+    // Se toma el pedido en una transacción: dos cajas no pueden cargarlo a la vez
+    const tomado=await runTransaction(db,async tx=>{
+      const ref=doc(db,PW_COL,String(id)), s=await tx.get(ref);
+      if(!s.exists()||(s.data()||{}).estado!=='nuevo') return false;
+      tx.update(ref,{estado:'en_caja',mesa:t.name,mesaId:String(t.id),tomadoPor:authUser(),tomadoEl:localISO()});
+      return true;
+    });
+    if(!tomado){ alert('Otra caja acaba de tomar este pedido.'); return; }
+    t.order=t.order||[];
+    buenas.forEach(({p,cant})=>{
+      const lid=p.id+'_base', ex=t.order.find(i=>i.lid===lid);
+      if(ex) ex.qty+=cant;
+      else t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:cant,variant:null,stockControl:p.stockControl||'sin_control',persona:null});
+    });
+    t.status='ocupada'; t.openedAt=localISO();
+    t.pedidoWeb={id:String(id),ref:pd.ref||'',cliente:pd.cliente||'',openedAt:t.openedAt};
+    sT();
+    try{ bitacora('pedido_web',{accion:'Cargó el pedido web '+(pd.ref||id)+' de '+(pd.cliente||'cliente')+' a la mesa '+t.name+' ('+buenas.length+' de '+lin.length+' líneas)',pedidoId:String(id)}); }catch(e){}
+    if(faltan.length) alert('Pedido cargado a la mesa '+t.name+'.\n\nFalta agregar a mano:\n• '+faltan.map(l=>l.cant+' × '+(l.it.titulo||'')+' — '+l.nota).join('\n• '));
+    selT=t.id; irA('pos');
+  }catch(e){
+    console.error('pwCargar:',e);
+    alert('No se pudo tomar el pedido ('+((e&&(e.code||e.message))||'error')+'). Revise la conexión e inténtelo de nuevo.');
+  }finally{ PW.ocupado=false; if(view==='pedidosweb') render(); }
+}
+async function pwCerrar(id){
+  const pd=PW.list.find(x=>x.id===id); if(!pd) return;
+  const motivo=prompt('Marcar el pedido '+(pd.ref||'')+' de '+(pd.cliente||'cliente')+' como atendido SIN cargarlo a una mesa.\n\nEscriba el motivo (por ejemplo: «cobrado en la mesa 4», «el cliente canceló», «pedido de prueba»):');
+  if(motivo===null) return;
+  if(!motivo.trim()){ alert('Escriba el motivo para dejar constancia.'); return; }
+  try{
+    await conLimite(updateDoc(doc(db,PW_COL,String(id)),{estado:'cerrado',abierto:false,cerradoPor:authUser(),cerradoEl:localISO(),motivo:motivo.trim().slice(0,200)}),15000);
+    try{ bitacora('pedido_web',{accion:'Cerró sin venta el pedido web '+(pd.ref||id)+' de '+(pd.cliente||'cliente')+': '+motivo.trim().slice(0,200),pedidoId:String(id)}); }catch(e){}
+    PW.hist=null;
+  }catch(e){ alert('No se pudo guardar ('+((e&&(e.code||e.message))||'error')+').'); }
+}
+async function pwDevolver(id){
+  const pd=PW.list.find(x=>x.id===id); if(!pd) return;
+  const t=T.find(x=>x.pedidoWeb&&x.pedidoWeb.id===String(id)&&x.order&&x.order.length);
+  if(t){ alert('El pedido sigue cargado en la mesa '+t.name+'. Cóbrelo o cancele esa mesa primero.'); return; }
+  try{ await conLimite(updateDoc(doc(db,PW_COL,String(id)),{estado:'nuevo',mesa:'',mesaId:'',tomadoPor:'',tomadoEl:''}),15000); }
+  catch(e){ alert('No se pudo guardar ('+((e&&(e.code||e.message))||'error')+').'); }
+}
+// Al cobrar una mesa que nació de un pedido web, el pedido queda cerrado con su venta
+async function pwMarcarCobrado(pw,venta){
+  if(!pw||!pw.id) return;
+  try{ await updateDoc(doc(db,PW_COL,String(pw.id)),{estado:'cobrado',abierto:false,ventaId:String(venta.id),totalCobrado:_r2(venta.total),cobradoPor:authUser(),cobradoEl:localISO()}); PW.hist=null; }
+  catch(e){ console.warn('pwMarcarCobrado:',e); }
+}
+async function pwCargarHist(){
+  PW.hist='cargando'; render();
+  try{
+    const snap=await conLimite(getDocs(query(collection(db,PW_COL),orderBy('ts','desc'),limit(40))),15000);
+    PW.hist=snap.docs.map(d=>Object.assign({},d.data(),{id:d.id})).filter(x=>x.abierto===false);
+  }catch(e){ PW.hist=null; alert('No se pudo leer el historial ('+((e&&(e.code||e.message))||'error')+').'); }
+  render();
+}
+function rPedidosWeb(){
+  const fh=ts=>{ if(!ts) return ''; const d=new Date(+ts); return d.toLocaleDateString('es-EC',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'}); };
+  const libres=T.filter(t=>!t.order||!t.order.length);
+  const card=pd=>{
+    const lin=pwLineas(pd), nOk=lin.filter(l=>l.ok).length;
+    const totPos=_r2(lin.filter(l=>l.ok).reduce((s,l)=>s+(+l.p.price||0)*l.cant,0));
+    const wa=pwWa(pd.celular,'Hola '+(pd.cliente||'')+', te escribimos de La Madriguera por tu pedido '+(pd.ref||'')+'.');
+    const enCaja=pd.estado==='en_caja';
+    const mesaViva=enCaja?T.find(x=>x.pedidoWeb&&x.pedidoWeb.id===String(pd.id)&&x.order&&x.order.length):null;
+    return `<div class="card" data-pwcard="${esc(pd.id)}" style="${enCaja?'border-left:4px solid var(--blu)':'border-left:4px solid var(--amb)'}">
+      <div class="rb" style="gap:10px;flex-wrap:wrap;align-items:flex-start">
+        <div style="min-width:0"><div style="font-weight:700;font-size:14px">${esc(pd.cliente||'Cliente web')} <span style="font-weight:600;font-size:11px;color:var(--text3)">${esc(pd.ref||'')} · ${esc(fh(pd.ts))}</span></div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">📱 ${esc(pd.celular||'')}${wa?` · <a href="${esc(wa)}" target="_blank" rel="noopener" style="color:var(--acc);font-weight:600">Escribir por WhatsApp</a>`:''}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">Entrega: <b>${esc(pd.entrega||'—')}</b> · Pago: <b>${esc(pd.pago||'—')}</b></div>
+          ${pd.nota?`<div style="font-size:12px;color:var(--text2);margin-top:2px">Nota: ${esc(pd.nota)}</div>`:''}</div>
+        <div style="text-align:right"><div style="font-size:18px;font-weight:800;color:var(--acc)">${fmt(+pd.total||0)}</div><div style="font-size:10.5px;color:var(--text3)">total en la web</div>
+          ${enCaja?`<span class="badge" style="background:var(--bbg);color:var(--blu);margin-top:4px">En la mesa ${esc(pd.mesa||'')}</span>`:'<span class="badge ba" style="margin-top:4px">Nuevo</span>'}</div>
+      </div>
+      <div style="margin-top:10px">${lin.map(l=>`<div class="mrow" style="align-items:flex-start"><div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${l.cant} × ${esc(l.it.titulo||'')}</span>
+          <div style="font-size:10.5px;margin-top:2px;color:${l.ok?(l.nota?'var(--amb)':'var(--grn)'):'var(--red)'}">${l.ok?('✓ '+esc(l.p.name)+(l.nota?' · '+esc(l.nota):'')):('⚠ '+esc(l.nota))}</div></div>
+          <span style="font-weight:700;font-size:12px;flex-shrink:0">${fmt((+l.it.precio||0)*l.cant)}</span></div>`).join('')}</div>
+      ${enCaja?`<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center"><span style="font-size:11.5px;color:var(--text2)">Tomado por ${esc(pd.tomadoPor||'')}${pd.tomadoEl?' · '+esc(String(pd.tomadoEl).slice(11,16)):''}. Se cierra solo al cobrar la mesa.</span>
+          ${mesaViva?`<button class="btn btn-acc btn-sm" data-pwir="${esc(mesaViva.id)}">Ir a la mesa ${esc(mesaViva.name)}</button>`:`<button class="btn btn-g btn-sm" data-pwdev="${esc(pd.id)}">↩ Devolver a nuevos</button>`}
+          <button class="btn btn-g btn-sm" data-pwcerrar="${esc(pd.id)}">✓ Atendido sin venta</button></div>`
+        :`<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center">
+          <span style="font-size:11.5px;color:var(--text2)">${nOk} de ${lin.length} línea(s) se cargan solas${nOk?' · '+fmt(totPos)+' a precio del POS':''}</span>
+          <select data-pwmesa="${esc(pd.id)}" style="padding:6px 8px;border-radius:7px;border:1.5px solid var(--b2);font-family:inherit;font-size:12px">${libres.length?libres.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join(''):'<option value="">Sin mesas libres</option>'}</select>
+          <button class="btn btn-acc btn-sm" data-pwcargar="${esc(pd.id)}"${nOk&&libres.length?'':' disabled'}>➕ Cargar a la mesa</button>
+          <button class="btn btn-g btn-sm" data-pwcerrar="${esc(pd.id)}">✓ Atendido sin venta</button></div>`}
+    </div>`;
+  };
+  const nuevos=PW.list.filter(x=>x.estado==='nuevo'), enCaja=PW.list.filter(x=>x.estado!=='nuevo');
+  const estH={cobrado:'Cobrado',cerrado:'Atendido sin venta'};
+  return `<div>
+    <div class="rb" style="margin-bottom:6px"><span class="stitle" style="margin:0">Pedidos web${nuevos.length?' · '+nuevos.length+' nuevo(s)':''}</span>
+      <button class="btn btn-g" id="pw-hist" style="font-size:11px">${Array.isArray(PW.hist)?'Ocultar atendidos':'Ver atendidos'}</button></div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:12px;line-height:1.5">Pedidos que los clientes registran en el carrito de <b>lamadriguera.ec</b>. Confirme con el cliente por WhatsApp, cargue el pedido a una mesa y cóbrelo como cualquier venta: así salen la factura, el stock y la caja.</div>
+    ${PW.err?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px">${esc(PW.err)}</div>`:''}
+    ${!PW.ts&&!PW.err?'<div style="font-size:12px;color:var(--text3);padding:10px">Cargando pedidos…</div>':''}
+    ${nuevos.map(card).join('')}
+    ${enCaja.length?`<div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin:14px 0 7px">En caja (${enCaja.length})</div>${enCaja.map(card).join('')}`:''}
+    ${PW.ts&&!PW.list.length&&!PW.err?'<div style="padding:26px;text-align:center;color:var(--text3);font-size:12.5px">No hay pedidos web pendientes.</div>':''}
+    ${PW.hist==='cargando'?'<div style="font-size:12px;color:var(--text3);padding:10px">Cargando atendidos…</div>':''}
+    ${Array.isArray(PW.hist)?`<div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin:16px 0 7px">Atendidos recientes (${PW.hist.length})</div>
+      ${PW.hist.length?PW.hist.map(h=>`<div class="mrow"><div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(h.cliente||'')}</span><span style="font-size:10.5px;color:var(--text3);margin-left:6px">${esc(h.ref||'')} · ${esc(fh(h.ts))} · ${esc(estH[h.estado]||h.estado||'')}${h.mesa?' · mesa '+esc(h.mesa):''}${h.motivo?' · '+esc(h.motivo):''}${h.cobradoPor||h.cerradoPor?' · '+esc(h.cobradoPor||h.cerradoPor):''}</span></div>
+        <span style="font-weight:700;font-size:12px">${fmt(+(h.totalCobrado!=null?h.totalCobrado:h.total)||0)}</span></div>`).join(''):'<div style="font-size:11.5px;color:var(--text3);padding:6px">Aún no hay pedidos atendidos.</div>'}`:''}
+  </div>`;
+}
+function attachPedidosWeb(){
+  const mc=document.getElementById('mc'); if(!mc) return;
+  mc.querySelectorAll('[data-pwcargar]').forEach(el=>el.addEventListener('click',()=>{ const s=mc.querySelector('[data-pwmesa="'+el.dataset.pwcargar+'"]'); pwCargar(el.dataset.pwcargar,s?s.value:''); }));
+  mc.querySelectorAll('[data-pwcerrar]').forEach(el=>el.addEventListener('click',()=>pwCerrar(el.dataset.pwcerrar)));
+  mc.querySelectorAll('[data-pwdev]').forEach(el=>el.addEventListener('click',()=>pwDevolver(el.dataset.pwdev)));
+  mc.querySelectorAll('[data-pwir]').forEach(el=>el.addEventListener('click',()=>{ const t=T.find(x=>String(x.id)===el.dataset.pwir); if(t){ selT=t.id; irA('pos'); } }));
+  mc.querySelector('#pw-hist')?.addEventListener('click',()=>{ if(Array.isArray(PW.hist)){ PW.hist=null; render(); } else pwCargarHist(); });
+}
+// ══ fin CARTA WEB Y PEDIDOS WEB ══
+
 function marcarNav(v){
   document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
 }
@@ -9558,6 +9990,10 @@ function iniAlertas(){
   try{
     const pr=admin?P.filter(x=>x&&x.revisado===false):[];
     if(pr.length) add('media',pr.length+' producto(s) creado(s) desde caja por revisar',pr.slice(0,3).map(x=>x.name+' '+fmt(x.price)).join(', ')+(pr.length>3?'…':'')+'. Revise precio, categoría e IVA.','Revisar',()=>irA('productos'),'productos');
+  }catch(e){}
+  try{
+    const pn=pwNuevos();
+    if(pn.length) add('media',pn.length+' pedido(s) web sin atender',pn.slice(0,3).map(x=>(x.cliente||'Cliente')+' '+fmt(+x.total||0)).join(', ')+(pn.length>3?'…':'')+'. Confirme con el cliente y cárguelo a una mesa.','Ver pedidos',()=>irA('pedidosweb'),'pedidosweb');
   }catch(e){}
   try{
     const ec=estadoCaja();
@@ -9618,6 +10054,7 @@ function iniAlertas(){
 function actualizarNavBadges(){
   const n={};
   try{ iniAlertas().forEach(a=>{ if(a.badgeKey) n[a.badgeKey]=(n[a.badgeKey]||0)+1; }); }catch(e){}
+  try{ const c=pwNuevos().length; if(c) n.pedidosweb=c; else delete n.pedidosweb; }catch(e){}
   document.querySelectorAll('nav [data-badge]').forEach(el=>{ const k=el.dataset.badge; el.textContent=n[k]?String(n[k]):''; });
   const hi=document.querySelector('nav [data-badge="inicio"]');
 }
