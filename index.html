@@ -151,6 +151,8 @@ nav button.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:70
 .fg label{display:block;font-size:11px;color:var(--text2);margin-bottom:3px;font-weight:600}
 .fg input,.fg select{width:100%;padding:7px 9px;border-radius:var(--rs);border:1.5px solid var(--border);background:var(--bg2);color:var(--text);font-size:12px;font-family:inherit;outline:none}
 .fg input:focus,.fg select:focus{border-color:var(--acc)}
+.rep-tabla-ayuda{display:none;font-size:11px;color:var(--text2);margin-top:8px}
+@media(max-width:760px){.rep-tabla-ayuda{display:block}}
 .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .barchart{display:flex;align-items:flex-end;gap:5px;height:80px;padding:4px 0}
 .bw{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px}
@@ -1559,7 +1561,6 @@ const openS=()=>S.filter(s=>isVenta(s)&&s.date.startsWith(today()));
 
 // ══ FASE 2: ventas como coleccion (un documento por venta) ══════════════
 const VENTAS_COL='ventas';
-// Ventana "en vivo": desde el 1ro del mes anterior. Lo anterior se carga bajo demanda.
 /* Ventana de ventas EN VIVO: el mes corriente, con un piso de 7 dias hacia atras.
    Antes arrancaba el 1ro del mes ANTERIOR y eso costaba ~336 lecturas extra en
    CADA apertura del POS. Los meses anteriores se cargan solos cuando los pides
@@ -1580,6 +1581,8 @@ const S_pending=new Map();     // escrituras locales aun no confirmadas (p.ej. s
 const S_conf=new Map();        // id -> {r, t}
 let _ventasSrvTs=0;            // ultima vez que llego una lista de ventas DESDE EL SERVIDOR
 let _ventasErr=null;           // error de la suscripcion de ventas
+let _ventasDesdeCache=true;
+let _catalogoDisponible=false;
 function _confirmado(r){ if(!r||!r.id) return; const id=String(r.id); if(S_live.some(x=>x&&String(x.id)===id)) return; /* la suscripcion ya lo trajo */ S_conf.set(id,{r,t:Date.now()}); }
 
 function rebuildS(){
@@ -1665,16 +1668,31 @@ async function deleteVenta(id){
 
 // Carga bajo demanda de un mes antiguo (YYYY-MM) fuera de la ventana en vivo
 const _mesesCargados=new Set();
+const _mesesCargando=new Map();
 async function cargarMes(mes){
-  if(!mes||_mesesCargados.has(mes))return false;
-  if(mes>=VENTAS_DESDE.slice(0,7))return false; // ya esta en la ventana en vivo
-  _mesesCargados.add(mes);
-  try{
-    const qs=await getDocs(query(collection(db,VENTAS_COL),where('date','>=',mes+'-01'),where('date','<=',mes+'-31\uf8ff')));
-    qs.forEach(d=>{const v=d.data();if(v&&v.id)S_old.set(String(v.id),v);});
-    rebuildS();
-    return true;
-  }catch(e){ _mesesCargados.delete(mes); console.error('cargarMes:',e); return false; }
+  if(!mes)return false;
+  if(_mesesCargados.has(mes)||mes+'-01'>=VENTAS_DESDE)return true;
+  if(_mesesCargando.has(mes))return _mesesCargando.get(mes);
+  // Al inicio del mes, la suscripción cubre solo los últimos días del mes anterior.
+  const inicio=mes+'-01';
+  const fin=mes===VENTAS_DESDE.slice(0,7)?VENTAS_DESDE:mes+'-31\uf8ff';
+  const carga=(async()=>{
+    try{
+      const consulta=query(collection(db,VENTAS_COL),where('date','>=',inicio),where('date','<',fin));
+      const qs=await conLimite(getDocs(consulta),12000);
+      for(const [id,v] of S_old){
+        if(v.date>=inicio&&v.date<fin)S_old.delete(id);
+      }
+      qs.forEach(d=>{const v=d.data();if(v&&v.id)S_old.set(String(v.id),v);});
+      rebuildS();
+      if(qs.metadata.fromCache)return false;
+      _mesesCargados.add(mes);
+      return true;
+    }catch(e){ console.error('cargarMes:',e); return false; }
+  })();
+  _mesesCargando.set(mes,carga);
+  try{ return await carga; }
+  finally{ _mesesCargando.delete(mes); }
 }
 async function cargarMeses(desde,hasta){
   let d=new Date(desde+'-15');
@@ -1903,7 +1921,9 @@ function subRT(){
     if(!_appShown) return;
     if(_renderTimer) clearTimeout(_renderTimer);
     _renderTimer=setTimeout(function(){
-      if(view==='dashboard'||view==='monitor'||view==='caja'){
+      if(view==='reportes'){
+        actualizarReportesEnVivo();
+      } else if(view==='dashboard'||view==='monitor'||view==='caja'){
         const ae=document.activeElement;
         if(view==='caja'&&ae&&ae.tagName==='INPUT'&&document.getElementById('mc')?.contains(ae)) return; // no borrar lo que se esta escribiendo
         render();
@@ -1922,6 +1942,7 @@ function subRT(){
   // puede (sin IndexedDB, o sin copia y sin servidor) usa el metodo clasico.
   iniciarCatalogo(()=>{
     _loaded['products']=true;
+    _catalogoDisponible=true;
     if(_appShown&&!_writing) debouncedRender();
   }).then(ok=>{
     if(ok)return;
@@ -1932,6 +1953,7 @@ function subRT(){
       injectConsignaProducts();
       setTimeout(patchProducts,3000);
       _loaded['products']=true;
+      _catalogoDisponible=true;
       if(_appShown&&!_writing) debouncedRender();
     },()=>{online=false;showErr();});
   });
@@ -1962,9 +1984,10 @@ function subRT(){
       if(_appShown&&!_writing) debouncedRender();
     },()=>{online=false;showErr();});
   });
-  // FASE 2 - Ventas: coleccion con un documento por venta, ventana desde el 1ro del mes anterior
+  // Ventas recientes. Los períodos anteriores se cargan bajo demanda.
   onSnapshot(query(collection(db,VENTAS_COL),where('date','>=',VENTAS_DESDE)),{includeMetadataChanges:true},snap=>{
     S_live=snap.docs.map(d=>d.data());
+    _ventasDesdeCache=snap.metadata.fromCache;
     if(S_conf.size){ const vistos=new Set(snap.docs.map(d=>d.id)); [...S_conf.keys()].forEach(id=>{ if(vistos.has(id)) S_conf.delete(id); }); }
     if(!snap.metadata.fromCache){ _ventasSrvTs=Date.now(); _ventasErr=null; }
     syncRevisar();
@@ -1974,7 +1997,7 @@ function subRT(){
       showApp();
     }
     if(_appShown&&!_writing) debouncedRender();
-  },e=>{ online=false; _ventasErr=(e&&(e.code||e.message))||'error'; console.error('[sync] suscripcion de ventas:',e); showErr(); syncRevisar(); });
+  },e=>{ online=false; _ventasErr=(e&&(e.code||e.message))||'error'; console.error('[sync] suscripcion de ventas:',e); showErr(); syncRevisar(); debouncedRender(); });
   // Pantalla de cocina: lotes pendientes y listos recientes (no bloquea el POS)
   cocinaSuscribir(debouncedRender);
   // Fallback: show app after 4 seconds no matter what
@@ -7047,44 +7070,90 @@ function attachDevoluciones(){
 
 // ── REPORTES ─────────────────────────────────────────────────
 let repPeriodo='semana'; // semana | mes | custom
-let repProvSel='';   // proveedor expandido en el reporte
+let repProvSel='';
+let repProvQ='';
 let repItemQ='';     // busqueda de la ficha de producto
 let repCatFilter='Todos';
 let repFechaDesde='';
 let repFechaHasta='';
 let repFechaDia='';
+let repCarga=null;
+let repExcelPreparando=false;
 
-function getRangeFilter(){
+function fechaValidaReporte(fecha){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(fecha))return false;
+  const d=new Date(fecha+'T00:00:00Z');
+  return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===fecha;
+}
+function rangoReportes(){
+  if(repPeriodo==='custom'){
+    return fechaValidaReporte(repFechaDesde)&&fechaValidaReporte(repFechaHasta)&&repFechaDesde<=repFechaHasta
+      ? {desde:repFechaDesde,hasta:repFechaHasta} : null;
+  }
+  if(repPeriodo==='dia')return fechaValidaReporte(repFechaDia)?{desde:repFechaDia,hasta:repFechaDia}:null;
   const now=new Date();
-  if(repPeriodo==='hoy'){
-    const d=localISO(now).slice(0,10);
-    return s=>s.date.startsWith(d);
-  }
+  const hoy=localISO(now).slice(0,10);
   if(repPeriodo==='ayer'){
-    const d=new Date(now);d.setDate(d.getDate()-1);
-    const ds=localISO(d).slice(0,10);
-    return s=>s.date.startsWith(ds);
-  }
-  if(repPeriodo==='dia'&&repFechaDia){
-    return s=>s.date.startsWith(repFechaDia);
+    now.setDate(now.getDate()-1);
+    const ayer=localISO(now).slice(0,10);
+    return {desde:ayer,hasta:ayer};
   }
   if(repPeriodo==='semana'){
-    const d=new Date(now);d.setDate(d.getDate()-6);
-    return s=>s.date>=localISO(d).slice(0,10);
+    now.setDate(now.getDate()-6);
+    return {desde:localISO(now).slice(0,10),hasta:hoy};
   }
-  if(repPeriodo==='mes'){
-    const m=localISO(now).slice(0,7);
-    return s=>s.date.startsWith(m);
-  }
+  if(repPeriodo==='mes')return {desde:hoy.slice(0,7)+'-01',hasta:hoy};
   if(repPeriodo==='mes_ant'){
-    const d=new Date(now.getFullYear(),now.getMonth()-1,1);
-    const m=localISO(d).slice(0,7);
-    return s=>s.date.startsWith(m);
+    const fin=localISO(new Date(now.getFullYear(),now.getMonth(),0)).slice(0,10);
+    return {desde:fin.slice(0,7)+'-01',hasta:fin};
   }
-  if(repPeriodo==='custom'&&repFechaDesde&&repFechaHasta){
-    return s=>s.date.slice(0,10)>=repFechaDesde&&s.date.slice(0,10)<=repFechaHasta;
+  return {desde:hoy,hasta:hoy};
+}
+function getRangeFilter(rango=rangoReportes()){
+  return s=>{
+    const dia=typeof s.date==='string'?s.date.slice(0,10):'';
+    return !!rango&&dia>=rango.desde&&dia<=rango.hasta;
+  };
+}
+function mesesPendientesReportes(rango){
+  if(rango.desde>=VENTAS_DESDE)return [];
+  const meses=[];
+  const dia=new Date(rango.desde.slice(0,7)+'-01T12:00:00');
+  while(true){
+    const inicio=localISO(dia).slice(0,10);
+    if(inicio>rango.hasta||inicio>=VENTAS_DESDE)break;
+    const mes=inicio.slice(0,7);
+    if(!_mesesCargados.has(mes))meses.push(mes);
+    dia.setMonth(dia.getMonth()+1);
   }
-  return ()=>true;
+  return meses;
+}
+const claveRangoReportes=r=>r? r.desde+'/'+r.hasta : '';
+function prepararPeriodoReportes(rango){
+  if(!rango)return '';
+  const meses=mesesPendientesReportes(rango);
+  if(!meses.length)return '';
+  const clave=claveRangoReportes(rango);
+  if(repCarga?.clave===clave)return repCarga.error?'error':'cargando';
+  const carga=repCarga={clave,error:false};
+  (async()=>{
+    for(const mes of meses){
+      if(repCarga!==carga||claveRangoReportes(rangoReportes())!==clave)break;
+      if(!await cargarMes(mes)){ carga.error=true; break; }
+    }
+    if(repCarga===carga&&view==='reportes'&&claveRangoReportes(rangoReportes())===clave)render();
+  })();
+  return 'cargando';
+}
+function avisoCorteProveedor(rango){
+  if(rango.hasta>=VENTAS_DESDE&&(_ventasDesdeCache||_ventasErr)){
+    return 'Esperando la confirmación del servidor para las ventas recientes.';
+  }
+  if(!_catalogoDisponible)return 'Esperando el catálogo para identificar ventas antiguas.';
+  if([...S_pending.values()].some(getRangeFilter(rango))){
+    return 'Hay cambios de ventas pendientes de sincronizar en este período.';
+  }
+  return '';
 }
 
 // Resuelve proveedor/editorial/ISBN de un item de venta (libros).
@@ -7125,7 +7194,41 @@ function rReportes(){
     {v:'semana',l:'Últimos 7 días'},{v:'mes',l:'Este mes'},{v:'mes_ant',l:'Mes anterior'},{v:'custom',l:'Personalizado'}
   ];
 
-  const filter=getRangeFilter();
+  const rango=rangoReportes();
+  const carga=prepararPeriodoReportes(rango);
+  const cabecera=`
+    <div class="rb" style="margin-bottom:12px">
+      <span class="stitle" style="margin:0">Reportes</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-g btn-sm" id="bbackup" title="Descargar respaldo completo">💾 Respaldo</button>
+        <button class="btn btn-acc btn-sm" id="bexport"${rango&&!carga?'':' disabled'}>↓ Exportar CSV</button>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+      ${PERIODOS.map(p=>`<button style="padding:5px 12px;border-radius:20px;font-size:11px;font-weight:${repPeriodo===p.v?'700':'400'};cursor:pointer;border:1.5px solid ${repPeriodo===p.v?'var(--acc)':'var(--b2)'};background:${repPeriodo===p.v?'var(--acl)':'var(--bg3)'};color:${repPeriodo===p.v?'var(--acc)':'var(--text2)'};font-family:inherit" data-periodo="${p.v}">${p.l}</button>`).join('')}
+    </div>
+    ${repPeriodo==='custom'?`<div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
+      <div class="fg" style="flex:1"><label>Desde</label><input type="date" id="rfdesde" value="${repFechaDesde}"></div>
+      <div class="fg" style="flex:1"><label>Hasta</label><input type="date" id="rfhasta" value="${repFechaHasta}"></div>
+      <button class="btn btn-acc btn-sm" style="margin-top:14px" id="baplicar">Aplicar</button>
+    </div>`:''}
+    ${repPeriodo==='dia'?`<div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
+      <div class="fg" style="flex:1"><label>Selecciona el día</label><input type="date" id="rfdia" value="${repFechaDia||localISO().slice(0,10)}"></div>
+      <button class="btn btn-acc btn-sm" style="margin-top:14px" id="bdia">Ver ventas</button>
+    </div>`:''}`;
+
+  if(!rango||carga){
+    const mensaje=carga==='error'?'No se pudo verificar el período completo en el servidor.':
+      carga==='cargando'?'Cargando las ventas del período…':
+      repPeriodo==='dia'?'Selecciona un día y pulsa Ver ventas.':
+      'Ingresa ambas fechas y verifica que Desde sea anterior o igual a Hasta.';
+    return `<div>${cabecera}<div class="card" role="status">${mensaje}
+      ${carga==='error'?'<button id="rep-reintentar" class="btn btn-g btn-sm" style="margin-left:8px">Reintentar</button>':''}
+    </div></div>`;
+  }
+  const filter=getRangeFilter(rango);
   const ventas=S.filter(s=>isVenta(s)&&filter(s));
   const gastos=S.filter(s=>s.esGasto&&!s.anulada&&filter(s));
   const cancels=S.filter(s=>s.esCancelacion&&s.date&&filter(s)).sort((a,b)=>b.date.localeCompare(a.date));
@@ -7219,29 +7322,7 @@ function rReportes(){
 
   const cats=['Todos',...Object.keys(CAT_COLORS)];
 
-  return `<div>
-    <div class="rb" style="margin-bottom:12px">
-      <span class="stitle" style="margin:0">Reportes</span>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn-g btn-sm" id="bbackup" title="Descargar respaldo completo">💾 Respaldo</button>
-        <button class="btn btn-acc btn-sm" id="bexport">↓ Exportar CSV</button>
-      </div>
-    </div>
-
-    <!-- Filtros -->
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-      ${PERIODOS.map(p=>`<button style="padding:5px 12px;border-radius:20px;font-size:11px;font-weight:${repPeriodo===p.v?'700':'400'};cursor:pointer;border:1.5px solid ${repPeriodo===p.v?'var(--acc)':'var(--b2)'};background:${repPeriodo===p.v?'var(--acl)':'var(--bg3)'};color:${repPeriodo===p.v?'var(--acc)':'var(--text2)'};font-family:inherit" data-periodo="${p.v}">${p.l}</button>`).join('')}
-    </div>
-    ${repPeriodo==='custom'?`<div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-      <div class="fg" style="flex:1"><label>Desde</label><input type="date" id="rfdesde" value="${repFechaDesde}"></div>
-      <div class="fg" style="flex:1"><label>Hasta</label><input type="date" id="rfhasta" value="${repFechaHasta}"></div>
-      <button class="btn btn-acc btn-sm" style="margin-top:14px" id="baplicar">Aplicar</button>
-    </div>`:''}
-    ${repPeriodo==='dia'?`<div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
-      <div class="fg" style="flex:1"><label>Selecciona el día</label><input type="date" id="rfdia" value="${repFechaDia||localISO().slice(0,10)}"></div>
-      <button class="btn btn-acc btn-sm" style="margin-top:14px" id="bdia">Ver ventas</button>
-    </div>`:''}
-
+  return `<div>${cabecera}${rCorteProveedor()}
     <div style="margin-bottom:14px">
       <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase">Filtrar por categoría</div>
       <div style="display:flex;gap:5px;flex-wrap:wrap">
@@ -7436,56 +7517,6 @@ function rReportes(){
       </div>`).join('')}
     </div>`:''}
 
-    <!-- ── VENTAS POR PROVEEDOR ─────────────────────────── -->
-    ${(()=>{
-      const provs=mapaProveedores(ventas);
-      if(!provs.length) return '';
-      const totV=provs.reduce((a,g)=>a+g.venta,0);
-      return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--acc)">
-        <div style="font-weight:700;font-size:12px;margin-bottom:4px">\uD83E\uDDFE Corte por proveedor \u2014 todas las l\u00edneas (${provs.length})</div>
-        <div style="font-size:10.5px;color:var(--text3);margin-bottom:10px;line-height:1.5">
-          Incluye <b>todos</b> los proveedores, no solo libros. Toca uno para ver t\u00edtulo por t\u00edtulo con su ISBN y exportar su corte.
-          El proveedor y el ISBN se guardan en cada venta al momento de cobrar, as\u00ed que un corte ya emitido no cambia aunque despu\u00e9s edites el cat\u00e1logo.
-          <br>La tarjeta <b>\uD83D\uDCDA Libros vendidos por proveedor</b>, m\u00e1s arriba, exporta el mismo per\u00edodo <b>venta por venta</b> con fecha y hora \u2014 \u00fatil cuando el proveedor pide el movimiento cronol\u00f3gico.
-        </div>
-        ${provs.map(g=>`
-          <div style="border-bottom:.5px solid var(--border)">
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;cursor:pointer;gap:8px" data-prov="${esc(g.prov)}">
-              <div style="min-width:0;flex:1">
-                <span style="font-weight:600;font-size:12px">${esc(g.prov)}</span>
-                ${g.consignado?'<span class="badge ba" style="margin-left:6px">consignado</span>':''}
-                <div style="font-size:10px;color:var(--text3)">${g.items.length} t\u00edtulo(s) \u00b7 ${g.uds} unidad(es)</div>
-              </div>
-              <div style="text-align:right;flex-shrink:0">
-                <div style="font-weight:700;font-size:12px">${fmt(g.venta)}</div>
-                ${g.consignado?`<div style="font-size:10px;color:var(--text3)">a pagar ${fmt(g.venta*PCT_CONSIGNANTE)}</div>`:`<div style="font-size:10px;color:var(--text3)">${totV>0?Math.round(g.venta/totV*100):0}% del total</div>`}
-              </div>
-              <span style="color:var(--text3);font-size:11px;flex-shrink:0">${repProvSel===g.prov?'\u25b2':'\u25bc'}</span>
-            </div>
-            ${repProvSel===g.prov?`<div style="padding:0 0 10px 0">
-              <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11.5px">
-                <tr><th style="text-align:left;padding:5px;border-bottom:1px solid var(--border)">ISBN / c\u00f3digo</th>
-                <th style="text-align:left;padding:5px;border-bottom:1px solid var(--border)">T\u00edtulo</th>
-                <th style="text-align:right;padding:5px;border-bottom:1px solid var(--border)">Uds</th>
-                <th style="text-align:right;padding:5px;border-bottom:1px solid var(--border)">P. venta</th>
-                <th style="text-align:right;padding:5px;border-bottom:1px solid var(--border)">Total</th></tr>
-                ${g.items.map(it=>`<tr>
-                  <td style="padding:5px;border-bottom:.5px solid var(--border);font-family:monospace;font-size:10.5px">${esc(it.isbn||'\u2014')}</td>
-                  <td style="padding:5px;border-bottom:.5px solid var(--border)">${esc(it.name)}</td>
-                  <td style="padding:5px;text-align:right;border-bottom:.5px solid var(--border)">${it.uds}</td>
-                  <td style="padding:5px;text-align:right;border-bottom:.5px solid var(--border)">${fmt(it.precio)}</td>
-                  <td style="padding:5px;text-align:right;border-bottom:.5px solid var(--border);font-weight:600">${fmt(it.venta)}</td></tr>`).join('')}
-                <tr><td colspan="4" style="padding:6px 5px;font-weight:700;border-top:1px solid var(--b2)">Total ${esc(g.prov)}</td>
-                <td style="padding:6px 5px;text-align:right;font-weight:700;border-top:1px solid var(--b2)">${fmt(g.venta)}</td></tr>
-                ${g.consignado?`<tr><td colspan="4" style="padding:4px 5px;color:var(--text2)">Le corresponde (${Math.round(PCT_CONSIGNANTE*100)}%)</td>
-                <td style="padding:4px 5px;text-align:right;font-weight:700;color:var(--grn)">${fmt(g.venta*PCT_CONSIGNANTE)}</td></tr>`:''}
-              </table></div>
-              <button class="btn btn-g btn-sm" style="margin-top:8px" data-provcsv="${esc(g.prov)}">\u2193 Exportar el corte de ${esc(g.prov)}</button>
-            </div>`:''}
-          </div>`).join('')}
-      </div>`;
-    })()}
-
     <!-- ── FICHA DE UN PRODUCTO ─────────────────────────── -->
     ${(()=>{
       const f=fichaProducto(ventas,repItemQ);
@@ -7553,34 +7584,279 @@ function checkAutoBackup(){
   }catch(e){}
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  VENTAS POR PROVEEDOR y FICHA DE PRODUCTO
-// ═══════════════════════════════════════════════════════════════
-//  Cada renglon vendido ya guarda proveedor, editorial e ISBN desde
-//  el momento del cobro. Eso es importante: el reporte no depende del
-//  catalogo actual, sino de como estaba el producto cuando se vendio.
-//  Si mañana cambias de proveedor o corriges un ISBN, los cortes ya
-//  emitidos siguen cuadrando.
-// ═══════════════════════════════════════════════════════════════
-function ventasDelPeriodo(){
-  const f=getRangeFilter();
-  return S.filter(x=>isVenta(x)&&f(x));
+// El corte usa la venta guardada. Para datos antiguos, solo cruza por ID o ISBN único.
+const repNormalizar=v=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/\s+/g,' ');
+function repClaveProveedor(nombre){
+  const clave=repNormalizar(nombre);
+  if(clave==='editorial oceano')return 'oceano';
+  return clave==='(sin proveedor)'||clave==='consignacion:'?'':clave;
 }
+function repISBN(codigo){
+  const isbn=String(codigo??'').replace(/[\s-]/g,'').toUpperCase();
+  return /^(97[89]\d{10}|\d{9}[\dX])$/.test(isbn)?isbn:'';
+}
+const repCentavos=n=>Math.round((Number(n)||0)*100+1e-8);
+
+function descuentosCorte(venta,brutos){
+  const bases=brutos.map(n=>Math.max(0,n));
+  const base=bases.reduce((a,b)=>a+b,0);
+  const descuentoGuardado=repCentavos(venta.descuento);
+  if(descuentoGuardado<=0||!base)return bases.map(()=>0);
+  // Si el redondeo del descuento y del cobro difieren por un centavo, cuadra con el cobro guardado.
+  const contraCobro=brutos.reduce((a,b)=>a+b,0)-repCentavos(venta.total);
+  const descuento=Math.min(base,venta.total!=null&&contraCobro>=0&&Math.abs(contraCobro-descuentoGuardado)<=1
+    ? contraCobro : descuentoGuardado);
+  const partes=bases.map((n,i)=>{
+    const peso=descuento*n;
+    return {i,centavos:Math.floor(peso/base),resto:peso%base};
+  });
+  const resultado=partes.map(p=>p.centavos);
+  const faltan=descuento-resultado.reduce((a,b)=>a+b,0);
+  partes.sort((a,b)=>b.resto-a.resto||a.i-b.i).slice(0,faltan).forEach(p=>resultado[p.i]++);
+  return resultado;
+}
+
 function mapaProveedores(ventas){
-  const m={};
-  ventas.forEach(s=>(s.items||[]).forEach(i=>{
-    const prov=((i.proveedor||'')+'').trim()||'(sin proveedor)';
-    if(!m[prov]) m[prov]={prov,uds:0,venta:0,items:{},consignado:/^Consignaci/i.test(prov)};
-    const g=m[prov];
-    const uds=+i.qty||0, tot=(+i.price||0)*uds;
-    g.uds+=uds; g.venta+=tot;
-    const k=(i.isbn||i.name||'?');
-    if(!g.items[k]) g.items[k]={isbn:i.isbn||'',name:i.name||'?',editorial:i.editorial||'',uds:0,venta:0,precio:+i.price||0};
-    g.items[k].uds+=uds; g.items[k].venta+=tot;
-  }));
-  return Object.values(m).map(g=>({...g,items:Object.values(g.items).sort((a,b)=>b.venta-a.venta)}))
-    .sort((a,b)=>b.venta-a.venta);
+  const porId=new Map(), porISBN=new Map();
+  for(const p of P){
+    if(!p)continue;
+    if(p.id!=null)porId.set(String(p.id),p);
+    const isbn=repISBN(p.code);
+    if(isbn)porISBN.set(isbn,porISBN.has(isbn)?null:p);
+  }
+  const consignados=new Map((CG.libros||[]).map(l=>['cg_'+l.id,l]));
+  const nombresConsigna=new Map((CG.consignantes||[]).map(c=>[c.id,c.nombre]));
+  const grupos=new Map(), pendientes=[];
+  for(const s of ventas){
+    const items=s.items||[];
+    const brutos=items.map(i=>repCentavos((+i.price||0)*(+i.qty||0)));
+    const descuentos=descuentosCorte(s,brutos);
+    items.forEach((i,pos)=>{
+      const id=String(i.productId??'');
+      const codigoGuardado=String(i.isbn??'').trim();
+      const isbn=repISBN(codigoGuardado);
+      const consignacion=consignados.get(id);
+      let prod=porId.get(id);
+      if(prod&&codigoGuardado&&prod.code&&String(prod.code).trim()!==codigoGuardado&&(!isbn||repISBN(prod.code)!==isbn)){
+        // Dos identificadores en conflicto requieren revisión.
+        prod=null;
+      }else if(!prod&&isbn&&!id.startsWith('cg_')&&i.category!=='Consignados'){
+        prod=porISBN.get(isbn);
+      }
+      const esConsignado=id.startsWith('cg_')||i.category==='Consignados'||prod?.esConsignado;
+      const guardado=String(i.proveedor??'').trim();
+      const consignante=String(nombresConsigna.get(consignacion?.consignanteId??prod?.consignanteId)||'').trim();
+      const proveedor=repClaveProveedor(guardado)?guardado:
+        esConsignado?(consignante?'Consignación: '+consignante:''):String(prod?.author??'').trim();
+      const clave=repClaveProveedor(proveedor);
+      const linea={
+        fecha:s.date.slice(0,10),hora:s.date.slice(11,16),
+        codigo:codigoGuardado||String(consignacion?.code||prod?.code||'').trim(),
+        nombre:i.name||prod?.name||'Sin nombre',
+        editorial:i.editorial??(esConsignado?'':prod?.subcategory||''),
+        unidades:+i.qty||0,precio:repCentavos(i.price),
+        bruto:brutos[pos],descuento:descuentos[pos],neto:brutos[pos]-descuentos[pos]
+      };
+      if(!clave){ pendientes.push(linea); return; }
+      if(!grupos.has(clave))grupos.set(clave,{
+        clave,nombre:clave==='oceano'?'Océano':proveedor,consignado:clave.startsWith('consignacion:'),
+        unidades:0,bruto:0,descuento:0,neto:0,resumen:new Map(),detalle:[]
+      });
+      const grupo=grupos.get(clave);
+      const titulo=linea.codigo?'codigo:'+(repISBN(linea.codigo)||linea.codigo):id?'id:'+id:'nombre:'+linea.nombre;
+      if(!grupo.resumen.has(titulo))grupo.resumen.set(titulo,{
+        codigo:repISBN(linea.codigo)||linea.codigo,nombre:linea.nombre,editorial:linea.editorial,
+        unidades:0,bruto:0,descuento:0,neto:0,precio:linea.precio
+      });
+      const resumen=grupo.resumen.get(titulo);
+      if(resumen.precio!==linea.precio)resumen.precio=null;
+      for(const campo of ['unidades','bruto','descuento','neto']){
+        grupo[campo]+=linea[campo];
+        resumen[campo]+=linea[campo];
+      }
+      grupo.detalle.push(linea);
+    });
+  }
+  const cronologico=(a,b)=>a.fecha.localeCompare(b.fecha)||a.hora.localeCompare(b.hora);
+  for(const grupo of grupos.values()){
+    grupo.resumen=[...grupo.resumen.values()].sort((a,b)=>b.neto-a.neto||a.nombre.localeCompare(b.nombre,'es'));
+    grupo.detalle.sort(cronologico);
+  }
+  return {grupos,pendientes:pendientes.sort(cronologico)};
 }
+
+const repColumnasResumen=['ISBN / código','Título / producto','Editorial','Unidades','Venta bruta','Descuento','Venta neta'];
+const repColumnasDetalle=['Fecha','Hora','ISBN / código','Título / producto','Editorial','Unidades','Precio unitario','Venta bruta','Descuento','Venta neta'];
+const repImportesCorte=f=>[f.unidades,f.bruto/100,f.descuento/100,f.neto/100];
+const repFilaResumen=f=>[f.codigo,f.nombre,f.editorial,...repImportesCorte(f)];
+const repFilaDetalle=f=>[f.fecha,f.hora,f.codigo,f.nombre,f.editorial,f.unidades,f.precio/100,f.bruto/100,f.descuento/100,f.neto/100];
+
+function rCorteProveedor(){
+  return `<section id="rep-proveedor" class="card" aria-labelledby="rep-prov-titulo">
+    <h2 id="rep-prov-titulo" class="stitle">Ventas por proveedor</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div class="fg" style="flex:1 1 170px;max-width:300px">
+        <label for="rep-prov-q">Buscar proveedor</label>
+        <input id="rep-prov-q" type="search" value="${esc(repProvQ)}" placeholder="Ej. Océano" autocomplete="off">
+      </div>
+      <div class="fg" style="flex:1 1 170px;max-width:340px">
+        <label for="rep-prov-sel">Proveedor</label><select id="rep-prov-sel"></select>
+      </div>
+    </div>
+    <div id="rep-prov-resultado"></div>
+    <details id="rep-prov-pendientes" hidden style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600"></summary>
+      <div id="rep-prov-sin-proveedor"></div>
+    </details>
+  </section>`;
+}
+function tablaCorteProveedor(columnas,filas,primeraNumerica){
+  const celdas=(fila,tag)=>fila.map((v,j)=>`<${tag} style="text-align:${j>=primeraNumerica?'right':'left'};padding:5px 8px;border-bottom:1px solid var(--border)">${esc(j>primeraNumerica&&typeof v==='number'?fmt(v):v)}</${tag}>`).join('');
+  return `<div class="rep-tabla-ayuda">Desliza la tabla para ver todos los importes.</div>
+    <div style="overflow-x:auto;margin-top:8px" tabindex="0" role="region" aria-label="Tabla de ventas">
+    <table style="width:100%;min-width:${primeraNumerica===3?680:900}px;border-collapse:collapse;font-size:11.5px">
+    <thead><tr>${celdas(columnas,'th')}</tr></thead>
+    <tbody>${filas.map(f=>'<tr>'+celdas(f,'td')+'</tr>').join('')}</tbody>
+  </table></div>`;
+}
+
+function attachCorteProveedor(panel,rango,ventas){
+  const buscador=panel.querySelector('#rep-prov-q');
+  const selector=panel.querySelector('#rep-prov-sel');
+  const resultado=panel.querySelector('#rep-prov-resultado');
+  const revision=panel.querySelector('#rep-prov-pendientes');
+  const {grupos,pendientes}=mapaProveedores(ventas);
+  const proveedores=[...grupos.values()].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
+  let mostrado=null;
+  const actualizar=()=>{
+    const q=repNormalizar(repProvQ), clave=repClaveProveedor(repProvQ);
+    const visibles=proveedores.filter(g=>g.clave.includes(q)||repNormalizar(g.nombre).includes(q)||g.clave===clave);
+    const opciones='<option value="">Elige un proveedor</option>'+visibles.map(g=>`<option value="${esc(g.clave)}">${esc(g.nombre)}</option>`).join('');
+    if(selector.innerHTML!==opciones)selector.innerHTML=opciones;
+    const elegido=visibles.find(g=>g.clave===repProvSel);
+    selector.value=elegido?.clave||'';
+    mostrado=elegido;
+    const aviso=avisoCorteProveedor(rango);
+    const mensaje=visibles.length?'Elige un proveedor para ver su corte.':q?'Sin ventas identificadas para esa búsqueda en el período.':'Sin ventas con proveedor identificado en este período.';
+    resultado.innerHTML=(aviso?`<div class="aw" role="status">${esc(aviso)}</div>`:'')+
+      (elegido?`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div><strong>${esc(elegido.nombre)}</strong>
+          <div style="font-size:11.5px;color:var(--text2)">${rango.desde} al ${rango.hasta} · ${elegido.resumen.length} ${elegido.resumen.length===1?'producto':'productos'} · ${elegido.unidades} ${elegido.unidades===1?'unidad':'unidades'} · <b>${fmt(elegido.neto/100)} netos</b></div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button id="rep-prov-xlsx" class="btn btn-acc btn-sm" ${aviso||repExcelPreparando?'disabled':''}>${repExcelPreparando?'Preparando…':'Descargar Excel'}</button>
+          <button id="rep-prov-csv" class="btn btn-g btn-sm" ${aviso?'disabled':''}>CSV resumen</button>
+        </div>
+      </div>
+      ${tablaCorteProveedor(repColumnasResumen,[...elegido.resumen.map(repFilaResumen),['Total','','',...repImportesCorte(elegido)]],3)}
+      ${elegido.consignado?`<div style="margin-top:6px;font-size:11.5px">Le corresponde (${PCT_C_TXT} de la venta bruta) · <b>${fmt(elegido.bruto/100*PCT_CONSIGNANTE)}</b></div>`:''}
+      `:`<div role="status" style="font-size:12px;color:var(--text2)">${mensaje}</div>`);
+  };
+  buscador.oninput=()=>{
+    repProvQ=buscador.value;
+    const q=repNormalizar(repProvQ), clave=repClaveProveedor(repProvQ);
+    const candidatos=q?proveedores.filter(g=>g.clave.includes(q)||g.clave===clave):[];
+    repProvSel=grupos.has(clave)?clave:candidatos.length===1?candidatos[0].clave:'';
+    actualizar();
+  };
+  selector.onchange=()=>{ repProvSel=selector.value; actualizar(); };
+  resultado.onclick=e=>{
+    const boton=e.target.closest('button');
+    if(!boton||!mostrado||avisoCorteProveedor(rango))return;
+    if(boton.id==='rep-prov-xlsx')descargarExcelCorte(mostrado,rango,boton);
+    if(boton.id==='rep-prov-csv')descargarCSVCorte(mostrado,rango);
+  };
+  revision.hidden=pendientes.length===0;
+  revision.querySelector('summary').textContent='Filas sin proveedor · '+pendientes.length;
+  const revisar=()=>{
+    revision.querySelector('#rep-prov-sin-proveedor').innerHTML=revision.open
+      ? tablaCorteProveedor(repColumnasDetalle,pendientes.map(repFilaDetalle),5) : '';
+  };
+  revision.ontoggle=revisar;
+  revisar();
+  actualizar();
+}
+
+function actualizarReportesEnVivo(){
+  const panel=document.getElementById('rep-proveedor'), rango=rangoReportes();
+  if(panel&&rango&&!mesesPendientesReportes(rango).length){
+    const filter=getRangeFilter(rango);
+    attachCorteProveedor(panel,rango,S.filter(s=>isVenta(s)&&filter(s)));
+  }
+}
+function nombreArchivoCorte(grupo,rango){
+  const nombre=grupo.clave.replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,70);
+  return 'ventas_'+(nombre||'proveedor')+'_'+rango.desde+'_'+rango.hasta;
+}
+async function descargarExcelCorte(grupo,rango,boton){
+  if(repExcelPreparando)return;
+  repExcelPreparando=true;
+  boton.disabled=true;
+  boton.textContent='Preparando…';
+  try{
+    const X=await conLimite(prcCargarXLSX(),15000);
+    if(view!=='reportes'||repProvSel!==grupo.clave||claveRangoReportes(rangoReportes())!==claveRangoReportes(rango)||avisoCorteProveedor(rango))return;
+    const libro=X.utils.book_new();
+    const excelFecha=fecha=>({t:'n',v:Date.parse(fecha+'T00:00:00Z')/86400000+25569,z:'yyyy-mm-dd'});
+    const datos=[['Proveedor',grupo.nombre],['Desde',excelFecha(rango.desde),'Hasta',excelFecha(rango.hasta)],['Moneda','USD'],[]];
+    const ponerHoja=(nombre,cabecera,filas,totales,anchos,primeraMoneda)=>{
+      const hoja=X.utils.aoa_to_sheet([...datos,cabecera,...filas,totales]);
+      hoja['!cols']=anchos.map(wch=>({wch}));
+      hoja['!autofilter']={ref:X.utils.encode_range({s:{r:4,c:0},e:{r:4+filas.length,c:cabecera.length-1}})};
+      for(let r=5;r<=5+filas.length;r++){
+        for(let c=primeraMoneda;c<cabecera.length;c++){
+          const celda=hoja[X.utils.encode_cell({r,c})];
+          if(celda?.t==='n')celda.z='#,##0.00;(#,##0.00);0.00';
+        }
+      }
+      X.utils.book_append_sheet(libro,hoja,nombre);
+      return hoja;
+    };
+    const resumen=ponerHoja('Resumen',repColumnasResumen,grupo.resumen.map(repFilaResumen),
+      ['Total','','',...repImportesCorte(grupo)],[20,48,34,12,15,14,15],4);
+    if(grupo.consignado)X.utils.sheet_add_aoa(resumen,[[`Le corresponde (${PCT_C_TXT} de la venta bruta)`,repCentavos(grupo.bruto/100*PCT_CONSIGNANTE)/100]],{origin:-1});
+    const detalle=grupo.detalle.map(f=>{
+      const fila=repFilaDetalle(f);
+      fila[0]=excelFecha(f.fecha);
+      if(/^\d{2}:\d{2}$/.test(f.hora)){
+        const [h,m]=f.hora.split(':').map(Number);
+        fila[1]={t:'n',v:(h*60+m)/1440,z:'hh:mm'};
+      }
+      return fila;
+    });
+    ponerHoja('Detalle',repColumnasDetalle,detalle,
+      ['Total','','','','',grupo.unidades,'',grupo.bruto/100,grupo.descuento/100,grupo.neto/100],
+      [14,9,20,48,34,12,18,15,14,15],6);
+    X.writeFile(libro,nombreArchivoCorte(grupo,rango)+'.xlsx',{compression:true});
+  }catch(e){
+    console.error('descargarExcelCorte:',e);
+    alert('No se pudo preparar el Excel. Reintenta o descarga el CSV resumen.');
+  }finally{
+    repExcelPreparando=false;
+    const actual=document.getElementById('rep-prov-xlsx'), periodo=rangoReportes();
+    if(actual&&periodo){
+      actual.disabled=!!avisoCorteProveedor(periodo);
+      actual.textContent='Descargar Excel';
+    }
+  }
+}
+function descargarCSVCorte(grupo,rango){
+  const rows=[['Proveedor','ISBN/Codigo','Titulo','Editorial','Unidades','Precio venta','Total']];
+  grupo.resumen.forEach(f=>rows.push([grupo.nombre,f.codigo,f.nombre,f.editorial,f.unidades,
+    f.precio===null?'':(f.precio/100).toFixed(2),(f.bruto/100).toFixed(2)]));
+  rows.push(['','','','TOTAL',grupo.unidades,'',(grupo.bruto/100).toFixed(2)]);
+  if(grupo.consignado)rows.push(['','','','LE CORRESPONDE ('+PCT_C_TXT+')','','',(grupo.bruto/100*PCT_CONSIGNANTE).toFixed(2)]);
+  const csv='\uFEFF'+rows.map(r=>r.map(v=>{
+    const s=String(v);
+    return '"'+(/^\s*[=+@-]/.test(s)&&Number.isNaN(Number(s))?"'":'')+s.replace(/"/g,'""')+'"';
+  }).join(';')).join('\n');
+  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  const a=document.createElement('a');
+  a.href=url; a.download=nombreArchivoCorte(grupo,rango)+'.csv'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
 function fichaProducto(ventas,q){
   q=(q||'').trim().toLowerCase();
   if(q.length<2) return null;
@@ -7604,49 +7880,33 @@ function fichaProducto(ventas,q){
 }
 
 function attachReportes(){
-  const _mc=document.getElementById('mc');
-  _mc.querySelectorAll('[data-prov]').forEach(el=>el.addEventListener('click',()=>{
-    repProvSel = (repProvSel===el.dataset.prov) ? '' : el.dataset.prov; render();
-  }));
-  _mc.querySelectorAll('[data-provcsv]').forEach(el=>el.addEventListener('click',ev=>{
-    ev.stopPropagation();
-    const prov=el.dataset.provcsv;
-    const g=mapaProveedores(ventasDelPeriodo()).find(x=>x.prov===prov);
-    if(!g) return;
-    const rows=[['Proveedor','ISBN/Codigo','Titulo','Editorial','Unidades','Precio venta','Total']];
-    g.items.forEach(it=>rows.push([prov,it.isbn,it.name,it.editorial,it.uds,it.precio.toFixed(2),it.venta.toFixed(2)]));
-    rows.push(['','','','TOTAL',g.uds,'',g.venta.toFixed(2)]);
-    if(g.consignado) rows.push(['','','','LE CORRESPONDE ('+Math.round(PCT_CONSIGNANTE*100)+'%)','','',(g.venta*PCT_CONSIGNANTE).toFixed(2)]);
-    const csv='\uFEFF'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\n');
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
-    a.download='corte_'+prov.replace(/[^a-zA-Z0-9]+/g,'_')+'_'+today()+'.csv'; a.click();
-  }));
-  const _q=_mc.querySelector('#rep-item-q');
+  const mc=document.getElementById('mc');
+  actualizarReportesEnVivo();
+  const _q=mc.querySelector('#rep-item-q');
   if(_q) _q.addEventListener('input',()=>{
     const pos=_q.selectionStart; repItemQ=_q.value; render();
     const n=document.getElementById('rep-item-q');
     if(n){ n.focus(); try{ n.setSelectionRange(pos,pos); }catch(e){} }
   });
-  const mc=document.getElementById('mc');
   mc.querySelector('#bbackup')?.addEventListener('click',()=>{
     descargarRespaldo();
     try{localStorage.setItem('madu_last_backup',localISO().slice(0,10));localStorage.removeItem('madu_backup_pending');}catch(e){}
   });
-  mc.querySelectorAll('[data-periodo]').forEach(el=>el.addEventListener('click',()=>{repPeriodo=el.dataset.periodo;render();}));
+  mc.querySelectorAll('[data-periodo]').forEach(el=>el.addEventListener('click',()=>{repPeriodo=el.dataset.periodo;repCarga=null;render();}));
   mc.querySelectorAll('[data-repcat]').forEach(el=>el.addEventListener('click',()=>{repCatFilter=el.dataset.repcat;render();}));
   mc.querySelectorAll('[data-catfilter]').forEach(el=>el.addEventListener('click',()=>{repCatFilter=el.dataset.catfilter;render();}));
-  mc.querySelector('#baplicar')?.addEventListener('click',async()=>{
-    repFechaDesde=document.getElementById('rfdesde')?.value||'';
-    repFechaHasta=document.getElementById('rfhasta')?.value||'';
-    if(repFechaDesde&&repFechaHasta)await cargarMeses(repFechaDesde.slice(0,7),repFechaHasta.slice(0,7));
+  mc.querySelector('#baplicar')?.addEventListener('click',()=>{
+    repFechaDesde=mc.querySelector('#rfdesde').value;
+    repFechaHasta=mc.querySelector('#rfhasta').value;
+    repCarga=null;
     render();
   });
-  mc.querySelector('#bdia')?.addEventListener('click',async()=>{
-    repFechaDia=document.getElementById('rfdia')?.value||'';
-    if(repFechaDia)await cargarMes(repFechaDia.slice(0,7));
+  mc.querySelector('#bdia')?.addEventListener('click',()=>{
+    repFechaDia=mc.querySelector('#rfdia').value;
+    repCarga=null;
     render();
   });
+  mc.querySelector('#rep-reintentar')?.addEventListener('click',()=>{repCarga=null;render();});
   mc.querySelectorAll('.banular').forEach(el=>el.addEventListener('click',async()=>{
     const sid=el.dataset.saleid;
     const venta=S.find(s=>s.id===sid);
