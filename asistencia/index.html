@@ -237,7 +237,6 @@ let USER = null, PER = null, CFG = null, MARCAS = [], POS_GPS = null, GEO = null
 let WIFI = {estado: 'verificando', en: 0}, preferirQR = false;
 const urlWifi = () => (CFG && typeof CFG.wifiUrl === 'string' && /^https:\/\//.test(CFG.wifiUrl)) ? CFG.wifiUrl.replace(/\/+$/, '') : '';
 const modoWifi = () => !!urlWifi() && !preferirQR;
-const admiteUbicacion = tipo => tipo === 'entrada' || tipo === 'salida';
 const permiteRespaldo = error => ['fuera_wifi', 'sin_ancla', 'servicio', 'error'].includes(error);
 const ubicacionVigente = () => GEO?.ok && POS_GPS && Date.now() - GEO_EN <= 90000;
 
@@ -344,10 +343,10 @@ function pintarHoy() {
 
 // ── Marcar ──────────────────────────────────────────────────────
 const TXT_BTN = {entrada: 'Marcar ENTRADA', pausa: 'Iniciar pausa (almuerzo)', permiso: 'Salir con permiso', regreso: 'Marcar REGRESO', salida: 'Marcar SALIDA'};
-function pintarBotones(cont, habilitar) {
+function pintarBotones(cont, habilitado) {
   const r = A.recorrer(MARCAS);
   const permAbierto = !$('mk-permiso').classList.contains('oculto');
-  cont.innerHTML = A.accionesPara(r.estado).map(t => `<button class="btn b-${t}" data-t="${t}" ${!ocupado && habilitar(t) ? '' : 'disabled'}>${TXT_BTN[t]}</button>`).join('');
+  cont.innerHTML = A.accionesPara(r.estado).map(t => `<button class="btn b-${t}" data-t="${t}" ${!ocupado && habilitado ? '' : 'disabled'}>${TXT_BTN[t]}</button>`).join('');
   cont.classList.toggle('oculto', permAbierto);
   cont.querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => {
     if (b.dataset.t === 'permiso') { ver('mk-permiso', true); cont.classList.add('oculto'); const d = new Date(Date.now() + 2 * 3600000); $('pm-hora').value = A.pad(d.getHours()) + ':' + A.pad(d.getMinutes()); $('pm-motivo').focus(); return; }
@@ -361,9 +360,9 @@ function pintarMarcar() {
   ver('mkq-wifi', !q && !wifi && !!urlWifi());
   if (!q && !wifi) { ver('mk-permiso', false); return; }
   const ok = ubicacionVigente();
-  if (q) pintarBotones($('mk-btns'), () => GEO?.ok);
+  if (q) pintarBotones($('mk-btns'), GEO?.ok);
   else {
-    pintarBotones($('mkw-btns'), tipo => ok && (WIFI.estado === 'ok' || admiteUbicacion(tipo)));
+    pintarBotones($('mkw-btns'), ok);
     pintarWifi();
   }
   if (!leyendoGPS && (!GEO || Date.now() - GEO_EN > 90000)) ubicar();
@@ -422,17 +421,16 @@ const WIFI_TXT = {
   verificando: ['esp', 'Verificando el Wi-Fi…', 'Debes estar conectado al Wi-Fi de La Madriguera.'],
   ok: ['ok', '✓ Conectado al Wi-Fi del local', ''],
   fuera_wifi: ['mal', 'No estás en el Wi-Fi de La Madriguera', 'Conéctate al Wi-Fi del local (no a los datos móviles) y toca «Volver a verificar».'],
-  sin_ancla: ['mal', 'La conexión del local no está registrada', 'Para pausas y permisos, usa el QR.'],
-  servicio: ['mal', 'El servicio Wi-Fi no está disponible', 'Para pausas y permisos, usa el QR.'],
+  sin_ancla: ['mal', 'La conexión del local no está registrada', 'Si la ubicación no está disponible, usa el QR.'],
+  servicio: ['mal', 'El servicio Wi-Fi no está disponible', 'Si la ubicación no está disponible, usa el QR.'],
   sesion: ['mal', 'Tu sesión venció', 'Cierra la sesión y vuelve a ingresar.'],
   error: ['mal', 'No se pudo verificar el Wi-Fi', 'Revisa tu conexión y vuelve a intentar, o marca escaneando el QR.']
 };
 function pintarWifi() {
   const el = $('mkw-wifi');
-  const respaldo = permiteRespaldo(WIFI.estado) && ubicacionVigente()
-    && A.accionesPara(A.recorrer(MARCAS).estado).some(admiteUbicacion);
+  const respaldo = permiteRespaldo(WIFI.estado) && ubicacionVigente();
   const [c, t, d] = respaldo
-    ? ['ok', 'Puedes marcar por ubicación', 'Las pausas, permisos y regresos requieren Wi-Fi o QR.']
+    ? ['ok', 'Puedes marcar por ubicación', '']
     : (WIFI_TXT[WIFI.estado] || WIFI_TXT.error);
   el.className = 'wifi ' + c;
   el.innerHTML = `<div><b>${esc(t)}</b>${esc(d)}${c === 'mal' ? '<br><button class="btn sec" id="wifi-re" style="margin-top:8px">Volver a verificar</button>' : ''}</div>`;
@@ -506,11 +504,11 @@ async function marcarWifi(tipo, extra) {
   const usuario = USER;
   ocupado = true; pintarMarcar(); $('pm-ok').disabled = true; ver('mk-msg', false);
   try {
-    const r = await llamarWifi('/pase', admiteUbicacion(tipo) ? 4500 : 12000);
+    const r = await llamarWifi('/pase', 4500);
     if (USER !== usuario) return;
     const tienePase = r.ok && !!r.pase;
     WIFI = {estado: tienePase ? 'ok' : (WIFI_TXT[r.error] ? r.error : 'error'), en: Date.now()};
-    const porUbicacion = !tienePase && admiteUbicacion(tipo) && permiteRespaldo(r.error);
+    const porUbicacion = !tienePase && permiteRespaldo(r.error);
     if (!tienePase && !porUbicacion) {
       msg(r.error === 'sesion' ? 'Tu sesión venció. Vuelve a iniciar sesión.' : 'No se pudo verificar el Wi-Fi. Vuelve a intentar o marca con el QR.', 'err');
       return;
@@ -523,7 +521,7 @@ async function marcarWifi(tipo, extra) {
     const reg = {
       uid: USER.uid, nombre: PER.nombre || '', tipo, ts: serverTimestamp(), dia: A.diaDe(ahora),
       lat: POS_GPS.lat, lng: POS_GPS.lng, prec: Math.round(POS_GPS.prec * 10) / 10, dist: GEO.dist,
-      disp: DISP, origen: 'wifi'
+      disp: DISP, origen: 'wifi', ...extra
     };
     const ref = doc(collection(db, 'lm_asist_marcas'));
     if (porUbicacion) {
@@ -531,7 +529,7 @@ async function marcarWifi(tipo, extra) {
       reg.dia = new Date(ahora - 5 * 3600000).toISOString().slice(0, 10);
       await conLimite(setDoc(ref, reg));
     } else {
-      Object.assign(reg, extra, {wifi: r.pase});
+      reg.wifi = r.pase;
       // La marca y el gasto del pase van juntos.
       const b = writeBatch(db);
       b.set(ref, reg);
