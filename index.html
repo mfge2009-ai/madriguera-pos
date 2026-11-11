@@ -8384,7 +8384,7 @@ const asistMs=v=>v&&typeof v.toMillis==='function'?v.toMillis():(typeof v==='num
 const asistNorm=d=>{const x=d.data();return Object.assign({},x,{id:d.id,ts:asistMs(x.ts)});};
 const asistActivos=()=>Object.entries(ASIST.per).filter(([,p])=>p.activo===true).map(([uid,p])=>Object.assign({uid},p)).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
 // No se repinta solo mientras hay un formulario en pantalla (se perdería lo escrito).
-const asistFormAbierto=()=>view==='asistencia'&&(asistTab==='config'||!!document.querySelector('#ac-ok,#ah-ok,#an-ok'));
+const asistFormAbierto=()=>view==='asistencia'&&(asistTab==='config'||!!document.querySelector('#ac-ok,#ah-ok,#an-ok,#ap-almuerzos[open]'));
 function asistRepintar(){
   clearTimeout(_asistTimer);
   _asistTimer=setTimeout(()=>{
@@ -8453,6 +8453,26 @@ async function asistCargarPeriodo(forzar){
 const horasDe=(empId,periodoId)=>(NOM.horas||[]).find(h=>h.empId===empId&&h.periodoId===periodoId);
 const asistEmpDe=p=>p&&p.empId?empById(p.empId):null;
 const asistTarifa=e=>!e?0:(e.modalidad==='hora'?(+e.tarifaHora||0):r2((+e.sueldo||0)/240));
+const ASIST_ALMUERZO_MIN=30;
+const ASIST_ALMUERZO_DESPUES_MIN=4*60;
+const ASIST_ALMUERZO_AUTO_TXT='Almuerzo automático de 30 min';
+function asistAlmuerzosAutomaticos(r,p,fechasPagadas){
+  const marcasPorDia=new Map(), almuerzos=new Map();
+  for(const marca of r.marcas){
+    const dia=AC.diaDe(marca.ts);
+    if(!marcasPorDia.has(dia)) marcasPorDia.set(dia,[]);
+    marcasPorDia.get(dia).push(marca);
+  }
+  for(const tramo of r.tramos){
+    const dia=AC.diaDe(tramo.ini), marcas=marcasPorDia.get(dia)||[];
+    if(fechasPagadas ? !fechasPagadas.includes(dia) : p.almuerzoTrabajado?.[dia]) continue;
+    if(marcas.length!==2||marcas[0].tipo!=='entrada'||marcas[1].tipo!=='salida'||
+       marcas[0].ts!==tramo.ini||marcas[1].ts!==tramo.fin) continue;
+    const ini=tramo.ini+ASIST_ALMUERZO_DESPUES_MIN*60000, fin=ini+ASIST_ALMUERZO_MIN*60000;
+    if(fin<=tramo.fin) almuerzos.set(dia,{ini,fin});
+  }
+  return almuerzos;
+}
 function asistResumen(p,marcas,desde,hasta){
   const enPeriodo=ts=>{const dia=AC.diaDe(ts); return dia>=desde&&dia<=hasta;};
   const dePersona=marcas.filter(m=>m.uid===p.uid), ms=dePersona.filter(m=>enPeriodo(m.ts)), cfg=ASIST.cfg||{};
@@ -8461,14 +8481,24 @@ function asistResumen(p,marcas,desde,hasta){
   r.tramos=r.tramos.filter(t=>enPeriodo(t.ini));
   r.anomalias=r.anomalias.filter(a=>enPeriodo(a.ts));
   r.marcas=r.marcas.filter(m=>enPeriodo(m.ts));
-  const dias=AC.clasificar(r.tramos,p.horario||{},cfg), tot=AC.sumar(dias);
+  const emp=asistEmpDe(p), tarifa=asistTarifa(emp);
+  const mes=desde.slice(0,7), quincena=desde.endsWith('-01')?'Q1':'Q2';
+  const pagado=emp&&pagoDePeriodo(emp.id,mes,quincena);
+  const fechasPagadas=pagado?(horasDe(emp.id,perId(mes,quincena))?.almuerzosAuto||[]):null;
+  const almuerzosAuto=emp?.modalidad==='hora'?asistAlmuerzosAutomaticos(r,p,fechasPagadas):new Map();
+  const tramosPago=r.tramos.flatMap(t=>{
+    const pausa=almuerzosAuto.get(AC.diaDe(t.ini));
+    if(!pausa) return [t];
+    const antes={ini:t.ini,fin:pausa.ini};
+    return pausa.fin<t.fin?[antes,{ini:pausa.fin,fin:t.fin}]:[antes];
+  });
+  const dias=AC.clasificar(tramosPago,p.horario||{},cfg), tot=AC.sumar(dias);
   const hastaPunt=hasta<today()?hasta:today();
   const punt=desde<=hastaPunt?AC.puntualidad(ms,p.horario||{},desde,hastaPunt,cfg):[];
-  const emp=asistEmpDe(p), tarifa=asistTarifa(emp);
   const monto=emp&&emp.modalidad==='hora'?AC.montoDe(tot,tarifa):0;
   // Sueldo fijo: valor sugerido de suplementarias y extraordinarias (hora = sueldo ÷ 240)
   const extraFijo=emp&&emp.modalidad!=='hora'?r2((tarifa/60)*(tot.sup50*1.5+tot.sup100*2+tot.ext*2)):0;
-  return {ms,r,dias,tot,punt,emp,tarifa,monto,extraFijo,sinSalida:r.anomalias.filter(a=>a.sinSalida)};
+  return {ms,r,dias,tot,punt,emp,tarifa,monto,extraFijo,almuerzosAuto,sinSalida:r.anomalias.filter(a=>a.sinSalida)};
 }
 
 // ── Vista ─────────────────────────────────────────────────────
@@ -8549,6 +8579,45 @@ function rAsistCorr(){
     <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="ac-cancel">Cancelar</button><button class="btn btn-acc" id="ac-ok">${esSalida?'Guardar salida':'Registrar marca'}</button></div>
   </div>`;
 }
+function asistAlmuerzosPendientes(marcas,mes,q){
+  const {desde,hasta}=asistRango(mes,q), turnos=[];
+  const porDia=new Map();
+  for(const m of AC.marcasValidas(marcas)){
+    const dia=AC.diaDe(m.ts);
+    if(dia<desde||dia>hasta) continue;
+    const clave=m.uid+'|'+dia;
+    if(!porDia.has(clave)) porDia.set(clave,[]);
+    porDia.get(clave).push(m);
+  }
+  for(const ms of porDia.values()){
+    const [entrada,salida]=ms;
+    if(ms.length!==2||entrada.tipo!=='entrada'||salida.tipo!=='salida') continue;
+    const duracion=salida.ts-entrada.ts;
+    if(duracion<=30*60000||duracion>ASIST_MAX_TURNO) continue;
+    const emp=asistEmpDe(ASIST.per[entrada.uid]);
+    if(!emp||emp.modalidad!=='hora'||pagoDePeriodo(emp.id,mes,q)) continue;
+    turnos.push({entrada,salida,dia:AC.diaDe(entrada.ts),nombre:emp.nombre});
+  }
+  return turnos.sort((a,b)=>b.dia.localeCompare(a.dia)||a.nombre.localeCompare(b.nombre));
+}
+function rAsistAlmuerzos(turnos){
+  if(!turnos.length) return '';
+  return `<details class="card" id="ap-almuerzos" style="margin-bottom:12px">
+    <summary style="cursor:pointer;font-weight:700">Revisar almuerzos sin marcar (${turnos.length})</summary>
+    <p style="font-size:12px;color:var(--text2)">Selecciona los turnos para los que quieres registrar el mismo almuerzo real. El cálculo ya aplica 30 minutos automáticos a los turnos que reúnen las condiciones.</p>
+    <div class="fgrid">
+      <div class="fg"><label for="ap-alm-hora">Hora de inicio</label><input id="ap-alm-hora" type="time"></div>
+      <div class="fg"><label for="ap-alm-min">Duración en minutos</label><input id="ap-alm-min" type="number" min="1" step="1" value="30"></div>
+    </div>
+    <div style="max-height:240px;overflow:auto;margin:8px 0">
+      ${turnos.map(t=>`<label style="display:flex;gap:8px;padding:5px 0;font-size:12px">
+        <input type="checkbox" data-ap-alm="${esc(t.entrada.id)}">
+        <span>${esc(t.nombre)} · ${t.dia} · ${AC.horaDe(t.entrada.ts)}–${AC.horaDe(t.salida.ts)}</span>
+      </label>`).join('')}
+    </div>
+    <button class="btn btn-acc btn-sm" id="ap-alm-guardar">Registrar almuerzos seleccionados</button>
+  </details>`;
+}
 function rAsistPeriodo(){
   asistCargarPeriodo();
   const {desde,hasta}=asistRango(asistPerMes,asistPerQ), perIdA=perId(asistPerMes,asistPerQ);
@@ -8564,7 +8633,8 @@ function rAsistPeriodo(){
   const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid&&AC.diaDe(m.ts)>=desde&&AC.diaDe(m.ts)<=hasta));
   if(!pers.length) return cab+'<div class="card" style="color:var(--text3)">No hay personal habilitado.</div>';
   const comp=AC.dispositivosCompartidos(asistPerData.marcas.filter(m=>AC.diaDe(m.ts)>=desde&&AC.diaDe(m.ts)<=hasta));
-  return cab+(comp.length?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px;margin-bottom:10px">⚠ En este periodo hubo celulares usados por más de una persona: ${comp.map(c=>c.uids.map(u=>esc((ASIST.per[u]||{}).nombre||u)).join(' y ')).join('; ')}.</div>`:'')+pers.map(p=>{
+  const almuerzos=asistAlmuerzosPendientes(asistPerData.marcas,asistPerMes,asistPerQ);
+  return cab+rAsistAlmuerzos(almuerzos)+(comp.length?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px;margin-bottom:10px">⚠ En este periodo hubo celulares usados por más de una persona: ${comp.map(c=>c.uids.map(u=>esc((ASIST.per[u]||{}).nombre||u)).join(' y ')).join('; ')}.</div>`:'')+pers.map(p=>{
     const R=asistResumen(p,asistPerData.marcas,desde,hasta), t=R.tot, e=R.emp;
     const apr=e?horasDe(e.id,perIdA):null, pagado=e?pagoDePeriodo(e.id,asistPerMes,asistPerQ):null;
     const fila=(l,v,x)=>`<div style="display:flex;justify-content:space-between;padding:2px 0"><span>${l}</span><span>${v}${x?` <span style="color:var(--text3);font-size:10px">${x}</span>`:''}</span></div>`;
@@ -8573,21 +8643,26 @@ function rAsistPeriodo(){
     if(!e) pago=`<div style="font-size:11px;color:var(--amb)">Sin ficha de Nómina vinculada (pestaña Personal).</div>`;
     else if(e.modalidad==='hora'){
       pago=`<div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);padding-top:6px;margin-top:4px"><span>A pagar por horas (${fmt(R.tarifa)}/h)</span><span>${fmt(R.monto)}</span></div>
-      ${apr?`<div style="font-size:11px;color:var(--grn);margin-top:4px">✓ Aprobado ${fmt(apr.monto)} el ${new Date(apr.fecha).toLocaleString('es-EC')} por ${esc(apr.resp||'')}${Math.abs(apr.monto-R.monto)>0.005?` <b style="color:var(--amb)">· las marcas cambiaron después: hoy da ${fmt(R.monto)}</b>`:''}</div>`:''}
+      ${apr?`<div style="font-size:11px;color:var(--grn);margin-top:4px">✓ Aprobado ${fmt(apr.monto)} el ${new Date(apr.fecha).toLocaleString('es-EC')} por ${esc(apr.resp||'')}${Math.abs(apr.monto-R.monto)>0.005?` <b style="color:var(--amb)">· cálculo actual ${fmt(R.monto)}</b>`:''}</div>`:''}
       ${pagado?`<div style="font-size:11px;color:var(--text3)">Periodo ya pagado en Nómina.</div>`:`<button class="btn btn-acc btn-sm" style="margin-top:8px" data-apaprobar="${esc(p.uid)}">${apr?'Volver a aprobar':'Aprobar horas para la Nómina'}</button>`}`;
     } else {
       pago=`<div style="font-size:11px;color:var(--text3);border-top:1px solid var(--border);padding-top:6px;margin-top:4px">Sueldo fijo. ${R.extraFijo>0?`Valor sugerido de horas suplementarias/extraordinarias: <b style="color:var(--text)">${fmt(R.extraFijo)}</b> (hora = sueldo ÷ 240). Si corresponde, agréguelo como «Bono / extra» al pagar.`:'Sin horas suplementarias ni extraordinarias.'}</div>`;
     }
     const det=asistDetalle===p.uid?`<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px">${Object.values(R.dias).map(d=>{
       const md=R.r.marcas.filter(m=>AC.diaDe(m.ts)===d.dia);
-      return `<div style="font-size:11px;padding:6px 0 2px"><b>${d.dia}</b>${d.extra?' <span class="badge" style="font-size:9px;background:var(--abg);color:var(--amb)">descanso/feriado</span>':''} · ${AC.fmtMin(d.total)}${d.sup50+d.sup100>0?' · supl. '+AC.fmtMin(d.sup50+d.sup100):''}${d.noc>0?' · noct. '+AC.fmtMin(d.noc):''}</div>${md.map(m=>asistMarcaFila(m,true)).join('')}`;}).join('')||'<div style="font-size:11px;color:var(--text3)">Sin tramos pagables.</div>'}
+      return `<div style="font-size:11px;padding:6px 0 2px"><b>${d.dia}</b>${d.extra?' <span class="badge" style="font-size:9px;background:var(--abg);color:var(--amb)">descanso/feriado</span>':''} · ${AC.fmtMin(d.total)}${d.sup50+d.sup100>0?' · supl. '+AC.fmtMin(d.sup50+d.sup100):''}${d.noc>0?' · noct. '+AC.fmtMin(d.noc):''}</div>${md.map(m=>asistMarcaFila(m,true)).join('')}
+      ${R.almuerzosAuto.has(d.dia)||p.almuerzoTrabajado?.[d.dia]?`<div style="font-size:11px;margin:3px 0 6px">
+        ${R.almuerzosAuto.has(d.dia)?ASIST_ALMUERZO_AUTO_TXT:'Almuerzo trabajado'}
+        ${!pagado?`<button class="btn btn-g btn-sm" data-ap-alm-ex="${esc(p.uid)}" data-dia="${d.dia}">${p.almuerzoTrabajado?.[d.dia]?'Restaurar descuento automático':'Contar los 30 min como trabajados'}</button>`:''}
+      </div>`:''}`;}).join('')||'<div style="font-size:11px;color:var(--text3)">Sin tramos pagables.</div>'}
       ${(()=>{const sinDia=R.r.marcas.filter(m=>!R.dias[AC.diaDe(m.ts)]);return sinDia.length?`<div style="font-size:11px;padding:6px 0 2px;color:var(--amb)"><b>Marcas sin tramo pagable</b></div>${sinDia.map(m=>asistMarcaFila(m,true)).join('')}`:'';})()}</div>`:'';
     return `<div class="card" style="margin-bottom:10px">
       <div class="rb" style="margin-bottom:6px"><div><b style="font-size:14px">${esc(p.nombre||'—')}</b>${p.activo!==true?' <span class="badge" style="font-size:9px">inactivo</span>':''}
         <div style="font-size:11px;color:var(--text3)">${e?esc(e.cargo||'')+' · '+(e.modalidad==='hora'?'Por horas':'Sueldo fijo'):'—'} · ${Object.keys(R.dias).length} día(s) con marcas</div></div>
         <button class="btn btn-g btn-sm" data-apdet="${esc(p.uid)}">${asistDetalle===p.uid?'Ocultar días':'Ver días'}</button></div>
       <div style="font-size:12px;color:var(--text2)">
-        ${fila('Horas trabajadas',AC.fmtMin(t.total))}
+        ${fila('Horas pagables',AC.fmtMin(t.total))}
+        ${R.almuerzosAuto.size?fila('Almuerzos automáticos','−'+AC.fmtMin(R.almuerzosAuto.size*ASIST_ALMUERZO_MIN)):''}
         ${fila('Ordinarias',AC.fmtMin(t.ord),t.noc>0?'de ellas '+AC.fmtMin(t.noc)+' nocturnas (+25%)':'')}
         ${t.sup50>0?fila('Suplementarias (+50%)',AC.fmtMin(t.sup50)):''}
         ${t.sup100>0?fila('Suplementarias de madrugada (+100%)',AC.fmtMin(t.sup100)):''}
@@ -8597,7 +8672,7 @@ function rAsistPeriodo(){
       </div>
       ${R.r.anomalias.length?`<div style="font-size:11px;background:var(--abg);color:var(--amb);border-radius:var(--rs);padding:7px 9px;margin-top:6px">${R.r.anomalias.map(a=>`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px"><span>• ${esc(a.txt)}</span>${a.sinSalida?asistBotonSalida(p.uid,a.ts):''}</div>`).join('')}</div>`:''}
       ${pago}${det}
-    </div>`;}).join('')+`<div style="font-size:11px;color:var(--text3)">Cálculo: hasta 8 h diarias ordinarias; lo que pasa de 8 h, suplementario al 50 % (100 % entre 00:00 y 06:00); días de descanso o feriados, 100 %; recargo nocturno de 25 % entre 19:00 y 06:00. Pausas y permisos no se pagan. Un turno sin salida no se paga hasta registrarla. Verifique los criterios con su contador.</div>`;
+    </div>`;}).join('')+`<div style="font-size:11px;color:var(--text3)">Cálculo: hasta 8 h diarias ordinarias; lo que pasa de 8 h, suplementario al 50 % (100 % entre 00:00 y 06:00); días de descanso o feriados, 100 %; recargo nocturno de 25 % entre 19:00 y 06:00. En turnos por hora de al menos 4 h 30 min con solo entrada y salida el cálculo descuenta 30 min de almuerzo. Pausas y permisos no se pagan. Un turno sin salida no se paga hasta registrarla. Verifique los criterios con su contador.</div>`;
 }
 const DIAS_SEM=[['1','Lunes'],['2','Martes'],['3','Miércoles'],['4','Jueves'],['5','Viernes'],['6','Sábado'],['0','Domingo']];
 function rAsistPersonal(){
@@ -8744,6 +8819,43 @@ async function asistGuardarSalida(c,ts,reg){
   return ref;
 }
 
+async function asistRegistrarAlmuerzos(ids,hora,minutos){
+  const mes=asistPerMes, q=asistPerQ, usuario=auth.currentUser;
+  if(MI_ROL!=='admin'||!usuario) return;
+  if(!ids.length||!/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)||!Number.isInteger(minutos)||minutos<1){
+    throw new Error('Selecciona los turnos e indica la hora y duración del almuerzo.');
+  }
+  if(ids.length>250) throw new Error('Selecciona hasta 250 turnos por vez.');
+  const {desde,hasta}=asistRango(mes,q), col=collection(db,'lm_asist_marcas');
+  const datos=await getDocsFromServer(query(col,
+    where('ts','>=',Timestamp.fromMillis(AC.inicioDia(desde))),
+    where('ts','<',Timestamp.fromMillis(AC.inicioDia(AC.diaSiguiente(hasta))))));
+  const turnos=asistAlmuerzosPendientes(datos.docs.map(asistNorm),mes,q).filter(t=>ids.includes(t.entrada.id));
+  if(turnos.length!==ids.length) throw new Error('Algún turno cambió o ya tiene almuerzo. Actualiza la lista y revisa las marcas.');
+  const correcciones=turnos.map(t=>{
+    const ini=AC.msDeHora(t.dia,hora), fin=ini+minutos*60000;
+    if(ini<=t.entrada.ts||fin>=t.salida.ts){
+      throw new Error('El almuerzo debe quedar dentro del turno de '+t.nombre+' del '+t.dia+'.');
+    }
+    return {...t,ini,fin,ref:doc(col,'almuerzo_admin_'+t.entrada.id+'_pausa'),
+      regreso:doc(col,'almuerzo_admin_'+t.entrada.id+'_regreso')};
+  });
+  await runTransaction(db,async tx=>{
+    const existentes=await Promise.all(correcciones.flatMap(t=>[tx.get(t.ref),tx.get(t.regreso)]));
+    if(existentes.some(s=>s.exists())) throw new Error('Algún turno ya tiene una corrección de almuerzo. Actualiza la lista.');
+    for(const t of correcciones){
+      const base={uid:t.entrada.uid,nombre:t.entrada.nombre||t.nombre,dia:t.dia,
+        motivo:'Almuerzo confirmado por administración · '+minutos+' min',
+        por:usuario.uid,creado:serverTimestamp(),origen:'admin'};
+      tx.set(t.ref,{...base,tipo:'pausa',ts:Timestamp.fromMillis(t.ini)});
+      tx.set(t.regreso,{...base,tipo:'regreso',ts:Timestamp.fromMillis(t.fin)});
+    }
+  });
+  bitacora('asistencia_almuerzos_registrados',{accion:'Registró '+turnos.length+' almuerzo(s) de '+minutos+' min a las '+hora,
+    periodo:perId(mes,q),marcas:correcciones.map(t=>t.ref.id)});
+  await asistCargarPeriodo(true);
+}
+
 function attachAsist(){
   const mc=document.getElementById('mc'); if(MI_ROL!=='admin'||!mc||!AC) return;
   const q=s=>mc.querySelector(s), qa=s=>mc.querySelectorAll(s);
@@ -8812,6 +8924,29 @@ function attachAsist(){
   q('#ap-recargar')?.addEventListener('click',()=>{asistCargarPeriodo(true);render();});
   qa('[data-apdet]').forEach(el=>el.addEventListener('click',()=>{asistDetalle=asistDetalle===el.dataset.apdet?null:el.dataset.apdet;render();}));
   qa('[data-apaprobar]').forEach(el=>el.addEventListener('click',()=>asistAprobar(el.dataset.apaprobar)));
+  qa('[data-ap-alm-ex]').forEach(b=>b.addEventListener('click',async()=>{
+    const uid=b.dataset.apAlmEx, dia=b.dataset.dia, persona=ASIST.per[uid], emp=asistEmpDe(persona);
+    if(!emp||pagoDePeriodo(emp.id,asistPerMes,asistPerQ)) return;
+    const trabajado=!persona.almuerzoTrabajado?.[dia];
+    if(trabajado&&!confirm('¿Confirmas que '+emp.nombre+' trabajó durante el almuerzo del '+dia+'?')) return;
+    b.disabled=true;
+    try{
+      await conLimite(setDoc(doc(db,'lm_asist_personal',uid),{almuerzoTrabajado:{[dia]:trabajado}},{merge:true}));
+      bitacora('asistencia_almuerzo_excepcion',{accion:trabajado?'Confirmó almuerzo trabajado':'Restauró el almuerzo automático',empleado:emp.nombre,dia});
+      if(view==='asistencia') render();
+    }catch(err){avisoError(msgError(err,'guardar el ajuste de almuerzo'));}
+    finally{b.disabled=false;}
+  }));
+  q('#ap-alm-guardar')?.addEventListener('click',async e=>{
+    const boton=e.currentTarget;
+    const ids=[...qa('[data-ap-alm]:checked')].map(x=>x.dataset.apAlm);
+    boton.disabled=true;
+    try{
+      await asistRegistrarAlmuerzos(ids,q('#ap-alm-hora').value,Number(q('#ap-alm-min').value));
+      if(view==='asistencia'&&asistTab==='periodo') alert('Almuerzos registrados. Revisa los totales antes de aprobar las horas.');
+    }catch(err){avisoError(err.code?msgError(err,'registrar los almuerzos'):err.message);}
+    finally{boton.disabled=false;}
+  });
   q('#ap-csv')?.addEventListener('click',asistCSV);
   q('#ap-imp')?.addEventListener('click',asistImprimir);
   // Personal
@@ -8941,6 +9076,7 @@ async function asistAprobar(uid){
   const t=R.tot;
   let msg='Aprobar horas de '+e.nombre+'\n'+perLabel(asistPerMes,asistPerQ)+'\n\n';
   msg+='Horas trabajadas: '+AC.fmtMin(t.total)+'\nTarifa: '+fmt(R.tarifa)+' por hora\n';
+  if(R.almuerzosAuto.size) msg+='Almuerzos automáticos descontados: '+AC.fmtMin(R.almuerzosAuto.size*ASIST_ALMUERZO_MIN)+'\n';
   if(t.noc) msg+='Nocturnas (+25%): '+AC.fmtMin(t.noc)+'\n';
   if(t.sup50+t.sup100) msg+='Suplementarias: '+AC.fmtMin(t.sup50+t.sup100)+'\n';
   if(t.ext) msg+='Extraordinarias: '+AC.fmtMin(t.ext)+'\n';
@@ -8948,7 +9084,7 @@ async function asistAprobar(uid){
   if(!confirm(msg))return;
   const reg={id:perId(asistPerMes,asistPerQ)+'_'+e.id,empId:e.id,uid,periodoId:perId(asistPerMes,asistPerQ),desde,hasta,
     min:{total:t.total,ord:t.ord,noc:t.noc,sup50:t.sup50,sup100:t.sup100,ext:t.ext},tarifa:R.tarifa,monto:R.monto,
-    marcas:R.ms.length,sinSalida:R.sinSalida.length,fecha:localISO(),resp:turnoUser,respAuth:authUser()};
+    almuerzosAuto:[...R.almuerzosAuto.keys()],marcas:R.ms.length,sinSalida:R.sinSalida.length,fecha:localISO(),resp:turnoUser,respAuth:authUser()};
   NOM.horas=(NOM.horas||[]).filter(h=>h.id!==reg.id); NOM.horas.push(reg);
   try{ await sNOM(); bitacora('asistencia_horas_aprobadas',{accion:'Aprobó '+AC.fmtMin(t.total)+' = '+fmt(R.monto)+' de '+e.nombre+' · '+perLabel(asistPerMes,asistPerQ),empleado:e.nombre,monto:R.monto}); render(); }
   catch(err){ avisoError(msgError(err,'aprobar las horas')); }
@@ -8961,7 +9097,7 @@ function asistFilasPeriodo(){
     for(const d of Object.values(R.dias)){
       const md=R.r.marcas.filter(m=>AC.diaDe(m.ts)===d.dia);
       filas.push({nombre:p.nombre||'',dia:d.dia,marcas:md.map(m=>AC.horaDe(m.ts)+' '+AC.TIPO_TXT[m.tipo]+(m.origen==='admin'?' (adm: '+(m.motivo||'')+')':m.origen==='ubicacion'?' (por ubicación)':'')+(m.tipo==='permiso'?' ['+(m.motivo||'')+']':'')).join(' | '),
-        total:d.total,ord:d.ord,noc:d.noc,sup:d.sup50+d.sup100,ext:d.ext,obs:R.punt.filter(x=>x.dia===d.dia).map(x=>x.txt).concat(R.r.anomalias.filter(a=>AC.diaDe(a.ts)===d.dia).map(a=>a.txt)).join('; ')});
+        total:d.total,ord:d.ord,noc:d.noc,sup:d.sup50+d.sup100,ext:d.ext,obs:R.punt.filter(x=>x.dia===d.dia).map(x=>x.txt).concat(R.r.anomalias.filter(a=>AC.diaDe(a.ts)===d.dia).map(a=>a.txt),R.almuerzosAuto.has(d.dia)?[ASIST_ALMUERZO_AUTO_TXT]:[]).join('; ')});
     }
     R.punt.filter(x=>x.tipo==='falta').forEach(f=>filas.push({nombre:p.nombre||'',dia:f.dia,marcas:'',total:0,ord:0,noc:0,sup:0,ext:0,obs:f.txt}));
     R.r.anomalias.filter(a=>a.sinSalida&&!R.dias[AC.diaDe(a.ts)]).forEach(a=>filas.push({nombre:p.nombre||'',dia:AC.diaDe(a.ts),marcas:'',total:0,ord:0,noc:0,sup:0,ext:0,obs:a.txt}));
