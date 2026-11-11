@@ -374,6 +374,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
     <button data-v="inventario" title="Inventario"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span class="nl">Inventario</span><span class="nbadge" data-badge="inventario"></span></button>
     <button data-v="productos" title="Productos"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span class="nl">Productos</span></button>
     <button data-v="cartaweb" title="Carta web"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span class="nl">Carta web</span></button>
+    <button data-v="agotados" id="nav-agotados" style="display:none" title="Agotados por reponer"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><span class="nl">Agotados</span><span class="nbadge" data-badge="agotados"></span></button>
     <button id="nav-insumos" title="Insumos y recetas"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20A7 7 0 0 1 4 13c0-5 4-9 16-10-1 12-5 16-9 17z"/><path d="M4 21c4-4 7-7 10-9"/></svg><span class="nl">Insumos y recetas</span></button>
     <button data-v="consigna" title="Consignación"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg><span class="nl">Consignación</span></button>
     <div class="ngrp">Clientes y SRI</div>
@@ -508,7 +509,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
 
 <script type="module">
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction, collection, query, where, getDocs, deleteDoc, writeBatch, serverTimestamp, Timestamp, getCountFromServer, getDocsFromServer, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, inMemoryPersistence, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ▼▼▼ REEMPLAZA CON TU CONFIG ▼▼▼
@@ -770,6 +771,9 @@ let P=[],T=[],S=[];
 const CARTA_COL='lm_carta', CARTA_FOTOS='lm_carta_fotos', PW_COL='lm_pedidos_web';
 const CARTA={list:[],ts:0,t0:0,err:'',sub:null,edit:null,q:'',guardando:false,fotos:{},enviado:{}};
 const PW={list:[],ts:0,t0:0,err:'',sub:null,hist:null,ocupado:false};
+// Stock para la web y agotados por reponer (10-nov-2026)
+const SW={items:{},ts:0,t0:0,err:'',sub:null,enviado:{}};
+const REPO={vistos:{},ts:0,cargando:false};
 // El turno YA NO se elige de una lista: se deriva de la cuenta con la que se
 // inicio sesion. Antes era un boton que cualquiera pulsaba, asi que el campo
 // "quien atendio" se podia falsear en dos clics; ahora es la identidad real.
@@ -2064,7 +2068,7 @@ function render(){
   const mc=document.getElementById('mc');
   if(!mc)return;
   try{ actualizarNavBadges(); }catch(e){}
-  try{ cartaIniciar(); pwIniciar(); cartaSyncPronto(); }catch(e){}
+  try{ cartaIniciar(); pwIniciar(); cartaSyncPronto(); swIniciar(); swSyncPronto(); if(MI_ROL==='admin') repoCargar(); }catch(e){}
   if(view==='inicio'){mc.innerHTML=`<div class="sc">${rInicio()}</div>`;attachInicio();}
   else if(view==='pos'){
     if(!turnoUser){ turnoUser = MI_NOMBRE || authUser() || ''; }
@@ -2084,6 +2088,7 @@ function render(){
   else if(view==='consigna'){mc.innerHTML=`<div class="sc">${rConsigna()}</div>`;attachConsigna();}
   else if(view==='cartaweb'){mc.innerHTML=`<div class="sc">${rCartaWeb()}</div>`;attachCartaWeb();}
   else if(view==='pedidosweb'){mc.innerHTML=`<div class="sc">${rPedidosWeb()}</div>`;attachPedidosWeb();}
+  else if(view==='agotados'){mc.innerHTML=`<div class="sc">${rAgotados()}</div>`;attachAgotados();}
 }
 
 // ── Turno modal ───────────────────────────────────────────────
@@ -8361,13 +8366,14 @@ let AC=null;                       // asistencia/asist-core.js
 const ASIST={per:{},cfg:null,sol:[],hoy:[],dia:'',subs:false,err:'',wifi:null};
 let asistWifiMsg='';               // resultado de «Registrar el Wi-Fi de este equipo»
 let asistTab='hoy';
+const ASIST_MAX_TURNO=16*60*60*1000;
 let asistCorr=null;                // formulario de marca manual abierto
 let asistHorUid=null;              // horario en edición
 let asistNueva=false;              // formulario de cuenta nueva
 let asistGeo=null;                 // lectura de ubicación para configurar
 let asistPerMes=today().slice(0,7);
 let asistPerQ=(+today().slice(8,10)<=15)?'Q1':'Q2';
-const asistPerData={clave:'',marcas:null,cargando:false,err:''};
+const asistPerData={clave:'',marcas:null,cargando:false,err:'',solicitud:0};
 let asistDetalle=null;             // uid con detalle por día abierto
 let _asistUnsubHoy=null,_asistTimer=null;
 
@@ -8425,22 +8431,29 @@ async function asistCargarPeriodo(forzar){
   const clave=asistPerMes+'|'+asistPerQ;
   if(!AC||(!forzar&&asistPerData.clave===clave&&(asistPerData.marcas||asistPerData.cargando))) return;
   const {desde,hasta}=asistRango(asistPerMes,asistPerQ);
+  const solicitud=++asistPerData.solicitud;
   asistPerData.clave=clave; asistPerData.cargando=true; asistPerData.err=''; asistPerData.marcas=null;
   try{
     const qs=await getDocs(query(collection(db,'lm_asist_marcas'),
-      where('ts','>=',Timestamp.fromMillis(AC.inicioDia(desde))),
-      where('ts','<',Timestamp.fromMillis(AC.inicioDia(AC.diaSiguiente(hasta))))));
-    if(asistPerData.clave!==clave) return;
+      where('ts','>=',Timestamp.fromMillis(AC.inicioDia(desde)-ASIST_MAX_TURNO)),
+      where('ts','<=',Timestamp.fromMillis(AC.inicioDia(AC.diaSiguiente(hasta))+ASIST_MAX_TURNO))));
+    if(asistPerData.solicitud!==solicitud||asistPerData.clave!==clave) return;
     asistPerData.marcas=qs.docs.map(asistNorm);
-  }catch(e){ asistPerData.err=msgError(e,'leer las marcas del periodo'); }
-  finally{ if(asistPerData.clave===clave){ asistPerData.cargando=false; if(view==='asistencia'&&asistTab==='periodo') render(); } }
+  }catch(e){ if(asistPerData.solicitud===solicitud&&asistPerData.clave===clave) asistPerData.err=msgError(e,'leer las marcas del periodo'); }
+  finally{ if(asistPerData.solicitud===solicitud&&asistPerData.clave===clave){ asistPerData.cargando=false; if(view==='asistencia'&&asistTab==='periodo') render(); } }
 }
 const horasDe=(empId,periodoId)=>(NOM.horas||[]).find(h=>h.empId===empId&&h.periodoId===periodoId);
 const asistEmpDe=p=>p&&p.empId?empById(p.empId):null;
 const asistTarifa=e=>!e?0:(e.modalidad==='hora'?(+e.tarifaHora||0):r2((+e.sueldo||0)/240));
 function asistResumen(p,marcas,desde,hasta){
-  const ms=marcas.filter(m=>m.uid===p.uid), cfg=ASIST.cfg||{};
-  const r=AC.recorrer(ms), dias=AC.clasificar(r.tramos,p.horario||{},cfg), tot=AC.sumar(dias);
+  const enPeriodo=ts=>{const dia=AC.diaDe(ts); return dia>=desde&&dia<=hasta;};
+  const dePersona=marcas.filter(m=>m.uid===p.uid), ms=dePersona.filter(m=>enPeriodo(m.ts)), cfg=ASIST.cfg||{};
+  // La salida después de medianoche puede cerrar un turno del último día.
+  const r=AC.recorrer(dePersona);
+  r.tramos=r.tramos.filter(t=>enPeriodo(t.ini));
+  r.anomalias=r.anomalias.filter(a=>enPeriodo(a.ts));
+  r.marcas=r.marcas.filter(m=>enPeriodo(m.ts));
+  const dias=AC.clasificar(r.tramos,p.horario||{},cfg), tot=AC.sumar(dias);
   const hastaPunt=hasta<today()?hasta:today();
   const punt=desde<=hastaPunt?AC.puntualidad(ms,p.horario||{},desde,hastaPunt,cfg):[];
   const emp=asistEmpDe(p), tarifa=asistTarifa(emp);
@@ -8481,6 +8494,9 @@ function asistMarcaFila(m,anulable){
     ${anulable?`<button class="btn btn-g btn-sm" style="font-size:10px;padding:2px 8px" data-asanular="${esc(m.id)}">Anular</button>`:''}
   </div>`;
 }
+function asistBotonSalida(uid,ts){
+  return `<button class="btn btn-g btn-sm" data-assalida="${esc(uid)}" data-asinicio="${ts}">Registrar salida</button>`;
+}
 function rAsistHoy(){
   const act=asistActivos();
   if(!act.length) return `<div class="card" style="text-align:center;color:var(--text3);padding:30px">Aún no hay personal habilitado. Vaya a <b>Personal</b> para crear las cuentas o aprobar solicitudes.</div>`;
@@ -8499,26 +8515,30 @@ function rAsistHoy(){
       return `<div class="card" style="margin-bottom:10px">
         <div class="rb" style="margin-bottom:6px"><div><b style="font-size:14px">${esc(p.nombre||'—')}</b> ${asistChip(r.estado)}
           <div style="font-size:11px;color:var(--text3)">${h?'Horario hoy '+h.ini+'–'+h.fin:'Hoy no tiene horario'} · Trabajado hoy <b>${AC.fmtMin(min)}</b>${r.enCurso?' (en curso)':''}</div></div>
-          <button class="btn btn-g btn-sm" data-asmarcar="${esc(p.uid)}">+ Marca</button></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">${r.enCurso?asistBotonSalida(p.uid,r.enCurso.ini):''}
+            <button class="btn btn-g btn-sm" data-asmarcar="${esc(p.uid)}">+ Marca</button></div></div>
+        ${r.anomalias.filter(a=>a.sinSalida).map(a=>`<div class="mrow" style="flex-wrap:wrap;gap:6px"><span>${esc(a.txt)}</span>${asistBotonSalida(p.uid,a.ts)}</div>`).join('')}
         ${al.map(a=>`<div style="font-size:12px;padding:7px 9px;border-radius:var(--rs);margin-bottom:6px;background:${a.sev==='alta'?'var(--rbg)':a.sev==='media'?'var(--abg)':'var(--bg3)'};color:${a.sev==='alta'?'var(--red)':a.sev==='media'?'var(--amb)':'var(--text2)'}"><b>${esc(a.txt)}</b><br>${esc(a.desc)}</div>`).join('')}
         ${visibles.length?visibles.map(m=>anuladas.has(m.id)?`<div style="font-size:12px;color:var(--text3);text-decoration:line-through;padding:4px 0">${AC.horaDe(m.ts)} · ${esc(AC.TIPO_TXT[m.tipo])} (anulada)</div>`:asistMarcaFila(m,true)).join(''):'<div style="font-size:12px;color:var(--text3)">Sin marcas hoy.</div>'}
       </div>`;}).join('')}
     <div style="font-size:11px;color:var(--text3)">Las marcas no se pueden editar ni borrar. Para corregir: «Anular» (con motivo) y registrar la marca correcta. Todo queda firmado con su cuenta.</div>`;
 }
 function rAsistCorr(){
-  const c=asistCorr, act=asistActivos();
+  const c=asistCorr;
+  const esSalida=c.inicio!=null;
+  const act=esSalida?[{uid:c.uid,nombre:ASIST.per[c.uid]?.nombre||c.uid}]:asistActivos();
   return `<div class="card" style="margin-bottom:14px;border:2px solid var(--acc)">
-    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Registrar marca manual</div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Úsela para un olvido de marca o un error. Queda registrada como hecha por administración, con su motivo, y se ve en el celular del trabajador.</div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">${esSalida?'Registrar salida pendiente':'Registrar marca manual'}</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">${esSalida?`Tramo abierto el ${AC.diaDe(c.inicio)} a las ${AC.horaDe(c.inicio)}. Ingrese la fecha y la hora real de salida.`:'Úsela para un olvido de marca o un error. Queda registrada como hecha por administración, con su motivo, y se ve en el celular del trabajador.'}</div>
     <div class="fgrid">
-      <div class="fg"><label>Trabajador</label><select id="ac-uid">${act.map(p=>`<option value="${esc(p.uid)}" ${p.uid===c.uid?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></div>
-      <div class="fg"><label>Tipo</label><select id="ac-tipo">${AC.TIPOS.map(t=>`<option value="${t}" ${t===c.tipo?'selected':''}>${AC.TIPO_TXT[t]}</option>`).join('')}</select></div>
+      <div class="fg"><label>Trabajador</label><select id="ac-uid" ${esSalida?'disabled':''}>${act.map(p=>`<option value="${esc(p.uid)}" ${p.uid===c.uid?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></div>
+      <div class="fg"><label>Tipo</label><select id="ac-tipo" ${esSalida?'disabled':''}>${AC.TIPOS.map(t=>`<option value="${t}" ${t===c.tipo?'selected':''}>${AC.TIPO_TXT[t]}</option>`).join('')}</select></div>
       <div class="fg"><label>Fecha</label><input id="ac-dia" type="date" value="${c.dia}" max="${today()}"></div>
       <div class="fg"><label>Hora</label><input id="ac-hora" type="time" value="${c.hora}"></div>
       <div class="fg" id="ac-reg-w" style="${c.tipo==='permiso'?'':'display:none'}"><label>Regreso previsto</label><input id="ac-reg" type="time" value="${c.reg||''}"></div>
       <div class="fg" style="grid-column:1/-1"><label>Motivo (obligatorio)</label><input id="ac-motivo" maxlength="200" placeholder="Ej.: olvidó marcar la salida; confirmado con la cámara / con la caja" value="${esc(c.motivo||'')}"></div>
     </div>
-    <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="ac-cancel">Cancelar</button><button class="btn btn-acc" id="ac-ok">Registrar marca</button></div>
+    <div style="display:flex;gap:7px"><button class="btn btn-g btn-sm" id="ac-cancel">Cancelar</button><button class="btn btn-acc" id="ac-ok">${esSalida?'Guardar salida':'Registrar marca'}</button></div>
   </div>`;
 }
 function rAsistPeriodo(){
@@ -8533,9 +8553,9 @@ function rAsistPeriodo(){
     </div><div style="font-size:11px;color:var(--text3);margin-top:6px">${perLabel(asistPerMes,asistPerQ)} · del ${desde} al ${hasta}. Mismos periodos que la Nómina.</div></div>`;
   if(asistPerData.err) return cab+`<div class="card" style="color:var(--red)">${esc(asistPerData.err)}</div>`;
   if(!asistPerData.marcas) return cab+'<div class="card">Cargando marcas del periodo…</div>';
-  const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid));
+  const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid&&AC.diaDe(m.ts)>=desde&&AC.diaDe(m.ts)<=hasta));
   if(!pers.length) return cab+'<div class="card" style="color:var(--text3)">No hay personal habilitado.</div>';
-  const comp=AC.dispositivosCompartidos(asistPerData.marcas);
+  const comp=AC.dispositivosCompartidos(asistPerData.marcas.filter(m=>AC.diaDe(m.ts)>=desde&&AC.diaDe(m.ts)<=hasta));
   return cab+(comp.length?`<div class="card" style="background:var(--rbg);color:var(--red);font-size:12px;margin-bottom:10px">⚠ En este periodo hubo celulares usados por más de una persona: ${comp.map(c=>c.uids.map(u=>esc((ASIST.per[u]||{}).nombre||u)).join(' y ')).join('; ')}.</div>`:'')+pers.map(p=>{
     const R=asistResumen(p,asistPerData.marcas,desde,hasta), t=R.tot, e=R.emp;
     const apr=e?horasDe(e.id,perIdA):null, pagado=e?pagoDePeriodo(e.id,asistPerMes,asistPerQ):null;
@@ -8567,7 +8587,7 @@ function rAsistPeriodo(){
         ${atrasos.length?fila('<span style="color:var(--amb)">Atrasos</span>',atrasos.length,atrasos.reduce((s,x)=>s+x.min,0)+' min en total'):''}
         ${faltas.length?fila('<span style="color:var(--red)">Faltas</span>',faltas.length,faltas.map(f=>f.dia.slice(8)).join(', ')):''}
       </div>
-      ${R.r.anomalias.length?`<div style="font-size:11px;background:var(--abg);color:var(--amb);border-radius:var(--rs);padding:7px 9px;margin-top:6px">${R.r.anomalias.map(a=>'• '+esc(a.txt)).join('<br>')}</div>`:''}
+      ${R.r.anomalias.length?`<div style="font-size:11px;background:var(--abg);color:var(--amb);border-radius:var(--rs);padding:7px 9px;margin-top:6px">${R.r.anomalias.map(a=>`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px"><span>• ${esc(a.txt)}</span>${a.sinSalida?asistBotonSalida(p.uid,a.ts):''}</div>`).join('')}</div>`:''}
       ${pago}${det}
     </div>`;}).join('')+`<div style="font-size:11px;color:var(--text3)">Cálculo: hasta 8 h diarias ordinarias; lo que pasa de 8 h, suplementario al 50 % (100 % entre 00:00 y 06:00); días de descanso o feriados, 100 %; recargo nocturno de 25 % entre 19:00 y 06:00. Pausas y permisos no se pagan. Un turno sin salida no se paga hasta registrarla. Verifique los criterios con su contador.</div>`;
 }
@@ -8650,17 +8670,53 @@ function rAsistConfig(){
 }
 
 // ── Acciones ──────────────────────────────────────────────────
+async function asistGuardarSalida(c,ts,reg){
+  if(ts<=c.inicio||ts>c.inicio+ASIST_MAX_TURNO||ts>Date.now()){
+    throw new Error('Indique una hora posterior al inicio del tramo, dentro de las siguientes 16 horas y que ya haya ocurrido.');
+  }
+  const marcasRef=collection(db,'lm_asist_marcas');
+  const datos=await getDocsFromServer(query(marcasRef,
+    where('ts','>=',Timestamp.fromMillis(AC.inicioDia(AC.diaDe(c.inicio)))),
+    where('ts','<=',Timestamp.fromMillis(c.inicio+ASIST_MAX_TURNO))));
+  const marcas=datos.docs.map(asistNorm).filter(m=>m.uid===c.uid);
+  const actual=AC.recorrer(marcas);
+  const conSalida=AC.recorrer([...marcas,{uid:c.uid,tipo:'salida',ts}]);
+  if(actual.marcas.some(m=>m.ts===ts)||actual.tramos.some(t=>t.ini===c.inicio)||
+     !conSalida.tramos.some(t=>t.ini===c.inicio&&t.fin===ts)){
+    throw new Error('La hora indicada no cierra ese tramo pendiente. Actualice las marcas y revise la hora.');
+  }
+
+  // La misma corrección usa el mismo documento en todas las sesiones.
+  const prefijo='salida_admin_'+c.uid+'_'+c.inicio+'_';
+  const anuladas=new Set(marcas.filter(m=>m.tipo==='anula').map(m=>m.anula));
+  let intento=0;
+  while(anuladas.has(prefijo+intento)) intento++;
+  const ref=doc(marcasRef,prefijo+intento);
+  await runTransaction(db,async tx=>{
+    if((await tx.get(ref)).exists()) throw new Error('Ya se registró una salida para este tramo. Actualice las marcas.');
+    tx.set(ref,reg);
+  });
+  return ref;
+}
+
 function attachAsist(){
-  const mc=document.getElementById('mc'); if(!mc||!AC) return;
+  const mc=document.getElementById('mc'); if(MI_ROL!=='admin'||!mc||!AC) return;
   const q=s=>mc.querySelector(s), qa=s=>mc.querySelectorAll(s);
   qa('[data-astab]').forEach(el=>el.addEventListener('click',()=>{asistTab=el.dataset.astab;asistHorUid=null;asistNueva=false;render();}));
   q('#as-reloj')?.addEventListener('click',()=>window.open('asistencia/reloj.html','_blank'));
   const abrirCorr=uid=>{const d=new Date();asistCorr={uid:uid||(asistActivos()[0]||{}).uid,tipo:'salida',dia:today(),hora:String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'),motivo:''};render();};
   q('#as-nuevamarca')?.addEventListener('click',()=>{ if(!asistActivos().length){alert('Primero habilite al personal (pestaña Personal).');return;} abrirCorr(); });
   qa('[data-asmarcar]').forEach(el=>el.addEventListener('click',()=>abrirCorr(el.dataset.asmarcar)));
+  qa('[data-assalida]').forEach(el=>el.addEventListener('click',()=>{
+    const inicio=Number(el.dataset.asinicio);
+    asistCorr={uid:el.dataset.assalida,tipo:'salida',inicio,dia:AC.diaDe(inicio),hora:'',motivo:''};
+    render();
+    q('#ac-hora')?.scrollIntoView({block:'center'});
+    q('#ac-hora')?.focus({preventScroll:true});
+  }));
   // Formulario de marca manual
   if(asistCorr){
-    const sync=()=>{asistCorr={uid:q('#ac-uid').value,tipo:q('#ac-tipo').value,dia:q('#ac-dia').value,hora:q('#ac-hora').value,reg:q('#ac-reg').value,motivo:q('#ac-motivo').value};};
+    const sync=()=>{asistCorr={...asistCorr,uid:q('#ac-uid').value,tipo:q('#ac-tipo').value,dia:q('#ac-dia').value,hora:q('#ac-hora').value,reg:q('#ac-reg').value,motivo:q('#ac-motivo').value};};
     q('#ac-tipo')?.addEventListener('change',()=>{sync();q('#ac-reg-w').style.display=asistCorr.tipo==='permiso'?'':'none';});
     q('#ac-cancel')?.addEventListener('click',()=>{asistCorr=null;render();});
     q('#ac-ok')?.addEventListener('click',async e=>{
@@ -8674,11 +8730,21 @@ function attachAsist(){
       if(c.tipo==='permiso'){ if(!c.reg){alert('Indique la hora de regreso prevista.');return;} reg.regreso=AC.msDeHora(c.dia,c.reg); }
       e.target.disabled=true;
       try{
-        const ref=doc(collection(db,'lm_asist_marcas'));
-        await conLimite(setDoc(ref,reg));
+        let ref;
+        if(c.inicio!=null) ref=await asistGuardarSalida(c,ts,reg);
+        else {
+          ref=doc(collection(db,'lm_asist_marcas'));
+          await conLimite(setDoc(ref,reg));
+        }
         bitacora('asistencia_marca_manual',{accion:'Registró '+AC.TIPO_TXT[c.tipo]+' de '+p.nombre+' · '+c.dia+' '+c.hora,trabajador:p.nombre,marcaId:ref.id,motivo:reg.motivo});
-        asistCorr=null; asistPerData.clave=''; render();
-      }catch(err){ e.target.disabled=false; avisoError(msgError(err,'registrar la marca')); }
+        if(asistCorr===c) asistCorr=null;
+        asistPerData.clave='';
+        if(view==='asistencia') render();
+      }catch(err){
+        e.target.disabled=false;
+        if(c.inicio!=null&&err instanceof Error&&!err.code) avisoError(err.message);
+        else avisoError(msgError(err,'registrar la marca'));
+      }
     });
   }
   qa('[data-asanular]').forEach(el=>el.addEventListener('click',async()=>{
@@ -8875,7 +8941,7 @@ function asistCSV(){
 function asistImprimir(){
   if(!asistPerData.marcas){alert('Espere a que carguen las marcas.');return;}
   const {desde,hasta}=asistRango(asistPerMes,asistPerQ);
-  const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid));
+  const pers=Object.entries(ASIST.per).map(([uid,p])=>Object.assign({uid},p)).filter(p=>p.activo===true||asistPerData.marcas.some(m=>m.uid===p.uid&&AC.diaDe(m.ts)>=desde&&AC.diaDe(m.ts)<=hasta));
   const filas=asistFilasPeriodo();
   const html=`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Asistencia ${perId(asistPerMes,asistPerQ)}</title>
   <style>body{font-family:Arial,sans-serif;font-size:11px;margin:18px}h1{font-size:16px;margin:0}h2{font-size:13px;margin:18px 0 4px}table{width:100%;border-collapse:collapse;margin-top:4px}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}th{background:#eee}.n{text-align:right;white-space:nowrap}.firma{display:flex;gap:40px;margin-top:30px}.firma div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}.pb{page-break-after:always}</style></head><body>
@@ -9924,11 +9990,13 @@ function rPedidosWeb(){
           <div style="font-size:12px;color:var(--text2);margin-top:2px">Entrega: <b>${esc(pd.entrega||'—')}</b> · Pago: <b>${esc(pd.pago||'—')}</b></div>
           ${pd.nota?`<div style="font-size:12px;color:var(--text2);margin-top:2px">Nota: ${esc(pd.nota)}</div>`:''}</div>
         <div style="text-align:right"><div style="font-size:18px;font-weight:800;color:var(--acc)">${fmt(+pd.total||0)}</div><div style="font-size:10.5px;color:var(--text3)">total en la web</div>
-          ${enCaja?`<span class="badge" style="background:var(--bbg);color:var(--blu);margin-top:4px">En la mesa ${esc(pd.mesa||'')}</span>`:'<span class="badge ba" style="margin-top:4px">Nuevo</span>'}</div>
+          ${enCaja?`<span class="badge" style="background:var(--bbg);color:var(--blu);margin-top:4px">En la mesa ${esc(pd.mesa||'')}</span>`:'<span class="badge ba" style="margin-top:4px">Nuevo</span>'}
+          ${pd.entrega==='Bajo pedido'?'<div><span class="badge" style="background:#ede7f6;color:#4527a0;margin-top:4px">📦 Bajo pedido</span></div>':''}</div>
       </div>
       <div style="margin-top:10px">${lin.map(l=>`<div class="mrow" style="align-items:flex-start"><div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${l.cant} × ${esc(l.it.titulo||'')}</span>
           <div style="font-size:10.5px;margin-top:2px;color:${l.ok?(l.nota?'var(--amb)':'var(--grn)'):'var(--red)'}">${l.ok?('✓ '+esc(l.p.name)+(l.nota?' · '+esc(l.nota):'')):('⚠ '+esc(l.nota))}</div></div>
           <span style="font-weight:700;font-size:12px;flex-shrink:0">${fmt((+l.it.precio||0)*l.cant)}</span></div>`).join('')}</div>
+      ${pd.entrega==='Bajo pedido'&&!enCaja?'<div style="font-size:11.5px;color:#4527a0;margin-top:8px;line-height:1.45">El cliente pidió un producto <b>agotado</b>. Confírmele por WhatsApp si se puede conseguir, el plazo y el precio. Cuando llegue, ingrese la mercadería y cargue este pedido a una mesa para cobrarlo.</div>':''}
       ${enCaja?`<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center"><span style="font-size:11.5px;color:var(--text2)">Tomado por ${esc(pd.tomadoPor||'')}${pd.tomadoEl?' · '+esc(String(pd.tomadoEl).slice(11,16)):''}. Se cierra solo al cobrar la mesa.</span>
           ${mesaViva?`<button class="btn btn-acc btn-sm" data-pwir="${esc(mesaViva.id)}">Ir a la mesa ${esc(mesaViva.name)}</button>`:`<button class="btn btn-g btn-sm" data-pwdev="${esc(pd.id)}">↩ Devolver a nuevos</button>`}
           <button class="btn btn-g btn-sm" data-pwcerrar="${esc(pd.id)}">✓ Atendido sin venta</button></div>`
@@ -9966,6 +10034,145 @@ function attachPedidosWeb(){
 }
 // ══ fin CARTA WEB Y PEDIDOS WEB ══
 
+
+// ══════════════════════════════════════════════════════════════
+//  STOCK PARA LA WEB Y AGOTADOS POR REPONER (10-nov-2026)
+//  1) lm_web/stock: UN solo documento público con, por cada producto del POS
+//     enlazado a la web (libros y merch), s = unidades (tope 5; -1 = sin
+//     control) y p = precio. Lo crea el panel de la web al vincular; cualquier
+//     caja lo mantiene al día. La web lo lee en vivo (1 lectura por visita):
+//     al venderse la última unidad, el producto sale «Agotado · pedir bajo pedido».
+//  2) Agotados: lista de control para administración de lo que se quedó en
+//     cero por una venta, para gestionar la reposición. NO bloquea la venta.
+// ══════════════════════════════════════════════════════════════
+const swIdOk=id=>/^[A-Za-z0-9_-]+$/.test(String(id||''));
+function swValor(p){
+  if(!p||p.active===false) return {s:0,p:_r2(+(p&&p.price)||0)};
+  return {s:p.stockControl==='unidad'?Math.max(0,Math.min(5,Math.floor(+p.stock||0))):-1,p:_r2(+p.price||0)};
+}
+function swIniciar(){
+  if(SW.sub||!MI_ROL) return;
+  if(SW.t0&&Date.now()-SW.t0<60000) return;
+  SW.t0=Date.now();
+  try{
+    SW.sub=onSnapshot(doc(db,'lm_web','stock'),snap=>{
+      SW.items=snap.exists()?((snap.data()||{}).items||{}):{};
+      SW.ts=Date.now(); SW.err='';
+      swSyncPronto();
+      if(view==='agotados') render();
+    },e=>{ SW.sub=null; SW.ts=Date.now(); SW.err=(e&&e.code)||'error'; });
+  }catch(e){ SW.err='error'; }
+}
+let _swT=null,_swUlt=0;
+function swSyncPronto(){
+  if(_swT||!SW.ts||!MI_ROL) return;
+  _swT=setTimeout(()=>{ _swT=null; swSync(); },Math.max(1500,5000-(Date.now()-_swUlt)));
+}
+async function swSync(){
+  _swUlt=Date.now();
+  if(!SW.ts||!P.length) return 0;
+  const cambios={}; let n=0;
+  for(const id of Object.keys(SW.items||{})){
+    if(!swIdOk(id)) continue;
+    const p=P.find(x=>x&&String(x.id)===id); if(!p) continue;
+    const a=SW.items[id]||{}, v=swValor(p);
+    if(a.s===v.s&&Math.abs((+a.p||0)-v.p)<0.005) continue;
+    const k=id+'|'+v.s+'|'+v.p;
+    if(SW.enviado[k]&&Date.now()-SW.enviado[k]<60000) continue;
+    SW.enviado[k]=Date.now();
+    cambios['items.'+id+'.s']=v.s; cambios['items.'+id+'.p']=v.p; n++;
+  }
+  if(!n) return 0;
+  cambios.actualizado=serverTimestamp();
+  try{ await updateDoc(doc(db,'lm_web','stock'),cambios); }catch(e){ console.warn('swSync:',e); }
+  return n;
+}
+
+// ── Agotados por reponer (solo administración) ──
+const REPO_DIAS=45;
+async function repoCargar(){
+  if(REPO.ts||REPO.cargando||MI_ROL!=='admin') return;
+  REPO.cargando=true;
+  try{ const v=await fbGetStrict('reposicion'); REPO.vistos=(v&&typeof v==='object')?v:{}; }
+  catch(e){ console.warn('repoCargar:',e); }
+  finally{ REPO.cargando=false; REPO.ts=Date.now(); if(view==='agotados'||view==='inicio') render(); }
+}
+function repoLista(){
+  const desde=localISO(new Date(Date.now()-REPO_DIAS*86400000)).slice(0,10), ult={};
+  S.forEach(s=>{ if(!isVenta(s)||String(s.date||'').slice(0,10)<desde) return;
+    (s.items||[]).forEach(i=>{ if(i.stockControl!=='unidad'||!i.productId) return; const k=String(i.productId);
+      if(!ult[k]||s.date>ult[k].date) ult[k]={date:s.date,user:s.user||'',mesa:s.tableName||''}; }); });
+  return Object.keys(ult).map(k=>({id:k,p:P.find(x=>x&&String(x.id)===k),u:ult[k]}))
+    .filter(x=>x.p&&!x.p.esConsignado&&x.p.active!==false&&x.p.stockControl==='unidad'&&(+x.p.stock||0)<=0)
+    .filter(x=>{ const g=REPO.vistos[x.id]; return !(g&&g.fecha&&g.fecha>=x.u.date); })
+    .sort((a,b)=>String(b.u.date).localeCompare(String(a.u.date)));
+}
+function repoPedidosDe(p){
+  // Pedidos web abiertos (incluye «bajo pedido») que nombran este producto
+  return PW.list.filter(pd=>(pd.items||[]).some(it=>{ const q=pwBuscarTodos(it); return q&&String(q.id)===String(p.id); })).length;
+}
+function pwBuscarTodos(it){
+  // Igual que pwBuscar, pero también ubica productos sin stock o inactivos (para el control de agotados)
+  if(it.posId){ const p=P.find(x=>x&&String(x.id)===String(it.posId)); if(p) return p; }
+  const cods=[it.isbn,it.cod].map(pwCod).filter(c=>c.length>=4);
+  for(const c of cods){ const p=P.find(x=>x&&pwCod(x.code)===c); if(p) return p; }
+  return null;
+}
+async function repoGestionar(id){
+  if(MI_ROL!=='admin') return;
+  const p=P.find(x=>x&&String(x.id)===String(id)); if(!p) return;
+  const nota=prompt('«'+p.name+'» se agotó.\n\n¿Qué se decidió? (por ejemplo: «pedido a Océano el 10-nov», «no se repone», «llega el viernes»)\nQueda en la bitácora y el producto sale de esta lista. Si se vuelve a agotar después de reponerlo, aparecerá de nuevo.');
+  if(nota===null) return;
+  if(!nota.trim()){ alert('Escriba qué se decidió, para dejar constancia.'); return; }
+  const antes=REPO.vistos[String(id)];
+  REPO.vistos[String(id)]={fecha:localISO(),nota:nota.trim().slice(0,160),por:authUser()};
+  // Limpieza: se olvidan las gestiones de más de 120 días
+  const lim=localISO(new Date(Date.now()-120*86400000));
+  Object.keys(REPO.vistos).forEach(k=>{ if((REPO.vistos[k].fecha||'')<lim) delete REPO.vistos[k]; });
+  try{
+    await fbSet('reposicion',REPO.vistos);
+    try{ bitacora('agotado_gestionado',{accion:'Agotado gestionado: '+p.name+(p.code?' ('+p.code+')':'')+' — '+nota.trim().slice(0,160),productoId:String(id)}); }catch(e){}
+  }catch(e){ if(antes) REPO.vistos[String(id)]=antes; else delete REPO.vistos[String(id)]; }
+  render();
+}
+function repoCSV(){
+  const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const filas=[['Producto','Código / ISBN','Categoría','Autor / Proveedor','Editorial / Subcategoría','Precio','Se agotó','Vendido por','Mesa','En la web','Pedidos web que lo piden']]
+    .concat(repoLista().map(({id,p,u})=>[p.name,p.code||'',p.category||'',p.author||'',p.subcategory||'',(+p.price||0).toFixed(2),String(u.date).slice(0,16).replace('T',' '),u.user,u.mesa,SW.items[id]?'sí':'no',repoPedidosDe(p)]));
+  const blob=new Blob(['﻿'+filas.map(f=>f.map(q).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='agotados_por_reponer_'+today()+'.csv'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500);
+}
+function rAgotados(){
+  if(MI_ROL!=='admin') return '<div style="padding:26px;text-align:center;color:var(--text3);font-size:12.5px">Esta lista es de administración.</div>';
+  if(!REPO.ts) repoCargar();
+  const l=repoLista();
+  const fh=d=>{ const x=new Date(d); return isNaN(x)?'':x.toLocaleDateString('es-EC',{day:'2-digit',month:'short'})+' '+x.toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'}); };
+  const cats=[...new Set(l.map(x=>x.p.category||''))];
+  return `<div>
+    <div class="rb" style="margin-bottom:6px"><span class="stitle" style="margin:0">Agotados por reponer (${l.length})</span>
+      ${l.length?'<button class="btn btn-g" id="repo-csv" style="font-size:11px">↓ Exportar lista</button>':''}</div>
+    <div style="font-size:11.5px;color:var(--text2);margin-bottom:12px;line-height:1.5">Productos con control por unidad que quedaron en <b>cero por una venta</b> de los últimos ${REPO_DIAS} días. La venta no se bloquea: esta lista es para decidir la reposición. Al ingresar mercadería el producto sale solo; «✓ Gestionado» lo retira dejando constancia de lo decidido.</div>
+    ${!REPO.ts?'<div style="font-size:12px;color:var(--text3);padding:10px">Cargando…</div>':''}
+    ${cats.map(cat=>`<div style="margin-bottom:16px"><div style="font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">${esc(cat||'Sin categoría')} (${l.filter(x=>(x.p.category||'')===cat).length})</div>
+      ${l.filter(x=>(x.p.category||'')===cat).map(({id,p,u})=>{ const np=repoPedidosDe(p), neg=(+p.stock||0)<0; return `<div class="mrow" style="align-items:flex-start">
+        <div style="min-width:0;flex:1"><span style="font-weight:600;font-size:12px">${esc(p.name)}</span>
+          ${p.code?`<span style="font-size:10px;color:var(--text3);margin-left:7px">${esc(p.code)}</span>`:''}
+          ${SW.items[id]?'<span class="badge" style="margin-left:5px;font-size:9px;background:var(--bbg);color:var(--blu)" title="En la web ya sale como Agotado · pedir bajo pedido">🌐 agotado en la web</span>':''}
+          ${np?`<span class="badge ba" style="margin-left:5px;font-size:9px">${np} pedido(s) web lo piden</span>`:''}
+          ${neg?`<span class="badge br" style="margin-left:5px;font-size:9px" title="Se vendieron más unidades de las registradas: falta un ingreso de mercadería o hay un error de conteo">stock ${+p.stock}: revisar ingreso</span>`:''}
+          <div style="font-size:10.5px;color:var(--text3);margin-top:2px">${esc([p.author,p.subcategory].filter(Boolean).join(' · '))}${p.author||p.subcategory?' · ':''}se agotó el ${esc(fh(u.date))}${u.mesa?' · '+esc(u.mesa):''}${u.user?' · '+esc(u.user):''}</div></div>
+        <div style="display:flex;gap:5px;align-items:center;flex-shrink:0"><span style="font-weight:700;color:var(--acc);font-size:12px">${fmt(p.price||0)}</span>
+          <button class="btn btn-ok btn-sm" data-repog="${esc(id)}">✓ Gestionado</button></div></div>`; }).join('')}</div>`).join('')}
+    ${REPO.ts&&!l.length?'<div style="padding:26px;text-align:center;color:var(--text3);font-size:12.5px">No hay productos agotados pendientes de gestionar.</div>':''}
+  </div>`;
+}
+function attachAgotados(){
+  const mc=document.getElementById('mc'); if(!mc) return;
+  mc.querySelectorAll('[data-repog]').forEach(el=>el.addEventListener('click',()=>repoGestionar(el.dataset.repog)));
+  mc.querySelector('#repo-csv')?.addEventListener('click',repoCSV);
+}
+// ══ fin STOCK PARA LA WEB Y AGOTADOS ══
+
 function marcarNav(v){
   document.querySelectorAll('nav button[data-v]').forEach(b=>b.classList.toggle('active',b.dataset.v===v));
 }
@@ -9990,6 +10197,10 @@ function iniAlertas(){
   try{
     const pr=admin?P.filter(x=>x&&x.revisado===false):[];
     if(pr.length) add('media',pr.length+' producto(s) creado(s) desde caja por revisar',pr.slice(0,3).map(x=>x.name+' '+fmt(x.price)).join(', ')+(pr.length>3?'…':'')+'. Revise precio, categoría e IVA.','Revisar',()=>irA('productos'),'productos');
+  }catch(e){}
+  try{
+    const ag=(admin&&REPO.ts)?repoLista():[];
+    if(ag.length) add('media',ag.length+' producto(s) se agotaron y esperan reposición',ag.slice(0,3).map(x=>x.p.name).join(', ')+(ag.length>3?'…':'')+'. Decida si se reponen; la venta no se bloquea.','Ver agotados',()=>irA('agotados'),'agotados');
   }catch(e){}
   try{
     const pn=pwNuevos();
@@ -10055,6 +10266,7 @@ function actualizarNavBadges(){
   const n={};
   try{ iniAlertas().forEach(a=>{ if(a.badgeKey) n[a.badgeKey]=(n[a.badgeKey]||0)+1; }); }catch(e){}
   try{ const c=pwNuevos().length; if(c) n.pedidosweb=c; else delete n.pedidosweb; }catch(e){}
+  try{ const c=(MI_ROL==='admin'&&REPO.ts)?repoLista().length:0; if(c) n.agotados=c; else delete n.agotados; }catch(e){}
   document.querySelectorAll('nav [data-badge]').forEach(el=>{ const k=el.dataset.badge; el.textContent=n[k]?String(n[k]):''; });
   const hi=document.querySelector('nav [data-badge="inicio"]');
 }
@@ -12071,6 +12283,8 @@ async function _prepararBitacora(user){
   try{ localStorage.setItem('madu_turno',MI_NOMBRE); }catch(e){}
   const nb=document.getElementById('nav-bitacora');
   if(nb) nb.style.display = (MI_ROL==='admin') ? '' : 'none';
+  const nag=document.getElementById('nav-agotados');
+  if(nag) nag.style.display = (MI_ROL==='admin') ? '' : 'none';
   const na=document.getElementById('nav-asist');
   if(na) na.style.display = (MI_ROL==='admin') ? '' : 'none';
   if(MI_ROL==='admin') asistIniciar();
