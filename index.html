@@ -8364,7 +8364,10 @@ function attachNomina(){
 // ══════════════════════════════════════════════════════════════
 let AC=null;                       // asistencia/asist-core.js
 const ASIST={per:{},cfg:null,sol:[],hoy:[],dia:'',subs:false,err:'',wifi:null};
-let asistWifiMsg='';               // resultado de «Registrar el Wi-Fi de este equipo»
+let asistWifiMsg='';
+const ASIST_WIFI_EQUIPO='asistencia_wifi_equipo_fijo';
+const asistWifiFijo=()=>localStorage.getItem(ASIST_WIFI_EQUIPO)==='1';
+let asistWifiRegistrando=false;
 let asistTab='hoy';
 const ASIST_MAX_TURNO=16*60*60*1000;
 let asistCorr=null;                // formulario de marca manual abierto
@@ -8395,7 +8398,7 @@ async function asistIniciar(){
   try{ AC=await import('./asistencia/asist-core.js'); }
   catch(e){ ASIST.err='No se pudo cargar asistencia/asist-core.js (¿se subió la carpeta asistencia?)'; console.error(e); return; }
   onSnapshot(collection(db,'lm_asist_personal'),s=>{ASIST.per={};s.docs.forEach(d=>ASIST.per[d.id]=d.data());asistRepintar();},e=>{ASIST.err=msgError(e,'leer el personal de asistencia');asistRepintar();});
-  onSnapshot(doc(db,'lm_asist_cfg','local'),s=>{ASIST.cfg=s.exists()?s.data():null;asistRepintar();},()=>{});
+  onSnapshot(doc(db,'lm_asist_cfg','local'),s=>{ASIST.cfg=s.exists()?s.data():null;asistRepintar();asistRenovarWifi();},()=>{});
   onSnapshot(collection(db,'lm_asist_solicitudes'),s=>{ASIST.sol=s.docs.map(asistNorm);asistRepintar();},()=>{});
   onSnapshot(doc(db,'lm_asist_wifi','ancla'),s=>{ASIST.wifi=s.exists()?s.data():null;asistRepintar();},()=>{});
   asistEscucharHoy();
@@ -8416,6 +8419,11 @@ function asistAlertas(){
   const out=[], cfg=ASIST.cfg||{};
   for(const p of asistActivos()){
     AC.alertasAhora(p,ASIST.hoy.filter(m=>m.uid===p.uid),cfg).forEach(a=>out.push(a));
+  }
+  const ultimaRed=ASIST.wifi?.act;
+  if(cfg.wifiUrl&&ultimaRed&&Date.now()-asistMs(ultimaRed)>60*60*1000){
+    out.push({sev:'media',tipo:'wifi_desactualizado',txt:'El Wi-Fi de asistencia lleva más de una hora sin renovarse',
+      desc:'Revise la renovación en el equipo fijo de La Madriguera. Si la conexión cambia, el personal puede dejar de marcar por Wi-Fi.'});
   }
   if(ASIST.sol.length) out.push({sev:'baja',tipo:'solicitud',txt:ASIST.sol.length+' solicitud(es) para habilitar asistencia',desc:ASIST.sol.map(s=>s.nombre).join(', ')});
   if(asistActivos().length&&!(ASIST.cfg&&typeof ASIST.cfg.lat==='number')) out.push({sev:'media',tipo:'sin_ubicacion',txt:'Falta fijar la ubicación del local para la asistencia',desc:'Sin ubicación nadie puede marcar. Hágalo desde el local: Asistencia → Configuración.'});
@@ -8490,7 +8498,7 @@ function asistChip(est){const e=AS_EST[est]||AS_EST.fuera;return `<span class="b
 function asistMarcaFila(m,anulable){
   return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--bg3);font-size:12px">
     <span><b style="font-variant-numeric:tabular-nums">${AC.horaDe(m.ts)}</b> · ${esc(AC.TIPO_TXT[m.tipo]||m.tipo)}${m.tipo==='permiso'?` · «${esc(m.motivo||'')}» · vuelve ${m.regreso?AC.horaDe(m.regreso):'?'}`:''}
-      ${m.origen==='admin'?`<span style="color:var(--amb);font-size:10px"> · registrada por administración: ${esc(m.motivo||'')}</span>`:`<span style="color:var(--text3);font-size:10px"> · ${m.origen==='wifi'?'📶 Wi-Fi · ':m.origen==='qr'?'QR · ':''}${m.dist!=null?m.dist+' m':''}${m.prec!=null?' ±'+Math.round(m.prec)+' m':''}</span>`}</span>
+      ${m.origen==='admin'?`<span style="color:var(--amb);font-size:10px"> · registrada por administración: ${esc(m.motivo||'')}</span>`:`<span style="color:var(--text3);font-size:10px"> · ${m.origen==='wifi'?'📶 Wi-Fi · ':m.origen==='qr'?'QR · ':m.origen==='ubicacion'?'<b style="color:var(--amb)">Por ubicación</b> · ':''}${m.dist!=null?m.dist+' m':''}${m.prec!=null?' ±'+Math.round(m.prec)+' m':''}</span>`}</span>
     ${anulable?`<button class="btn btn-g btn-sm" style="font-size:10px;padding:2px 8px" data-asanular="${esc(m.id)}">Anular</button>`:''}
   </div>`;
 }
@@ -8655,13 +8663,13 @@ function rAsistConfig(){
   </div>
   <div class="card" style="margin-bottom:12px">
     <div style="font-weight:700;font-size:13px;margin-bottom:4px">📶 Marcar con el Wi-Fi del local</div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Con esto el personal marca directo desde su celular, sin escanear el QR: además de la ubicación, el celular debe estar conectado al Wi-Fi de La Madriguera. La pantalla del local (reloj) registra sola la conexión cada 5 minutos. El QR sigue disponible como respaldo. Deje el campo vacío para volver a usar solo el QR.</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Con esto el personal marca directo desde su celular, sin escanear el QR: además de la ubicación, el celular debe estar conectado al Wi-Fi de La Madriguera. Activa la renovación una vez en el equipo fijo. Mientras el POS esté visible con sesión de administración, actualizará la conexión cada 5 minutos. El reloj también puede renovarla y el QR sigue disponible como respaldo. Deje el campo vacío para volver a usar solo el QR.</div>
     <div class="fg"><label>Dirección del servicio Wi-Fi (Cloudflare)</label><input id="ag-wifi" type="url" placeholder="https://asistencia-wifi.….workers.dev" value="${esc(c.wifiUrl||'')}"></div>
     ${(()=>{const ips=(ASIST.wifi&&ASIST.wifi.ips)||{};const lista=Object.entries(ips).map(([k,v])=>[k,asistMs(v)]).sort((a,b)=>b[1]-a[1]);
       return lista.length?`<div style="font-size:12px;margin:6px 0">Conexiones del local registradas: ${lista.map(([k,t])=>`<span class="badge" style="font-size:10px">${esc(k.startsWith('v6_')?'IPv6':'IPv4')} · ${esc(new Date(t).toLocaleString('es-EC',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</span>`).join(' ')}</div>`
-        :`<div style="font-size:12px;color:${c.wifiUrl?'var(--amb)':'var(--text3)'};margin:6px 0">${c.wifiUrl?'Aún no hay conexión registrada: abra la pantalla del local (reloj) o pulse el botón estando en el local.':'Sin configurar.'}</div>`;})()}
-    ${c.wifiUrl?`<button class="btn btn-g btn-sm" id="ag-wifireg">📶 Registrar el Wi-Fi de este equipo (solo estando en el local)</button>`:''}
-    ${asistWifiMsg?`<div style="font-size:12px;margin-top:6px">${esc(asistWifiMsg)}</div>`:''}
+        :`<div style="font-size:12px;color:${c.wifiUrl?'var(--amb)':'var(--text3)'};margin:6px 0">${c.wifiUrl?'Aún no hay conexión registrada. Activa la renovación desde el equipo fijo del local.':'Sin configurar.'}</div>`;})()}
+    ${c.wifiUrl?`<button class="btn btn-g btn-sm" id="ag-wifireg">${asistWifiFijo()?'Desactivar renovación en este equipo':'Activar renovación en este equipo'}</button>`:''}
+    <div id="ag-wifiestado" role="status" style="font-size:12px;margin-top:6px">${esc(asistWifiMsg)}</div>
   </div>
   <button class="btn btn-acc" id="ag-guardar">Guardar configuración</button>
   <div class="card" style="margin-top:14px;font-size:12px;color:var(--text2)">
@@ -8670,6 +8678,43 @@ function rAsistConfig(){
 }
 
 // ── Acciones ──────────────────────────────────────────────────
+async function asistRenovarWifi(){
+  const cfg=ASIST.cfg, usuario=auth.currentUser;
+  if(MI_ROL!=='admin'||!AC||!usuario||!cfg?.wifiUrl||!asistWifiFijo()||asistWifiRegistrando||document.hidden) return;
+  asistWifiRegistrando=true;
+  try{
+    if(!navigator.geolocation) throw new Error('Este navegador no puede verificar la ubicación.');
+    const {coords}=await new Promise((resolve,reject)=>{
+      navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:12000,maximumAge:0});
+    }).catch(()=>{throw new Error('Permite el acceso a la ubicación en el navegador del equipo fijo.');});
+    const geo=AC.dentroGeocerca(cfg,coords.latitude,coords.longitude,coords.accuracy);
+    if(!geo.ok) throw new Error(geo.motivo);
+    const ipq=url=>fetch(url,{cache:'no-store',signal:AbortSignal.timeout(5000)})
+      .then(r=>r.json()).then(j=>j.ip).catch(()=>null);
+    const extra=(await Promise.all([ipq('https://api.ipify.org?format=json'),ipq('https://api6.ipify.org?format=json')])).filter(Boolean);
+    const tok=await usuario.getIdToken();
+    if(!asistWifiFijo()||auth.currentUser!==usuario||ASIST.cfg!==cfg||document.hidden) return;
+    const r=await fetch(cfg.wifiUrl.replace(/\/+$/,'')+'/ancla',{
+      method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},
+      body:JSON.stringify({extra}),cache:'no-store',signal:AbortSignal.timeout(12000)
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!j.ok) throw new Error(j.error||('HTTP '+r.status));
+    asistWifiMsg='✓ Conexión registrada '+AC.horaDe(Date.now())+'.';
+  }catch(err){
+    asistWifiMsg='No se pudo renovar el Wi-Fi: '+(err.message||err);
+  }finally{
+    asistWifiRegistrando=false;
+    const estado=document.getElementById('ag-wifiestado');
+    if(estado) estado.textContent=asistWifiMsg;
+    const boton=document.getElementById('ag-wifireg');
+    if(boton) boton.textContent=asistWifiFijo()?'Desactivar renovación en este equipo':'Activar renovación en este equipo';
+  }
+}
+setInterval(asistRenovarWifi,5*60*1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden) asistRenovarWifi();});
+window.addEventListener('online',asistRenovarWifi);
+
 async function asistGuardarSalida(c,ts,reg){
   if(ts<=c.inicio||ts>c.inicio+ASIST_MAX_TURNO||ts>Date.now()){
     throw new Error('Indique una hora posterior al inicio del tramo, dentro de las siguientes 16 horas y que ya haya ocurrido.');
@@ -8799,22 +8844,16 @@ function attachAsist(){
   }));
   // Configuración
   q('#ag-leer')?.addEventListener('click',asistLeerUbicacion);
-  q('#ag-wifireg')?.addEventListener('click',async e=>{
-    const url=((ASIST.cfg&&ASIST.cfg.wifiUrl)||'').replace(/\/+$/,''); if(!url)return;
-    if(!confirm('¿Está ahora en La Madriguera, conectado a su Wi-Fi?\nLa conexión de este equipo quedará registrada como la del local.'))return;
-    e.target.disabled=true; asistWifiMsg='Registrando…'; render();
-    try{
-      const tok=await auth.currentUser.getIdToken();
-      // Se informan las dos direcciones de esta conexión (IPv4 e IPv6): cada celular usa una u otra.
-      const ipq=u=>fetch(u,{cache:'no-store',signal:AbortSignal.timeout(5000)}).then(r=>r.json()).then(j=>j.ip).catch(()=>null);
-      const extra=(await Promise.all([ipq('https://api.ipify.org?format=json'),ipq('https://api6.ipify.org?format=json')])).filter(Boolean);
-      const r=await fetch(url+'/ancla',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({extra}),cache:'no-store'});
-      const j=await r.json().catch(()=>({}));
-      if(!j.ok) throw new Error(j.error||('HTTP '+r.status));
-      asistWifiMsg='✓ Conexión registrada '+new Date().toLocaleTimeString('es-EC',{hour:'2-digit',minute:'2-digit'})+'.';
-      bitacora('asistencia_wifi_registrado',{accion:'Registró manualmente la conexión Wi-Fi del local para asistencia'});
-    }catch(err){ asistWifiMsg='No se pudo registrar ('+(err.message||err)+'). Revise la dirección del servicio y que tenga internet.'; }
-    render();
+  q('#ag-wifireg')?.addEventListener('click',async()=>{
+    if(asistWifiFijo()){
+      localStorage.removeItem(ASIST_WIFI_EQUIPO);
+      asistWifiMsg='Renovación automática desactivada en este navegador.';
+      render();
+      return;
+    }
+    if(!confirm('Active esta opción solo en el equipo fijo de La Madriguera conectado a su Wi-Fi. ¿Está en ese equipo?'))return;
+    localStorage.setItem(ASIST_WIFI_EQUIPO,'1');
+    await asistRenovarWifi();
   });
   q('#ag-usar')?.addEventListener('click',()=>{ if(asistGeo&&asistGeo.lat!=null){ q('#ag-lat').value=asistGeo.lat.toFixed(6); q('#ag-lng').value=asistGeo.lng.toFixed(6); } });
   q('#ag-guardar')?.addEventListener('click',async()=>{
@@ -8921,7 +8960,7 @@ function asistFilasPeriodo(){
     if(!R.ms.length&&p.activo!==true) continue;
     for(const d of Object.values(R.dias)){
       const md=R.r.marcas.filter(m=>AC.diaDe(m.ts)===d.dia);
-      filas.push({nombre:p.nombre||'',dia:d.dia,marcas:md.map(m=>AC.horaDe(m.ts)+' '+AC.TIPO_TXT[m.tipo]+(m.origen==='admin'?' (adm: '+(m.motivo||'')+')':'')+(m.tipo==='permiso'?' ['+(m.motivo||'')+']':'')).join(' | '),
+      filas.push({nombre:p.nombre||'',dia:d.dia,marcas:md.map(m=>AC.horaDe(m.ts)+' '+AC.TIPO_TXT[m.tipo]+(m.origen==='admin'?' (adm: '+(m.motivo||'')+')':m.origen==='ubicacion'?' (por ubicación)':'')+(m.tipo==='permiso'?' ['+(m.motivo||'')+']':'')).join(' | '),
         total:d.total,ord:d.ord,noc:d.noc,sup:d.sup50+d.sup100,ext:d.ext,obs:R.punt.filter(x=>x.dia===d.dia).map(x=>x.txt).concat(R.r.anomalias.filter(a=>AC.diaDe(a.ts)===d.dia).map(a=>a.txt)).join('; ')});
     }
     R.punt.filter(x=>x.tipo==='falta').forEach(f=>filas.push({nombre:p.nombre||'',dia:f.dia,marcas:'',total:0,ord:0,noc:0,sup:0,ext:0,obs:f.txt}));

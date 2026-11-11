@@ -3,7 +3,7 @@
 //  La usan: asistencia/index.html (celular), asistencia/reloj.html
 //  (pantalla del QR) y el POS (módulo Asistencia, solo admin).
 //
-//  marca: {id, uid, tipo, ts(ms), origen:'qr'|'wifi'|'admin', motivo?, regreso?(ms),
+//  marca: {id, uid, tipo, ts(ms), origen:'qr'|'wifi'|'ubicacion'|'admin', motivo?, regreso?(ms),
 //          anula?(id), dist?, prec?, disp?}
 //  tipo:  entrada | pausa | permiso | regreso | salida | anula
 //
@@ -200,7 +200,7 @@ export function alertasAhora(persona, marcasHoy, cfg = CFG_DEF, ahora = Date.now
 // ── Mismo celular usado por varias personas (posible marcación por otro) ─
 export function dispositivosCompartidos(marcas) {
   const por = {};
-  for (const m of marcas) if (m.disp && (m.origen === 'qr' || m.origen === 'wifi')) (por[m.disp] = por[m.disp] || new Set()).add(m.uid);
+  for (const m of marcas) if (m.disp && ['qr', 'wifi', 'ubicacion'].includes(m.origen)) (por[m.disp] = por[m.disp] || new Set()).add(m.uid);
   return Object.entries(por).filter(([, s]) => s.size > 1).map(([disp, s]) => ({disp, uids: [...s]}));
 }
 

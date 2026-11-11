@@ -237,6 +237,9 @@ let USER = null, PER = null, CFG = null, MARCAS = [], POS_GPS = null, GEO = null
 let WIFI = {estado: 'verificando', en: 0}, preferirQR = false;
 const urlWifi = () => (CFG && typeof CFG.wifiUrl === 'string' && /^https:\/\//.test(CFG.wifiUrl)) ? CFG.wifiUrl.replace(/\/+$/, '') : '';
 const modoWifi = () => !!urlWifi() && !preferirQR;
+const admiteUbicacion = tipo => tipo === 'entrada' || tipo === 'salida';
+const permiteRespaldo = error => ['fuera_wifi', 'sin_ancla', 'servicio', 'error'].includes(error);
+const ubicacionVigente = () => GEO?.ok && POS_GPS && Date.now() - GEO_EN <= 90000;
 
 // ── Reloj ───────────────────────────────────────────────────────
 function tic() {
@@ -332,7 +335,7 @@ function pintarHoy() {
   else if (r.estado === 'permiso') d = 'Desde las ' + A.horaDe(r.desde) + (r.regreso ? ' · regreso previsto ' + A.horaDe(r.regreso) : '');
   else if (r.marcas.length) d = 'Última salida ' + A.horaDe(r.desde);
   $('m-est-d').textContent = d;
-  $('m-lista').innerHTML = r.marcas.length ? r.marcas.map(m => `<li><span>${esc(A.TIPO_TXT[m.tipo])}${m.tipo === 'permiso' && m.motivo ? ' · ' + esc(m.motivo) : ''}${m.origen === 'admin' ? '<span class="adm">registrada por administración</span>' : ''}</span><span class="h">${A.horaDe(m.ts)}</span></li>`).join('')
+  $('m-lista').innerHTML = r.marcas.length ? r.marcas.map(m => `<li><span>${esc(A.TIPO_TXT[m.tipo])}${m.tipo === 'permiso' && m.motivo ? ' · ' + esc(m.motivo) : ''}${m.origen === 'admin' ? '<span class="adm">registrada por administración</span>' : m.origen === 'ubicacion' ? '<span class="adm">por ubicación</span>' : ''}</span><span class="h">${A.horaDe(m.ts)}</span></li>`).join('')
     : '<li><span class="sub">Aún no hay marcas hoy.</span></li>';
   const tr = r.tramos.concat(r.enCurso ? [r.enCurso] : []);
   const min = tr.reduce((s, x) => s + (x.fin - x.ini) / 60000, 0);
@@ -341,10 +344,10 @@ function pintarHoy() {
 
 // ── Marcar ──────────────────────────────────────────────────────
 const TXT_BTN = {entrada: 'Marcar ENTRADA', pausa: 'Iniciar pausa (almuerzo)', permiso: 'Salir con permiso', regreso: 'Marcar REGRESO', salida: 'Marcar SALIDA'};
-function pintarBotones(cont, habil) {
+function pintarBotones(cont, habilitar) {
   const r = A.recorrer(MARCAS);
   const permAbierto = !$('mk-permiso').classList.contains('oculto');
-  cont.innerHTML = A.accionesPara(r.estado).map(t => `<button class="btn b-${t}" data-t="${t}" ${habil && !ocupado ? '' : 'disabled'}>${TXT_BTN[t]}</button>`).join('');
+  cont.innerHTML = A.accionesPara(r.estado).map(t => `<button class="btn b-${t}" data-t="${t}" ${!ocupado && habilitar(t) ? '' : 'disabled'}>${TXT_BTN[t]}</button>`).join('');
   cont.classList.toggle('oculto', permAbierto);
   cont.querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => {
     if (b.dataset.t === 'permiso') { ver('mk-permiso', true); cont.classList.add('oculto'); const d = new Date(Date.now() + 2 * 3600000); $('pm-hora').value = A.pad(d.getHours()) + ':' + A.pad(d.getMinutes()); $('pm-motivo').focus(); return; }
@@ -357,9 +360,12 @@ function pintarMarcar() {
   ver('mk-wifi', wifi); ver('mk-sinqr', !q && !wifi); ver('mk-conqr', !!q);
   ver('mkq-wifi', !q && !wifi && !!urlWifi());
   if (!q && !wifi) { ver('mk-permiso', false); return; }
-  const ok = GEO && GEO.ok;
-  if (q) pintarBotones($('mk-btns'), ok);
-  else { pintarBotones($('mkw-btns'), ok && WIFI.estado === 'ok'); pintarWifi(); }
+  const ok = ubicacionVigente();
+  if (q) pintarBotones($('mk-btns'), () => GEO?.ok);
+  else {
+    pintarBotones($('mkw-btns'), tipo => ok && (WIFI.estado === 'ok' || admiteUbicacion(tipo)));
+    pintarWifi();
+  }
   if (!leyendoGPS && (!GEO || Date.now() - GEO_EN > 90000)) ubicar();
 }
 $('pm-cancel').addEventListener('click', () => { ver('mk-permiso', false); pintarMarcar(); });
@@ -416,19 +422,27 @@ const WIFI_TXT = {
   verificando: ['esp', 'Verificando el Wi-Fi…', 'Debes estar conectado al Wi-Fi de La Madriguera.'],
   ok: ['ok', '✓ Conectado al Wi-Fi del local', ''],
   fuera_wifi: ['mal', 'No estás en el Wi-Fi de La Madriguera', 'Conéctate al Wi-Fi del local (no a los datos móviles) y toca «Volver a verificar».'],
-  sin_ancla: ['mal', 'La conexión del local no está registrada', 'Avisa a administración: la pantalla del local debe estar encendida. Mientras tanto, marca escaneando el QR.'],
+  sin_ancla: ['mal', 'La conexión del local no está registrada', 'Para pausas y permisos, usa el QR.'],
+  servicio: ['mal', 'El servicio Wi-Fi no está disponible', 'Para pausas y permisos, usa el QR.'],
   sesion: ['mal', 'Tu sesión venció', 'Cierra la sesión y vuelve a ingresar.'],
   error: ['mal', 'No se pudo verificar el Wi-Fi', 'Revisa tu conexión y vuelve a intentar, o marca escaneando el QR.']
 };
 function pintarWifi() {
-  const el = $('mkw-wifi'), [c, t, d] = WIFI_TXT[WIFI.estado] || WIFI_TXT.error;
+  const el = $('mkw-wifi');
+  const respaldo = permiteRespaldo(WIFI.estado) && ubicacionVigente()
+    && A.accionesPara(A.recorrer(MARCAS).estado).some(admiteUbicacion);
+  const [c, t, d] = respaldo
+    ? ['ok', 'Puedes marcar por ubicación', 'Las pausas, permisos y regresos requieren Wi-Fi o QR.']
+    : (WIFI_TXT[WIFI.estado] || WIFI_TXT.error);
   el.className = 'wifi ' + c;
   el.innerHTML = `<div><b>${esc(t)}</b>${esc(d)}${c === 'mal' ? '<br><button class="btn sec" id="wifi-re" style="margin-top:8px">Volver a verificar</button>' : ''}</div>`;
   $('wifi-re')?.addEventListener('click', () => verificarWifi(true));
 }
-async function llamarWifi(ruta) {
-  const tok = await USER.getIdToken();
-  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
+async function llamarWifi(ruta, espera = 12000) {
+  let tok;
+  try { tok = await USER.getIdToken(); }
+  catch (e) { return {ok: false, error: e.code === 'auth/network-request-failed' ? 'error' : 'sesion'}; }
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), espera);
   try {
     const r = await fetch(urlWifi() + ruta, {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok}, body: '{}', signal: ctl.signal, cache: 'no-store'});
     let j = {}; try { j = await r.json(); } catch (e) {}
@@ -446,7 +460,7 @@ async function verificarWifi(forzar) {
   WIFI = {estado: r.ok ? 'ok' : (WIFI_TXT[r.error] ? r.error : 'error'), en: Date.now()};
   pintarMarcar();
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && USER && urlWifi()) verificarWifi(true); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && USER && urlWifi()) { pintarMarcar(); verificarWifi(true); } });
 setInterval(() => { if (!document.hidden && USER && modoWifi() && !ocupado) verificarWifi(); }, 30000);
 $('mkq-wifi').addEventListener('click', () => { preferirQR = false; verificarWifi(true); pintarMarcar(); });
 $('mkw-qr').addEventListener('click', () => { preferirQR = true; ver('mk-permiso', false); pintarMarcar(); abrirEscaner(); });
@@ -483,38 +497,57 @@ async function marcar(tipo, extra = {}) {
   } finally { ocupado = false; $('pm-ok').disabled = false; pintarMarcar(); }
 }
 async function marcarWifi(tipo, extra) {
-  if (!GEO || !GEO.ok) { msg('Primero se debe verificar que estás en el local.', 'err'); return; }
+  if (!ubicacionVigente()) {
+    pintarMarcar();
+    msg('Espera a que se actualice tu ubicación y vuelve a marcar.', 'err');
+    return;
+  }
   if (ocupado) return;
+  const usuario = USER;
   ocupado = true; pintarMarcar(); $('pm-ok').disabled = true; ver('mk-msg', false);
   try {
-    const r = await llamarWifi('/pase');
-    if (!r.ok || !r.pase) {
-      WIFI = {estado: WIFI_TXT[r.error] ? r.error : 'error', en: Date.now()};
-      msg(r.error === 'fuera_wifi' ? 'No se marcó: tu celular no está conectado al Wi-Fi de La Madriguera.' : 'No se marcó: no se pudo verificar el Wi-Fi. Vuelve a intentar o marca con el QR.', 'err');
+    const r = await llamarWifi('/pase', admiteUbicacion(tipo) ? 4500 : 12000);
+    if (USER !== usuario) return;
+    const tienePase = r.ok && !!r.pase;
+    WIFI = {estado: tienePase ? 'ok' : (WIFI_TXT[r.error] ? r.error : 'error'), en: Date.now()};
+    const porUbicacion = !tienePase && admiteUbicacion(tipo) && permiteRespaldo(r.error);
+    if (!tienePase && !porUbicacion) {
+      msg(r.error === 'sesion' ? 'Tu sesión venció. Vuelve a iniciar sesión.' : 'No se pudo verificar el Wi-Fi. Vuelve a intentar o marca con el QR.', 'err');
       return;
     }
-    WIFI = {estado: 'ok', en: Date.now()};
-    const reg = Object.assign({
-      uid: USER.uid, nombre: PER.nombre || '', tipo, ts: serverTimestamp(), dia: A.diaDe(Date.now()),
-      wifi: r.pase, lat: POS_GPS.lat, lng: POS_GPS.lng, prec: Math.round(POS_GPS.prec * 10) / 10, dist: GEO.dist,
+    if (!ubicacionVigente()) {
+      msg('Espera a que se actualice tu ubicación y vuelve a marcar.', 'err');
+      return;
+    }
+    const ahora = Date.now();
+    const reg = {
+      uid: USER.uid, nombre: PER.nombre || '', tipo, ts: serverTimestamp(), dia: A.diaDe(ahora),
+      lat: POS_GPS.lat, lng: POS_GPS.lng, prec: Math.round(POS_GPS.prec * 10) / 10, dist: GEO.dist,
       disp: DISP, origen: 'wifi'
-    }, extra);
-    // La marca y el gasto del pase van juntos: o se guardan los dos, o ninguno.
+    };
     const ref = doc(collection(db, 'lm_asist_marcas'));
-    const b = writeBatch(db);
-    b.set(ref, reg);
-    b.delete(doc(db, 'lm_asist_wifi_pase', USER.uid));
-    await conLimite(b.commit());
+    if (porUbicacion) {
+      reg.origen = 'ubicacion';
+      reg.dia = new Date(ahora - 5 * 3600000).toISOString().slice(0, 10);
+      await conLimite(setDoc(ref, reg));
+    } else {
+      Object.assign(reg, extra, {wifi: r.pase});
+      // La marca y el gasto del pase van juntos.
+      const b = writeBatch(db);
+      b.set(ref, reg);
+      b.delete(doc(db, 'lm_asist_wifi_pase', USER.uid));
+      await conLimite(b.commit());
+    }
     MARCAS.push(Object.assign({}, reg, {id: ref.id, ts: Date.now()}));
     pintarHoy();
     $('hc-t').textContent = A.TIPO_TXT[tipo] + ' registrada';
-    $('hc-d').textContent = A.horaDe(Date.now()) + (tipo === 'permiso' ? ' · regreso previsto ' + A.horaDe(extra.regreso) : '') + '. Marcada con el Wi-Fi del local.';
+    $('hc-d').textContent = A.horaDe(Date.now()) + (tipo === 'permiso' ? ' · regreso previsto ' + A.horaDe(extra.regreso) : '') + (porUbicacion ? '. Marcada por ubicación.' : '. Marcada con el Wi-Fi del local.');
     ver('m-hecho', true); ver('mk-permiso', false);
     if (navigator.vibrate) navigator.vibrate(60);
     setTimeout(() => ver('m-hecho', false), 15000);
     cargarHoy();
   } catch (e) {
-    if (e.code === 'permission-denied') msg('El servidor no aceptó la marca. Verifica que estés en el Wi-Fi y dentro de La Madriguera, y vuelve a intentar.', 'err');
+    if (e.code === 'permission-denied') msg('El servidor no aceptó la marca. Verifica tu ubicación y vuelve a intentar. Si persiste, usa el QR o avisa a administración.', 'err');
     else if (e.code === 'tiempo' || e.code === 'unavailable') msg('No hubo respuesta del servidor. Revisa tu conexión. Si al recargar la marca no aparece en la lista, vuelve a marcar.', 'err');
     else msg('No se pudo registrar (' + (e.code || e.message) + ').', 'err');
   } finally { ocupado = false; $('pm-ok').disabled = false; pintarMarcar(); }
