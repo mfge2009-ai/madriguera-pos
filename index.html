@@ -10151,9 +10151,16 @@ function auCodigo(tipo){
   const n=(tipo==='autor'?(AU.autores||[]).length:(AU.obras||[]).length)+1;
   return (tipo==='autor'?'AE-':'OB-')+String(n).padStart(4,'0');
 }
-// Dirección de la página pública del autor, derivada de donde está publicado el POS.
+/* Dirección de la página pública del autor. Normalmente se deduce de dónde está
+   publicado el POS; pero si el archivo se abre directamente desde el disco
+   (file://), eso daría un enlace inservible impreso en un contrato. En ese caso
+   se usa la dirección publicada. */
+const AU_URL_PUBLICADA='https://mfge2009-ai.github.io/madriguera-pos/';
 function auURLPublica(token){
-  const base=location.origin+location.pathname.replace(/[^/]*$/,'')+'autores/';
+  const enLinea = location.protocol==='http:' || location.protocol==='https:';
+  const base = enLinea
+    ? location.origin+location.pathname.replace(/[^/]*$/,'')+'autores/'
+    : AU_URL_PUBLICADA+'autores/';
   return base+'?t='+encodeURIComponent(token);
 }
 
@@ -10289,6 +10296,7 @@ function textoContratoAutorEC(a,obras){
   const pctCasa=_r2(1-pct);
   const plazo=(a&&a.plazoDias)||AU_PLAZO_DEF;
   const hoy=fechaCorta(localISO());
+  const enlace=(a&&a.token)?auURLPublica(a.token):'';
   const filas=(obras||[]).map((o,i)=>`<tr>
       <td style="text-align:center">${i+1}</td>
       <td>${esc(o.titulo)}</td>
@@ -10333,7 +10341,7 @@ function textoContratoAutorEC(a,obras){
 
 <p><b>UNDÉCIMA — TERMINACIÓN.</b> Este contrato termina por vencimiento del plazo sin renovación, por mutuo acuerdo, por decisión unilateral de cualquiera de las partes notificada con quince días de anticipación, o por incumplimiento de las obligaciones aquí pactadas. En todos los casos, EL COMISIONISTA liquidará las ventas pendientes y EL COMITENTE retirará los ejemplares no vendidos mediante acta.</p>
 
-<p><b>DUODÉCIMA — ACEPTACIÓN ELECTRÓNICA.</b> Las partes reconocen plena validez a la aceptación de este contrato y de sus anexos efectuada por medios electrónicos a través del enlace privado que EL COMISIONISTA pone a disposición de EL COMITENTE, en el que constan la fecha y hora de aceptación.</p>
+<p><b>DUODÉCIMA — ACEPTACIÓN ELECTRÓNICA.</b> Las partes reconocen plena validez a la aceptación de este contrato y de sus anexos efectuada por medios electrónicos a través del enlace privado que EL COMISIONISTA pone a disposición de EL COMITENTE, en el que constan la fecha y hora de aceptación.${enlace?` El enlace asignado a EL COMITENTE es: <b>${esc(enlace)}</b>`:''}</p>
 
 <p><b>DECIMOTERCERA — DOMICILIO Y CONTROVERSIAS.</b> Para todos los efectos las partes fijan su domicilio en la ciudad de ${esc(AU_CASA.ciudad)} y se someten a la jurisdicción de sus jueces competentes, renunciando a fuero y domicilio distintos.</p>
 
@@ -10353,6 +10361,13 @@ function textoContratoAutorEC(a,obras){
 </table>
 <p style="font-size:11px;margin-top:10px">Recibí conforme los ejemplares detallados: _______________________________ (EL COMISIONISTA)</p>
 <p style="font-size:11px">Entregué conforme los ejemplares detallados: _______________________________ (EL COMITENTE)</p>
+${enlace?`
+<div class="au-seguimiento">
+  <h3 style="margin:0 0 4px">SEGUIMIENTO DE SUS VENTAS</h3>
+  <p style="margin:0 0 6px;font-size:11.5px">Usted puede consultar en cualquier momento, sin necesidad de cuenta ni contraseña, cuántos ejemplares quedan en exhibición, qué se ha vendido y cuánto le corresponde. Abra en su teléfono:</p>
+  <p style="margin:0;font-family:system-ui,sans-serif;font-size:12px;word-break:break-all"><b>${esc(enlace)}</b></p>
+  <p style="margin:6px 0 0;font-size:10.5px">Este enlace es personal y no caduca. Desde ahí también puede leer y aceptar este contrato.</p>
+</div>`:''}
 </div>`;
 }
 
@@ -10367,6 +10382,8 @@ const AU_CSS_DOC=`
 .au-tabla thead th{background:#eee}
 .au-firmas{width:100%;margin-top:34px;font-family:system-ui,sans-serif;font-size:11px}
 .au-firmas td{width:50%;vertical-align:top;padding-top:10px;text-align:center}
+.au-seguimiento{margin-top:16px;border:1.5px solid #333;border-radius:6px;padding:10px 12px;font-family:system-ui,sans-serif}
+.au-seguimiento h3{font-size:12px;letter-spacing:.03em}
 @media print{@page{size:A4;margin:16mm}}
 </style>`;
 
@@ -10834,7 +10851,8 @@ function textoActaLiquidacionEC(l){
     <p style="text-align:center;font-size:11px;margin:0 0 14px">${esc(l.numero||'')} · ${esc(AU_CASA.nombre)}</p>
     <p><b>Autor (comitente):</b> ${esc(a.nombre||'')}${a.cedula?' · C.C. '+esc(a.cedula):''}${a.ruc?' · RUC '+esc(a.ruc):''}<br>
     <b>Fecha de liquidación:</b> ${fechaCorta(l.fecha)}<br>
-    <b>Forma de pago:</b> ${esc(l.metodo||'')}${l.notas?' · '+esc(l.notas):''}</p>
+    <b>Forma de pago:</b> ${esc(l.metodo||'')}${l.notas?' · '+esc(l.notas):''}${a.token?`<br>
+    <b>Seguimiento en línea:</b> ${esc(auURLPublica(a.token))}`:''}</p>
     <table class="au-tabla">
       <thead><tr><th>#</th><th>Obra</th><th>Fecha venta</th><th>Ej.</th><th>PVP</th><th>Bruto</th><th>% autor</th><th>A pagar</th></tr></thead>
       <tbody>${filas||'<tr><td colspan="8" style="text-align:center">Sin detalle</td></tr>'}</tbody>
