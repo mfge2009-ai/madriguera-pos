@@ -378,6 +378,7 @@ nav .ni{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stro
     <button data-v="cartaweb" title="Carta web"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span class="nl">Carta web</span></button>
     <button data-v="agotados" id="nav-agotados" style="display:none" title="Agotados por reponer"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><span class="nl">Agotados</span><span class="nbadge" data-badge="agotados"></span></button>
     <button id="nav-insumos" title="Insumos y recetas"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20A7 7 0 0 1 4 13c0-5 4-9 16-10-1 12-5 16-9 17z"/><path d="M4 21c4-4 7-7 10-9"/></svg><span class="nl">Insumos y recetas</span></button>
+    <button data-v="autores" title="Autores ecuatorianos"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4z"/><path d="M20 4h-7a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h7z"/><path d="M8 8h1M15 8h1"/></svg><span class="nl">Autores EC</span></button>
     <button data-v="consigna" title="Consignación"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg><span class="nl">Consignación</span></button>
     <div class="ngrp">Clientes y SRI</div>
     <button data-v="facturas" title="Facturación"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 13h6M9 17h6"/></svg><span class="nl">Facturación</span><span class="nbadge" data-badge="facturas"></span></button>
@@ -726,7 +727,7 @@ function registrarFallo(accion,e){
 function _contarPendientes(){
   let n=0;
   try{
-    ['tables','clientes','consigna','nomina','gastos_fijos'].forEach(k=>{
+    ['tables','clientes','consigna','autores','nomina','gastos_fijos'].forEach(k=>{
       if(localStorage.getItem('madu_bk_'+k))n++; });
     n+=Object.keys(JSON.parse(localStorage.getItem('madu_bk_ventas')||'{}')).length;
     n+=(JSON.parse(localStorage.getItem('madu_bk_vdel')||'[]')).length;
@@ -789,6 +790,9 @@ let GF=[]; // gastos fijos recurrentes (definiciones)
 let actaConsignante=null,actaLibros=[];
 let consignaSub='libros',editConsignante=null,addLibrosTo=null,csearch='',liquidarTo=null;
 let devolverTo=null,devolSel={},devolSoloVencidos=false; // devolución masiva por consignante
+// Autores ecuatorianos: obras y productos dejados en consignación por su autor
+let AU={autores:[],obras:[],ventas:[],liquidaciones:[]};
+let auSub='autores',auEditAutor=null,auAddObraTo=null,auEditObra=null,auSearch='',auLiquidarTo=null,auEnlaceDe=null;
 // ══════════════════════════════════════════════════════════════
 //  CONSIGNACIÓN — Programa «Tu libro tiene otra vida»
 //  Reparto de CADA venta de un libro consignado.
@@ -1214,7 +1218,7 @@ async function _retryBackups(){
   // Deben estar TODAS las claves que se escriben con _write(). Faltaban
   // 'nomina' y 'gastos_fijos': se respaldaban en localStorage al fallar
   // pero nunca se reintentaban -> perdida silenciosa de datos.
-  const keys=['tables','clientes','consigna','nomina','gastos_fijos'];
+  const keys=['tables','clientes','consigna','autores','nomina','gastos_fijos'];
   let recovered=0;
   for(const key of keys){
     const raw=localStorage.getItem('madu_bk_'+key);
@@ -1318,7 +1322,7 @@ async function _retryBackups(){
 
 // Check for pending backups (shows indicator)
 function _hasPendingBackups(){
-  return ['tables','clientes','consigna'].some(k=>localStorage.getItem('madu_bk_'+k))||!!localStorage.getItem('madu_bk_ventas')||!!localStorage.getItem('madu_bk_vdel')||!!localStorage.getItem('madu_bk_prod')||!!localStorage.getItem('madu_bk_stock');
+  return ['tables','clientes','consigna','autores'].some(k=>localStorage.getItem('madu_bk_'+k))||!!localStorage.getItem('madu_bk_ventas')||!!localStorage.getItem('madu_bk_vdel')||!!localStorage.getItem('madu_bk_prod')||!!localStorage.getItem('madu_bk_stock');
 }
 
 // FASE 2: cada venta es su propio documento en la coleccion "ventas".
@@ -1418,6 +1422,7 @@ async function ajustarStock(productId,delta){
     if(cur<999) lp.stock=Math.max(0,cur+delta);
   }
   if(String(productId).startsWith('cg_'))return; // virtual de consignacion: su estado vive en CG
+  if(String(productId).startsWith('ac_'))return; // virtual de autor ecuatoriano: su stock vive en AU
   try{
     await runTransaction(db,async tx=>{
       const ref=doc(db,PRODUCTOS_COL,String(productId));
@@ -1488,6 +1493,7 @@ async function migrarProductos(){
 const sT=()=>_write('tables',T);
 const sCL=()=>_write('clientes',CL);
 const sCG=()=>_write('consigna',CG);
+const sAU=()=>_write('autores',AU);
 // Al guardar la nomina, la administracion publica tambien la lista de personal
 // (solo id, nombre y si esta activo) que usa la caja para registrar anticipos.
 let _personalPublicado=null;
@@ -1826,6 +1832,7 @@ function _catAplicar(completo){
   }
   P=arr;
   injectConsignaProducts();
+  injectAutorProducts();
   setTimeout(patchProducts,3000);
   if(_catOnCambio)_catOnCambio();
 }
@@ -1951,6 +1958,7 @@ function subRT(){
       P=snap.docs.map(d=>d.data());
       _lastPSync=new Map(P.filter(p=>p&&p.id).map(p=>[String(p.id),JSON.stringify(p)]));
       injectConsignaProducts();
+      injectAutorProducts();
       setTimeout(patchProducts,3000);
       _loaded['products']=true;
       _catalogoDisponible=true;
@@ -1961,7 +1969,7 @@ function subRT(){
   // Nomina y gastos fijos: solo administracion (las reglas lo exigen). La
   // cuenta de caja recibe solo la lista de personal (id y nombre, sin sueldos)
   // para registrar anticipos.
-  const _maduDocs=MI_ROL==='admin'?['tables','clientes','consigna','nomina','gastos_fijos']:['tables','clientes','consigna','personal'];
+  const _maduDocs=MI_ROL==='admin'?['tables','clientes','consigna','autores','nomina','gastos_fijos']:['tables','clientes','consigna','autores','personal'];
   _maduDocs.forEach(k=>{
     onSnapshot(doc(db,'madu',k),snap=>{
       if(k==='personal'){
@@ -1973,6 +1981,7 @@ function subRT(){
         if(k==='tables')T=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
         if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
+        if(k==='autores'){AU=snap.data().v||{autores:[],obras:[],ventas:[],liquidaciones:[]};AU.autores=AU.autores||[];AU.obras=AU.obras||[];AU.ventas=AU.ventas||[];AU.liquidaciones=AU.liquidaciones||[];injectAutorProducts();}
         if(k==='nomina'){const d=snap.data().v||{};NOM={empleados:d.empleados||[],anticipos:d.anticipos||[],pagos:d.pagos||[],horas:d.horas||[]};_publicarPersonal();}
         if(k==='gastos_fijos'){GF=snap.data().v||[];}
       }
@@ -2109,6 +2118,7 @@ function render(){
   else if(view==='facturas'){mc.innerHTML=`<div class="sc">${rFacturas()}</div>`;attachFacturas();}
   else if(view==='clientes'){mc.innerHTML=`<div class="sc">${rClientes()}</div>`;attachClientes();}
   else if(view==='consigna'){mc.innerHTML=`<div class="sc">${rConsigna()}</div>`;attachConsigna();}
+  else if(view==='autores'){mc.innerHTML=`<div class="sc">${rAutoresEC()}</div>`;attachAutoresEC();}
   else if(view==='cartaweb'){mc.innerHTML=`<div class="sc">${rCartaWeb()}</div>`;attachCartaWeb();}
   else if(view==='pedidosweb'){mc.innerHTML=`<div class="sc">${rPedidosWeb()}</div>`;attachPedidosWeb();}
   else if(view==='agotados'){mc.innerHTML=`<div class="sc">${rAgotados()}</div>`;attachAgotados();}
@@ -2622,6 +2632,7 @@ function attachPOS(){
     // Register sale for split items only
     const splitSale={id:`s${Date.now()}`,tableId:t.id,tableName:t.name,items:splitOrder,total:splitTot,paymentMethod:selPay,date:localISO(),closed:false,user:turnoUser,esParcial:true};
     procesarVentaConsigna(splitSale);
+    procesarVentaAutorEC(splitSale);
     S.push(splitSale);
     // Reduce quantities from table order
     Object.entries(splitItems).forEach(([lid,qty])=>{
@@ -2686,7 +2697,7 @@ async function addItem(p,variant){
   const ex=t.order.find(i=>i.lid===lid);
   const nuevaLinea=!ex;
   if(ex){ex.qty++;}
-  else{t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:1,variant:variant||null,stockControl:p.stockControl||'sin_control',persona:persona});}
+  else{t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esAutorEC?('Autor EC: '+(p.subcategory||'')):p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:1,variant:variant||null,stockControl:p.stockControl||'sin_control',persona:persona});}
   t.status='ocupada';
   if(!t.openedAt)t.openedAt=localISO();
   render(); // instant UI feedback
@@ -3135,6 +3146,7 @@ async function anularVenta(ventaId){
   if(!S.some(x=>x.id===anulRec.id)) S.push(anulRec);
   // Revertir libros consignados a "disponible" si la venta los incluia
   revertirConsignaVenta(venta);
+  revertirAutorECVenta(venta);
   // Restore stock for unidad products (transaccion atomica por producto)
   venta.items?.forEach(i=>{
     if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,i.qty); }
@@ -3194,6 +3206,7 @@ async function confirmarCobro(){
     selT=null;
     // Marcar ventas de libros consignados y actualizar saldo del consignante
     procesarVentaConsigna(venta);
+    procesarVentaAutorEC(venta);
     // Add to local array for instant UI
     S.push(venta);
     render();
@@ -7160,10 +7173,15 @@ function avisoCorteProveedor(rango){
 // Prioridad: snapshot del item -> producto actual -> consignacion -> vacio.
 function infoLibroItem(i){
   const prod=P.find(x=>x.id===i.productId||x.name===i.name);
-  const esCg=String(i.productId||'').startsWith('cg_')||prod?.esConsignado;
+  const esAu=String(i.productId||'').startsWith('ac_')||prod?.esAutorEC;
+  const esCg=!esAu&&(String(i.productId||'').startsWith('cg_')||prod?.esConsignado);
   let cat=(i&&i.category)||prod?.category||(esCg?'Consignados':null);
   let proveedor=i.proveedor||null, editorial=i.editorial??null, isbn=i.isbn||prod?.code||'';
-  if(esCg){
+  if(esAu){
+    cat=AU_CAT;
+    if(!proveedor) proveedor=repProvAutorEC(i.productId,prod);
+    editorial=editorial||'';
+  }else if(esCg){
     cat='Consignados';
     if(!proveedor){
       const lid=String(i.productId||'').slice(3);
@@ -7643,10 +7661,12 @@ function mapaProveedores(ventas){
       }else if(!prod&&isbn&&!id.startsWith('cg_')&&i.category!=='Consignados'){
         prod=porISBN.get(isbn);
       }
-      const esConsignado=id.startsWith('cg_')||i.category==='Consignados'||prod?.esConsignado;
+      const esAutorEC=id.startsWith('ac_')||i.category===AU_CAT||prod?.esAutorEC;
+      const esConsignado=!esAutorEC&&(id.startsWith('cg_')||i.category==='Consignados'||prod?.esConsignado);
       const guardado=String(i.proveedor??'').trim();
       const consignante=String(nombresConsigna.get(consignacion?.consignanteId??prod?.consignanteId)||'').trim();
       const proveedor=repClaveProveedor(guardado)?guardado:
+        esAutorEC?repProvAutorEC(id,prod):
         esConsignado?(consignante?'Consignación: '+consignante:''):String(prod?.author??'').trim();
       const clave=repClaveProveedor(proveedor);
       const linea={
@@ -7659,8 +7679,8 @@ function mapaProveedores(ventas){
       };
       if(!clave){ pendientes.push(linea); return; }
       if(!grupos.has(clave))grupos.set(clave,{
-        clave,nombre:clave==='oceano'?'Océano':proveedor,consignado:clave.startsWith('consignacion:'),
-        unidades:0,bruto:0,descuento:0,neto:0,resumen:new Map(),detalle:[]
+        clave,nombre:clave==='oceano'?'Océano':proveedor,consignado:clave.startsWith('consignacion:')||clave.startsWith('autor ec:'),
+        unidades:0,bruto:0,descuento:0,neto:0,corresponde:0,pcts:new Set(),resumen:new Map(),detalle:[]
       });
       const grupo=grupos.get(clave);
       const titulo=linea.codigo?'codigo:'+(repISBN(linea.codigo)||linea.codigo):id?'id:'+id:'nombre:'+linea.nombre;
@@ -7673,6 +7693,11 @@ function mapaProveedores(ventas){
       for(const campo of ['unidades','bruto','descuento','neto']){
         grupo[campo]+=linea[campo];
         resumen[campo]+=linea[campo];
+      }
+      if(grupo.consignado){
+        const pctLinea=esAutorEC?repPctAutorEC(s.id,id,prod):PCT_CONSIGNANTE;
+        grupo.pcts.add(pctLinea);
+        grupo.corresponde+=Math.round(linea.bruto*pctLinea);
       }
       grupo.detalle.push(linea);
     });
@@ -7750,7 +7775,7 @@ function attachCorteProveedor(panel,rango,ventas){
         </div>
       </div>
       ${tablaCorteProveedor(repColumnasResumen,[...elegido.resumen.map(repFilaResumen),['Total','','',...repImportesCorte(elegido)]],3)}
-      ${elegido.consignado?`<div style="margin-top:6px;font-size:11.5px">Le corresponde (${PCT_C_TXT} de la venta bruta) · <b>${fmt(elegido.bruto/100*PCT_CONSIGNANTE)}</b></div>`:''}
+      ${(()=>{const c=repCorresponde(elegido);return c?`<div style="margin-top:6px;font-size:11.5px">Le corresponde (${c.label} de la venta bruta) · <b>${fmt(c.valor)}</b></div>`:'';})()}
       `:`<div role="status" style="font-size:12px;color:var(--text2)">${mensaje}</div>`);
   };
   buscador.oninput=()=>{
@@ -7815,7 +7840,8 @@ async function descargarExcelCorte(grupo,rango,boton){
     };
     const resumen=ponerHoja('Resumen',repColumnasResumen,grupo.resumen.map(repFilaResumen),
       ['Total','','',...repImportesCorte(grupo)],[20,48,34,12,15,14,15],4);
-    if(grupo.consignado)X.utils.sheet_add_aoa(resumen,[[`Le corresponde (${PCT_C_TXT} de la venta bruta)`,repCentavos(grupo.bruto/100*PCT_CONSIGNANTE)/100]],{origin:-1});
+    const _corr=repCorresponde(grupo);
+    if(_corr)X.utils.sheet_add_aoa(resumen,[[`Le corresponde (${_corr.label} de la venta bruta)`,repCentavos(_corr.valor)/100]],{origin:-1});
     const detalle=grupo.detalle.map(f=>{
       const fila=repFilaDetalle(f);
       fila[0]=excelFecha(f.fecha);
@@ -7846,7 +7872,8 @@ function descargarCSVCorte(grupo,rango){
   grupo.resumen.forEach(f=>rows.push([grupo.nombre,f.codigo,f.nombre,f.editorial,f.unidades,
     f.precio===null?'':(f.precio/100).toFixed(2),(f.bruto/100).toFixed(2)]));
   rows.push(['','','','TOTAL',grupo.unidades,'',(grupo.bruto/100).toFixed(2)]);
-  if(grupo.consignado)rows.push(['','','','LE CORRESPONDE ('+PCT_C_TXT+')','','',(grupo.bruto/100*PCT_CONSIGNANTE).toFixed(2)]);
+  const _corr=repCorresponde(grupo);
+  if(_corr)rows.push(['','','','LE CORRESPONDE ('+_corr.label+')','','',_corr.valor.toFixed(2)]);
   const csv='\uFEFF'+rows.map(r=>r.map(v=>{
     const s=String(v);
     return '"'+(/^\s*[=+@-]/.test(s)&&Number.isNaN(Number(s))?"'":'')+s.replace(/"/g,'""')+'"';
@@ -10064,6 +10091,978 @@ function attachConsigna(){
 const CARTA_SECCIONES=['Bebidas calientes','Bebidas frías','Bubble tea','Desayunos','Platos fuertes','Postres','Snacks'];
 const CARTA_SEC_DE={'Café':'Bebidas calientes','Bebidas':'Bebidas frías','Bubble Tea':'Bubble tea','Platos fuertes':'Platos fuertes','Postres':'Postres','Bebidas con alcohol':'Bebidas frías'};
 const CARTA_TAB='⭐ Temporada';
+
+// ══════════════════════════════════════════════════════════════
+//  AUTORES ECUATORIANOS — obras y productos dejados en consignación
+//  Documento: madu/autores     AU = {autores,obras,ventas,liquidaciones}
+//
+//  Qué lo diferencia de Segunda Vida (libro usado):
+//   · El PVP lo fija el AUTOR. Aquí no se valora nada: no hay
+//     factores de estado, demanda ni escasez.
+//   · El reparto y el plazo se PACTAN con cada autor, y pueden
+//     pactarse por obra. No hay porcentaje único de la casa.
+//   · Una obra tiene VARIOS ejemplares: se controla stock por
+//     título, no un registro por ejemplar como en Segunda Vida.
+//   · Cada venta se registra con el porcentaje CONGELADO al momento
+//     de la venta. Si mañana se renegocia el contrato, lo ya
+//     devengado no cambia. Esto es lo que hace auditable el corte.
+//   · Tarifa 0% de IVA: Art. 55 num. 7 de la Ley de Régimen
+//     Tributario Interno (libros y material complementario que se
+//     comercializa conjuntamente con los libros).
+//
+//  autor: {id,codigo,nombre,cedula,ruc,telefono,email,formaPago,
+//          pctAutor,plazoDias,fecha,notas,token,
+//          contrato:{generado,aceptado,fecha,nombre,canal}}
+//  obra:  {id,autorId,titulo,isbn,code,categoria,pvp,entregados,
+//          stock,vendidos,devueltos,pctAutor,plazoDias,fechaIngreso,
+//          fechaVence,estado:'activa'|'retirada',notas}
+//  venta: {id,obraId,autorId,ventaId,fecha,titulo,cantidad,pvp,bruto,
+//          pctAutor,pagoAutor,comision,liquidacionId}
+//  liq:   {id,autorId,numero,fecha,ventaIds,bruto,comision,pagoAutor,
+//          metodo,user,notas}
+// ══════════════════════════════════════════════════════════════
+
+const AU_PCT_DEF=0.70;          // reparto por omisión si el contrato no dice otra cosa
+const AU_PLAZO_DEF=180;         // plazo de exhibición por omisión, en días
+const AU_CAT='Autores ecuatorianos';
+const AU_COL_PUB='lm_autor_reportes';   // colección de lectura pública por token
+
+function autorECPorId(id){ return (AU.autores||[]).find(a=>a.id===id)||null; }
+function nombreAutorEC(id){ const a=autorECPorId(id); return a?a.nombre:'(autor desconocido)'; }
+function obraECPorId(id){ return (AU.obras||[]).find(o=>o.id===id)||null; }
+// El porcentaje de la obra manda sobre el del autor; si ninguno está pactado, el de omisión.
+function pctObraEC(o){
+  if(o&&o.pctAutor!=null&&o.pctAutor!=='') return +o.pctAutor;
+  const a=o?autorECPorId(o.autorId):null;
+  if(a&&a.pctAutor!=null&&a.pctAutor!=='') return +a.pctAutor;
+  return AU_PCT_DEF;
+}
+function plazoObraEC(o){
+  if(o&&o.plazoDias) return +o.plazoDias;
+  const a=o?autorECPorId(o.autorId):null;
+  if(a&&a.plazoDias) return +a.plazoDias;
+  return AU_PLAZO_DEF;
+}
+function pctAutorEC(a){ return (a&&a.pctAutor!=null&&a.pctAutor!=='')?+a.pctAutor:AU_PCT_DEF; }
+function auPct(p){ return Math.round((+p||0)*1000)/10+'%'; }
+function auId(pre){ return pre+Date.now().toString(36)+Math.random().toString(36).slice(2,5); }
+function auToken(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,10); }
+function auCodigo(tipo){
+  const n=(tipo==='autor'?(AU.autores||[]).length:(AU.obras||[]).length)+1;
+  return (tipo==='autor'?'AE-':'OB-')+String(n).padStart(4,'0');
+}
+// Dirección de la página pública del autor, derivada de donde está publicado el POS.
+function auURLPublica(token){
+  const base=location.origin+location.pathname.replace(/[^/]*$/,'')+'autores/';
+  return base+'?t='+encodeURIComponent(token);
+}
+
+// Inyecta las obras CON EJEMPLARES DISPONIBLES como productos virtuales en P,
+// para que se vendan en caja con el flujo normal (escaneando o buscando).
+// Los virtuales llevan id "ac_<obraId>" y bandera esAutorEC.
+function injectAutorProducts(){
+  P=P.filter(p=>!p.esAutorEC);
+  const virtuales=(AU.obras||[])
+    .filter(o=>o.estado!=='retirada'&&(+o.stock||0)>0)
+    .map(o=>({
+      id:'ac_'+o.id,
+      name:o.titulo,
+      category:AU_CAT,
+      subcategory:nombreAutorEC(o.autorId),
+      price:+o.pvp||0,
+      stock:+o.stock||0,
+      code:o.code||o.isbn||'',
+      author:nombreAutorEC(o.autorId),
+      active:true,
+      stockControl:'unidad',
+      hasVariants:false,
+      claseIVA:'IVA0',        // libros: tarifa 0% (Art. 55 num. 7 LRTI)
+      esAutorEC:true,
+      autorECId:o.autorId,
+      obraECId:o.id
+    }));
+  P=P.concat(virtuales);
+}
+
+// Al cobrar: descuenta ejemplares y asienta la venta en el libro de ventas del
+// autor con el porcentaje congelado. No toca el catálogo real de productos.
+function procesarVentaAutorEC(venta){
+  if(!venta||!venta.items) return;
+  let toco=false;
+  venta.itemsAutorEC=venta.itemsAutorEC||[];
+  AU.ventas=AU.ventas||[];
+  venta.items.forEach(it=>{
+    const p=P.find(x=>x.id===it.productId);
+    if(!p||!p.esAutorEC) return;
+    const o=obraECPorId(p.obraECId);
+    if(!o) return;
+    const qty=Math.max(1,+it.qty||1);
+    const pct=pctObraEC(o);
+    const pvp=+it.price||0;
+    const bruto=_r2(pvp*qty);
+    const pago=_r2(bruto*pct);
+    o.stock=Math.max(0,(+o.stock||0)-qty);
+    o.vendidos=(+o.vendidos||0)+qty;
+    const reg={id:auId('av'),obraId:o.id,autorId:o.autorId,ventaId:venta.id,
+      fecha:localISO(),titulo:o.titulo,cantidad:qty,pvp,bruto,
+      pctAutor:pct,pagoAutor:pago,comision:_r2(bruto-pago)};
+    AU.ventas.push(reg);
+    venta.itemsAutorEC.push({obraId:o.id,titulo:o.titulo,autorId:o.autorId,
+      cantidad:qty,precio:pvp,bruto,pctAutor:pct,pagoAutor:pago,registroId:reg.id});
+    toco=true;
+  });
+  if(toco){
+    venta.esAutorECVenta=true;
+    injectAutorProducts();
+    sAU();
+    auPublicarPronto();
+  }
+}
+
+// Al ANULAR una venta: repone ejemplares y borra el asiento, salvo que ya se
+// haya liquidado al autor (ahí no se toca nada y se avisa, igual que en Segunda Vida).
+function revertirAutorECVenta(venta){
+  if(!venta||!venta.itemsAutorEC||!venta.itemsAutorEC.length) return;
+  let toco=false; const yaLiquidados=[];
+  venta.itemsAutorEC.forEach(ia=>{
+    const reg=(AU.ventas||[]).find(v=>v.id===ia.registroId)
+          ||(AU.ventas||[]).find(v=>v.ventaId===venta.id&&v.obraId===ia.obraId);
+    if(!reg) return;
+    if(reg.liquidacionId){ yaLiquidados.push(ia.titulo); return; }
+    const o=obraECPorId(ia.obraId);
+    if(o){
+      o.stock=(+o.stock||0)+(+reg.cantidad||1);
+      o.vendidos=Math.max(0,(+o.vendidos||0)-(+reg.cantidad||1));
+    }
+    AU.ventas=AU.ventas.filter(v=>v.id!==reg.id);
+    toco=true;
+  });
+  if(toco){ injectAutorProducts(); sAU(); auPublicarPronto(); }
+  if(yaLiquidados.length){
+    alert('Atención: estas ventas de autor ya fueron liquidadas y NO se revirtieron automáticamente:\n- '
+      +yaLiquidados.join('\n- ')+'\nRevisa la liquidación manualmente.');
+  }
+}
+
+// Saldo por pagar a un autor: ventas asentadas que todavía no entraron en una liquidación.
+function saldoAutorEC(aid){
+  const pend=(AU.ventas||[]).filter(v=>v.autorId===aid&&!v.liquidacionId);
+  const bruto=_r2(pend.reduce((a,v)=>a+(+v.bruto||0),0));
+  const pago=_r2(pend.reduce((a,v)=>a+(+v.pagoAutor||0),0));
+  return {ventas:pend,bruto,pago,comision:_r2(bruto-pago),unidades:pend.reduce((a,v)=>a+(+v.cantidad||0),0)};
+}
+// Lo entregado y lo que queda en exhibición, por autor.
+function resumenAutorEC(aid){
+  const obras=(AU.obras||[]).filter(o=>o.autorId===aid);
+  return {
+    obras,
+    titulos:obras.length,
+    entregados:obras.reduce((a,o)=>a+(+o.entregados||0),0),
+    stock:obras.reduce((a,o)=>a+(+o.stock||0),0),
+    vendidos:obras.reduce((a,o)=>a+(+o.vendidos||0),0),
+    devueltos:obras.reduce((a,o)=>a+(+o.devueltos||0),0),
+    vencidas:obras.filter(o=>o.estado!=='retirada'&&(+o.stock||0)>0&&o.fechaVence&&new Date(o.fechaVence)<new Date()).length
+  };
+}
+
+/* ── Datos de la casa para el contrato ──────────────────────────
+   Si cambia el RUC o el representante, se corrige aquí y queda
+   corregido en todos los contratos y actas que se generen después. */
+const AU_CASA={
+  nombre:'LA MADRIGUERA — CAFÉ Y LIBROS',
+  ruc:'',
+  representante:'MARÍA FERNANDA GONZÁLEZ ECHEVERRÍA',
+  direccion:'Urdesa Central, Guayaquil',
+  ciudad:'Guayaquil'
+};
+
+/* Texto del contrato. Figura jurídica: COMISIÓN MERCANTIL del Código de
+   Comercio (R.O.S. 497, 29-V-2019), que es la que corresponde en Ecuador a
+   este arreglo. El "contrato estimatorio" que aparece en los modelos de
+   internet es del Código de Comercio COLOMBIANO (Art. 1377) y no aplica aquí.
+   El Art. 443 exige que el contrato de comisión conste por escrito y contenga
+   el encargo, su duración, el valor y forma de pago de la comisión y el
+   detalle de los bienes consignados: por eso el anexo de obras es parte del
+   contrato y no un adjunto informativo. */
+function textoContratoAutorEC(a,obras){
+  const pct=pctAutorEC(a);
+  const pctCasa=_r2(1-pct);
+  const plazo=(a&&a.plazoDias)||AU_PLAZO_DEF;
+  const hoy=fechaCorta(localISO());
+  const filas=(obras||[]).map((o,i)=>`<tr>
+      <td style="text-align:center">${i+1}</td>
+      <td>${esc(o.titulo)}</td>
+      <td style="text-align:center">${esc(o.isbn||o.code||'—')}</td>
+      <td style="text-align:center">${+o.entregados||0}</td>
+      <td style="text-align:right">${fmt(o.pvp)}</td>
+      <td style="text-align:center">${auPct(pctObraEC(o))}</td>
+      <td style="text-align:right">${fmt((+o.entregados||0)*(+o.pvp||0))}</td>
+    </tr>`).join('');
+  const totEj=(obras||[]).reduce((s,o)=>s+(+o.entregados||0),0);
+  const totVal=(obras||[]).reduce((s,o)=>s+(+o.entregados||0)*(+o.pvp||0),0);
+
+  return `
+<div class="au-contrato">
+<h2 style="text-align:center;margin:0 0 2px">CONTRATO DE COMISIÓN MERCANTIL PARA LA VENTA DE OBRAS EN CONSIGNACIÓN</h2>
+<p style="text-align:center;font-size:11px;margin:0 0 14px">Código de Comercio, Libro II, Título Sexto — La comisión</p>
+
+<p><b>COMPARECIENTES.—</b> En la ciudad de ${esc(AU_CASA.ciudad)}, a ${hoy}, comparecen a la celebración del presente contrato:</p>
+<p><b>1. EL COMITENTE:</b> ${esc((a&&a.nombre)||'………………………………')}, portador de la cédula de ciudadanía No. ${esc((a&&a.cedula)||'………………')}${a&&a.ruc?`, con Registro Único de Contribuyentes No. ${esc(a.ruc)}`:''}, por sus propios y personales derechos, en calidad de autor y titular de los derechos patrimoniales de las obras que constan en el Anexo A.</p>
+<p><b>2. EL COMISIONISTA:</b> ${esc(AU_CASA.nombre)}${AU_CASA.ruc?`, con Registro Único de Contribuyentes No. ${esc(AU_CASA.ruc)}`:''}, con establecimiento en ${esc(AU_CASA.direccion)}, representada por ${esc(AU_CASA.representante)}.</p>
+<p>Los comparecientes son hábiles para contratar y obligarse, y libre y voluntariamente convienen en celebrar el presente contrato al tenor de las siguientes cláusulas:</p>
+
+<p><b>PRIMERA — ANTECEDENTES Y DECLARACIÓN DE TITULARIDAD.</b> EL COMITENTE declara, bajo su exclusiva responsabilidad, ser autor y titular de los derechos patrimoniales de las obras detalladas en el Anexo A, conforme al régimen de derechos de autor del Código Orgánico de la Economía Social de los Conocimientos, Creatividad e Innovación (R.O.S. 899 de 9 de diciembre de 2016), y que sobre ellas no pesa gravamen, cesión exclusiva ni limitación alguna que impida su comercialización. EL COMITENTE garantiza que las obras no infringen derechos de terceros y asume toda responsabilidad frente a cualquier reclamo por este concepto, dejando a salvo e indemne a EL COMISIONISTA.</p>
+
+<p><b>SEGUNDA — OBJETO Y NATURALEZA DEL ENCARGO.</b> EL COMITENTE encarga a EL COMISIONISTA la venta al público, en su establecimiento comercial y por cuenta de EL COMITENTE, de los ejemplares entregados en consignación que se detallan en el Anexo A. El encargo se rige por las disposiciones del Código de Comercio relativas a la comisión y, en lo no previsto, por las normas del Código Civil sobre el mandato.</p>
+
+<p><b>TERCERA — LA PROPIEDAD NO SE TRANSFIERE.</b> La entrega de los ejemplares no constituye venta ni transfiere dominio. Los ejemplares consignados permanecen en propiedad de EL COMITENTE hasta el momento de su venta al consumidor final, y no ingresan al patrimonio de EL COMISIONISTA. En consecuencia, no pueden ser considerados parte del inventario propio de EL COMISIONISTA para ningún efecto.</p>
+
+<p><b>CUARTA — PRECIO DE VENTA AL PÚBLICO.</b> El precio de venta al público de cada obra es fijado por EL COMITENTE y consta en el Anexo A. EL COMISIONISTA no podrá venderlas a un precio distinto sin autorización escrita de EL COMITENTE. Toda modificación de precio se hará constar mediante anexo suscrito por ambas partes o mediante aceptación registrada en el sistema de EL COMISIONISTA.</p>
+
+<p><b>QUINTA — REPARTO DEL PRECIO Y COMISIÓN.</b> De cada ejemplar vendido corresponde a EL COMITENTE el <b>${auPct(pct)}</b> del precio de venta al público, y a EL COMISIONISTA, por concepto de comisión mercantil, el <b>${auPct(pctCasa)}</b> del mismo precio. El reparto pactado se aplica al precio vigente al momento de cada venta y las ventas ya realizadas no se ven afectadas por modificaciones posteriores de este porcentaje.</p>
+
+<p><b>SEXTA — PLAZO DE EXHIBICIÓN.</b> El plazo de exhibición es de <b>${plazo} días</b> contados desde la fecha de recepción de cada obra, renovable por acuerdo de las partes. Vencido el plazo sin renovación, EL COMITENTE podrá retirar los ejemplares no vendidos dentro de los treinta días siguientes, previa suscripción del acta de devolución correspondiente.</p>
+
+<p><b>SÉPTIMA — LIQUIDACIÓN Y PAGO.</b> EL COMISIONISTA llevará registro de cada ejemplar vendido con su fecha, precio y porcentaje aplicado, y pondrá a disposición de EL COMITENTE un reporte permanente de consulta. La liquidación se practicará a solicitud de EL COMITENTE o al cierre de cada período acordado, mediante acta de liquidación que detalle los ejemplares vendidos y el valor a pagar. El pago se efectuará por ${esc((a&&a.formaPago)||'el medio que acuerden las partes')} dentro de los quince días siguientes a la suscripción del acta.</p>
+
+<p><b>OCTAVA — CUSTODIA Y RIESGOS.</b> EL COMISIONISTA responde del deterioro o pérdida de los ejemplares consignados que tuviere en su poder, salvo el que provenga de caso fortuito, fuerza mayor o del vicio propio de la cosa, conforme a las normas del Código de Comercio sobre la responsabilidad del comisionista. El desgaste normal derivado de la manipulación del público en exhibición no se considera deterioro imputable.</p>
+
+<p><b>NOVENA — RÉGIMEN TRIBUTARIO.</b> La venta de libros al consumidor final se encuentra gravada con tarifa cero por ciento de Impuesto al Valor Agregado, conforme al artículo 55 numeral 7 de la Ley de Régimen Tributario Interno. La comisión que percibe EL COMISIONISTA constituye servicio de comercialización de libros y se encuentra igualmente gravada con tarifa cero por ciento, conforme al artículo 56 numeral 8 de la misma Ley y al listado de servicios artísticos y culturales establecido mediante Decreto Ejecutivo No. 829, publicado en el Suplemento del Registro Oficial No. 13 de 7 de agosto de 2019, cuyo numeral 8 comprende los servicios de publicación, edición, traducción, impresión y comercialización de libros, y que mantiene su vigencia mientras no sea modificado, sustituido o derogado. EL COMISIONISTA emitirá el comprobante de venta al consumidor final por el precio de venta al público. El valor liquidado a EL COMITENTE se sustentará en el acta de liquidación y en el comprobante de venta que corresponda según su condición tributaria, cuyo cumplimiento es de su exclusiva responsabilidad.</p>
+
+<p><b>DÉCIMA — OBLIGACIONES ADICIONALES DE LAS PARTES.</b> EL COMITENTE se obliga a responder por la calidad de los ejemplares entregados y al saneamiento de los defectos que no sean imputables a EL COMISIONISTA. EL COMISIONISTA se obliga a exhibir las obras en condiciones adecuadas, a no alterar los sellos, marcas ni identificación de las obras, y a informar oportunamente toda circunstancia que afecte el encargo.</p>
+
+<p><b>UNDÉCIMA — TERMINACIÓN.</b> Este contrato termina por vencimiento del plazo sin renovación, por mutuo acuerdo, por decisión unilateral de cualquiera de las partes notificada con quince días de anticipación, o por incumplimiento de las obligaciones aquí pactadas. En todos los casos, EL COMISIONISTA liquidará las ventas pendientes y EL COMITENTE retirará los ejemplares no vendidos mediante acta.</p>
+
+<p><b>DUODÉCIMA — ACEPTACIÓN ELECTRÓNICA.</b> Las partes reconocen plena validez a la aceptación de este contrato y de sus anexos efectuada por medios electrónicos a través del enlace privado que EL COMISIONISTA pone a disposición de EL COMITENTE, en el que constan la fecha y hora de aceptación.</p>
+
+<p><b>DECIMOTERCERA — DOMICILIO Y CONTROVERSIAS.</b> Para todos los efectos las partes fijan su domicilio en la ciudad de ${esc(AU_CASA.ciudad)} y se someten a la jurisdicción de sus jueces competentes, renunciando a fuero y domicilio distintos.</p>
+
+<p>Para constancia, las partes suscriben el presente contrato en dos ejemplares de igual tenor y valor.</p>
+
+<table class="au-firmas"><tr>
+  <td>_______________________________<br><b>EL COMITENTE</b><br>${esc((a&&a.nombre)||'')}<br>C.C. ${esc((a&&a.cedula)||'………………')}</td>
+  <td>_______________________________<br><b>EL COMISIONISTA</b><br>${esc(AU_CASA.representante)}<br>${esc(AU_CASA.nombre)}</td>
+</tr></table>
+
+<h3 style="margin-top:22px">ANEXO A — DETALLE DE LAS OBRAS ENTREGADAS EN CONSIGNACIÓN</h3>
+<p style="font-size:11px;margin:0 0 8px">Este anexo forma parte integrante del contrato y constituye el detalle de los bienes consignados para el desempeño del encargo.</p>
+<table class="au-tabla">
+  <thead><tr><th>#</th><th>Título</th><th>ISBN / código</th><th>Ejemplares</th><th>PVP</th><th>% autor</th><th>Valor PVP total</th></tr></thead>
+  <tbody>${filas||'<tr><td colspan="7" style="text-align:center">Sin obras registradas</td></tr>'}</tbody>
+  <tfoot><tr><th colspan="3">TOTAL</th><th style="text-align:center">${totEj}</th><th></th><th></th><th style="text-align:right">${fmt(totVal)}</th></tr></tfoot>
+</table>
+<p style="font-size:11px;margin-top:10px">Recibí conforme los ejemplares detallados: _______________________________ (EL COMISIONISTA)</p>
+<p style="font-size:11px">Entregué conforme los ejemplares detallados: _______________________________ (EL COMITENTE)</p>
+</div>`;
+}
+
+const AU_CSS_DOC=`
+<style>
+.au-contrato{font-family:Georgia,'Times New Roman',serif;font-size:12.5px;line-height:1.55;color:#111;max-width:760px;margin:0 auto;text-align:justify}
+.au-contrato h2{font-size:15px;font-family:system-ui,sans-serif}
+.au-contrato h3{font-size:13px;font-family:system-ui,sans-serif}
+.au-contrato p{margin:0 0 9px}
+.au-tabla{width:100%;border-collapse:collapse;font-family:system-ui,sans-serif;font-size:11px}
+.au-tabla th,.au-tabla td{border:1px solid #999;padding:4px 6px}
+.au-tabla thead th{background:#eee}
+.au-firmas{width:100%;margin-top:34px;font-family:system-ui,sans-serif;font-size:11px}
+.au-firmas td{width:50%;vertical-align:top;padding-top:10px;text-align:center}
+@media print{@page{size:A4;margin:16mm}}
+</style>`;
+
+function auImprimirDoc(html,titulo){
+  const w=window.open('','_blank');
+  if(!w){ alert('El navegador bloqueó la ventana de impresión. Permite las ventanas emergentes de este sitio.'); return; }
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(titulo||'Documento')+'</title>'+AU_CSS_DOC+'</head><body>'+html+'</body></html>');
+  w.document.close();
+  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} },350);
+}
+
+function auImprimirContrato(aid){
+  const a=autorECPorId(aid); if(!a) return;
+  const obras=(AU.obras||[]).filter(o=>o.autorId===aid&&o.estado!=='retirada');
+  auImprimirDoc(textoContratoAutorEC(a,obras),'Contrato — '+a.nombre);
+}
+
+/* ── Enlace de reporte: lo que ve el autor ─────────────────────
+   El autor no tiene cuenta en el POS, así que no puede leer madu/.
+   Por eso el POS publica una FOTO de su estado en una colección aparte
+   de lectura pública, alcanzable solo con el token.
+
+   La foto va en el campo "v" y es de solo lectura para el autor.
+   Su aceptación del contrato la escribe él en un campo aparte, "firma",
+   que es el único que las reglas le permiten tocar. Cada vez que el POS
+   publica, primero ABSORBE esa firma hacia AU y luego la borra del
+   documento público: así la cédula no se queda en una colección de
+   lectura abierta, y ninguna venta posterior puede pisar una firma
+   todavía no leída. */
+async function auPublicar(aid,silencioso){
+  const a=autorECPorId(aid); if(!a) return false;
+  if(!a.token){ a.token=auToken(); await sAU(); }
+  const ref=doc(db,AU_COL_PUB,a.token);
+
+  // 1. Absorber la firma que el autor haya dejado en el enlace.
+  let firmaPendiente=null, nuevaFirma=false;
+  try{
+    const prev=await getDoc(ref);
+    const f=prev.exists()?prev.data().firma:null;
+    if(f&&f.aceptado){
+      if(!(a.contrato&&a.contrato.aceptado)){
+        a.contrato=Object.assign({},a.contrato||{},{
+          aceptado:true,fecha:f.fecha||localISO(),
+          nombre:f.nombre||a.nombre||'',cedula:f.cedula||a.cedula||'',canal:'enlace'});
+        if(!a.cedula&&f.cedula) a.cedula=f.cedula;
+        nuevaFirma=true;
+        await sAU();
+      }
+    }else if(f){
+      firmaPendiente=f;   // firma a medias: no se pierde
+    }
+  }catch(e){ /* sin conexión: se absorberá en la próxima publicación */ }
+
+  // 2. Volver a armar la foto, ya con la firma reflejada.
+  const r=resumenAutorEC(aid), s=saldoAutorEC(aid);
+  const obras=r.obras.map(o=>({titulo:o.titulo,isbn:o.isbn||o.code||'',pvp:+o.pvp||0,
+    entregados:+o.entregados||0,stock:+o.stock||0,vendidos:+o.vendidos||0,
+    devueltos:+o.devueltos||0,pct:pctObraEC(o),fechaIngreso:o.fechaIngreso||'',
+    fechaVence:o.fechaVence||'',estado:o.estado||'activa'}));
+  const ventas=(AU.ventas||[]).filter(v=>v.autorId===aid)
+    .sort((x,y)=>String(y.fecha).localeCompare(String(x.fecha)))
+    .map(v=>({fecha:String(v.fecha||'').slice(0,10),titulo:v.titulo,cantidad:+v.cantidad||0,
+      pvp:+v.pvp||0,bruto:+v.bruto||0,pct:+v.pctAutor||0,pagoAutor:+v.pagoAutor||0,
+      liquidada:!!v.liquidacionId}));
+  const liquidaciones=(AU.liquidaciones||[]).filter(l=>l.autorId===aid)
+    .sort((x,y)=>String(y.fecha).localeCompare(String(x.fecha)))
+    .map(l=>({numero:l.numero||'',fecha:String(l.fecha||'').slice(0,10),
+      unidades:+l.unidades||0,bruto:+l.bruto||0,pagoAutor:+l.pagoAutor||0,metodo:l.metodo||''}));
+  const foto={
+    autor:{nombre:a.nombre||'',codigo:a.codigo||''},
+    casa:{nombre:AU_CASA.nombre,direccion:AU_CASA.direccion,ciudad:AU_CASA.ciudad},
+    condiciones:{pct:pctAutorEC(a),plazoDias:(a.plazoDias||AU_PLAZO_DEF),formaPago:a.formaPago||''},
+    contrato:{aceptado:!!(a.contrato&&a.contrato.aceptado),
+      fecha:(a.contrato&&a.contrato.fecha)||'',
+      nombre:(a.contrato&&a.contrato.nombre)||''},
+    contratoTexto:textoContratoAutorEC(Object.assign({},a,{cedula:''}),r.obras),
+    obras,ventas,liquidaciones,
+    totales:{titulos:r.titulos,entregados:r.entregados,stock:r.stock,vendidos:r.vendidos,
+      devueltos:r.devueltos,brutoPendiente:s.bruto,porPagar:s.pago,unidadesPendientes:s.unidades},
+    actualizado:localISO()
+  };
+  const payload=firmaPendiente?{v:foto,firma:firmaPendiente}:{v:foto};
+  try{
+    await setDoc(ref,payload,{merge:false});
+    if(nuevaFirma&&!silencioso) alert('Se registró la aceptación del contrato de '+a.nombre+'.');
+    return true;
+  }catch(e){
+    if(!silencioso) alert('No se pudo publicar el reporte del autor: '+((e&&e.message)||e)
+      +'\n\nSi el mensaje dice "permission", faltan por publicar las reglas de la colección '+AU_COL_PUB+'.');
+    return false;
+  }
+}
+let _auPubT=null;
+function auPublicarPronto(){
+  if(_auPubT) return;
+  _auPubT=setTimeout(async()=>{
+    _auPubT=null;
+    for(const a of (AU.autores||[]).filter(x=>x.token)){ await auPublicar(a.id,true); }
+  },4000);
+}
+
+/* Revisar firmas: republicar a todos absorbe, de paso, las aceptaciones
+   que los autores hayan dejado en sus enlaces. */
+async function auLeerAceptaciones(){
+  const antes=new Set((AU.autores||[]).filter(a=>a.contrato&&a.contrato.aceptado).map(a=>a.id));
+  for(const a of (AU.autores||[]).filter(x=>x.token)){ await auPublicar(a.id,true); }
+  return (AU.autores||[]).filter(a=>a.contrato&&a.contrato.aceptado&&!antes.has(a.id)).length;
+}
+
+/* ── Puentes con los reportes del POS ──────────────────────────
+   El corte por proveedor del POS calculaba lo que le corresponde al
+   consignante con una constante global (70/30). Con autores que pactan
+   su propio reparto esa constante liquida mal, así que cada línea
+   aporta el porcentaje que tenía la venta cuando se cobró. */
+function repProvAutorEC(id,prod){
+  const oid=String(id||'').startsWith('ac_')?String(id).slice(3):((prod&&prod.obraECId)||'');
+  const o=obraECPorId(oid);
+  const n=o?nombreAutorEC(o.autorId):((prod&&prod.subcategory)||'');
+  return n?('Autor EC: '+n):'';
+}
+function repPctAutorEC(ventaId,id,prod){
+  const oid=String(id||'').startsWith('ac_')?String(id).slice(3):((prod&&prod.obraECId)||'');
+  const reg=(AU.ventas||[]).find(v=>v.ventaId===ventaId&&v.obraId===oid);
+  if(reg&&reg.pctAutor!=null) return +reg.pctAutor;
+  const o=obraECPorId(oid);
+  return o?pctObraEC(o):AU_PCT_DEF;
+}
+/* Devuelve el valor a pagar y la etiqueta del porcentaje de un grupo del corte.
+   Segunda Vida conserva exactamente el cálculo anterior; solo cambia para autores. */
+function repCorresponde(g){
+  if(!g||!g.consignado) return null;
+  if(!String(g.clave||'').startsWith('autor ec:')) return {valor:g.bruto/100*PCT_CONSIGNANTE,label:PCT_C_TXT};
+  const pcts=g.pcts?Array.from(g.pcts):[];
+  return {valor:(g.corresponde||0)/100,
+    label:pcts.length===1?auPct(pcts[0]):'según el contrato de cada obra'};
+}
+
+/* ====================== PESTAÑA: AUTORES ECUATORIANOS ====================== */
+function rAutoresEC(){
+  const soloConsulta=MI_ROL!=='admin';
+  if(soloConsulta){ auEditAutor=null; auAddObraTo=null; auLiquidarTo=null; auEditObra=null;
+    if(auSub!=='obras'&&auSub!=='ventas') auSub='obras'; }
+  const subs=soloConsulta?[['obras','Obras'],['ventas','Ventas']]
+    :[['autores','Autores'],['obras','Obras'],['ventas','Ventas'],['liq','Liquidaciones']];
+  const tabs=subs.map(([k,l])=>`<button class="ctab${auSub===k?' on':''}" data-asub="${k}">${l}</button>`).join('');
+
+  const nAut=(AU.autores||[]).length;
+  const titulos=(AU.obras||[]).filter(o=>o.estado!=='retirada'&&(+o.stock||0)>0).length;
+  const ejemplares=(AU.obras||[]).filter(o=>o.estado!=='retirada').reduce((a,o)=>a+(+o.stock||0),0);
+  const porPagar=_r2((AU.autores||[]).reduce((a,x)=>a+saldoAutorEC(x.id).pago,0));
+  const vencidas=(AU.obras||[]).filter(o=>o.estado!=='retirada'&&(+o.stock||0)>0&&o.fechaVence&&new Date(o.fechaVence)<new Date()).length;
+  const sinContrato=(AU.autores||[]).filter(a=>!(a.contrato&&a.contrato.aceptado)).length;
+
+  const kpis=`<div class="stats-grid" style="margin-bottom:14px">
+    <div class="stat"><div class="stat-n">${nAut}</div><div class="stat-l">Autores</div></div>
+    <div class="stat"><div class="stat-n">${titulos}</div><div class="stat-l">Títulos en exhibición</div></div>
+    <div class="stat"><div class="stat-n">${ejemplares}</div><div class="stat-l">Ejemplares en percha</div></div>
+    <div class="stat"><div class="stat-n" style="color:${porPagar>0?'#0a7a4a':'inherit'}">${fmt(porPagar)}</div><div class="stat-l">Por pagar a autores</div></div>
+    <div class="stat"><div class="stat-n" style="color:${vencidas>0?'#b03030':'inherit'}">${vencidas}</div><div class="stat-l">Títulos con plazo vencido</div></div>
+  </div>`;
+
+  let body='';
+  if(auEnlaceDe) body=rAuEnlace();
+  else if(auSub==='autores') body=rAuAutores();
+  else if(auSub==='obras') body=rAuObras();
+  else if(auSub==='ventas') body=rAuVentas();
+  else body=rAuLiquidaciones();
+
+  return `<h2 style="margin:0 0 4px">Autores ecuatorianos</h2>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Obras y productos dejados en consignación por su autor · el PVP lo fija el autor · reparto y plazo pactados en cada contrato</div>
+    <div style="background:#eef5ff;border:1px solid #b9d3f2;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.5;margin-bottom:14px;color:#1a3f6b">
+      📘 Línea distinta de <b>Segunda Vida</b>. Aquí el autor entrega <b>varios ejemplares de un mismo título</b> y pone el precio; la casa cobra una comisión pactada. Las obras entran solas a la caja y se venden escaneando. Cada venta guarda el porcentaje que estaba vigente ese día, así una renegociación futura no altera lo ya devengado.
+      ${sinContrato?`<br><b>${sinContrato} autor(es) sin contrato aceptado.</b>`:''}
+    </div>
+    ${kpis}
+    <div class="ctabs" style="margin-bottom:14px">${tabs}</div>
+    <div>${body}</div>`;
+}
+
+/* ── Sub-vista: Autores ─────────────────────────────────────── */
+function rAuAutores(){
+  if(auEditAutor){
+    const a=auEditAutor==='new'?{}:(autorECPorId(auEditAutor)||{});
+    const esNuevo=auEditAutor==='new';
+    return `<div class="card" style="padding:16px;max-width:620px">
+      <h3 style="margin:0 0 4px">${esNuevo?'Nuevo autor':'Editar autor'}</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Los datos de identificación se usan en el contrato. El reparto y el plazo que pongas aquí rigen para todas sus obras, salvo que una obra pacte otro.</div>
+      <div class="two-col">
+        <div class="fg" style="grid-column:1/3"><label>Nombre completo *</label><input id="au-nombre" value="${esc(a.nombre||'')}" placeholder="Nombre y apellidos del autor"></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>Cédula</label><input id="au-cedula" value="${esc(a.cedula||'')}"></div>
+        <div class="fg"><label>RUC (si factura)</label><input id="au-ruc" value="${esc(a.ruc||'')}"></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>Teléfono</label><input id="au-tel" value="${esc(a.telefono||'')}"></div>
+        <div class="fg"><label>Correo</label><input id="au-email" type="email" value="${esc(a.email||'')}"></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>% que recibe el autor *</label><input id="au-pct" type="number" step="1" min="0" max="100" value="${a.pctAutor!=null&&a.pctAutor!==''?Math.round(a.pctAutor*100):Math.round(AU_PCT_DEF*100)}"></div>
+        <div class="fg"><label>Plazo de exhibición (días) *</label><input id="au-plazo" type="number" step="15" min="15" value="${a.plazoDias||AU_PLAZO_DEF}"></div>
+      </div>
+      <div class="fg"><label>Forma de pago</label><input id="au-pago" value="${esc(a.formaPago||'')}" placeholder="Ej.: transferencia Banco Pichincha, cuenta de ahorros 22…"></div>
+      <div class="fg"><label>Notas</label><input id="au-notas" value="${esc(a.notas||'')}"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-g" id="au-cancel">Cancelar</button>
+        <button class="btn btn-acc" style="flex:1" id="au-save">${esNuevo?'Crear autor':'Guardar cambios'}</button>
+      </div>
+    </div>`;
+  }
+  const q=auSearch.trim().toLowerCase();
+  let lista=[...(AU.autores||[])].sort((a,b)=>String(a.nombre||'').localeCompare(String(b.nombre||'')));
+  if(q) lista=lista.filter(a=>String(a.nombre||'').toLowerCase().includes(q)||String(a.codigo||'').toLowerCase().includes(q));
+
+  const rows=lista.map(a=>{
+    const r=resumenAutorEC(a.id), s=saldoAutorEC(a.id);
+    const firmado=a.contrato&&a.contrato.aceptado;
+    return `<div class="mrow">
+      <div style="flex:1;min-width:0">
+        <span style="font-weight:600;font-size:13px">${esc(a.nombre)}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:6px">${esc(a.codigo||'')}</span>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">
+          ${auPct(pctAutorEC(a))} autor / ${auPct(_r2(1-pctAutorEC(a)))} casa · plazo ${a.plazoDias||AU_PLAZO_DEF}d ·
+          ${r.titulos} título(s) · ${r.stock} en percha · ${r.vendidos} vendido(s)
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        ${firmado?'<span class="badge bg">Contrato aceptado</span>':'<span class="badge ba">Sin contrato</span>'}
+        ${s.pago>0?`<span class="badge" style="background:#e0f2f1;color:#00695c">Debe ${fmt(s.pago)}</span>`:''}
+        <button class="btn btn-g btn-sm" data-auobras="${a.id}">+ Obras</button>
+        <button class="btn btn-g btn-sm" data-aucontrato="${a.id}">Contrato</button>
+        <button class="btn btn-g btn-sm" data-auenlace="${a.id}">Enlace</button>
+        <button class="btn btn-g btn-sm" data-auedit="${a.id}">Editar</button>
+      </div>
+    </div>`;
+  }).join('')||'<div style="color:var(--text3);font-size:13px;padding:16px">Todavía no hay autores registrados.</div>';
+
+  return `<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input id="au-search" placeholder="Buscar autor…" value="${auSearch.replace(/"/g,'&quot;')}" style="flex:1">
+      <button class="btn btn-acc btn-sm" id="au-new">+ Nuevo autor</button>
+      <button class="btn btn-g btn-sm" id="au-sincfirmas">Revisar firmas</button>
+    </div>
+    ${rows}`;
+}
+
+/* ── Sub-vista: Enlace del autor ─────────────────────────────── */
+function rAuEnlace(){
+  const a=autorECPorId(auEnlaceDe);
+  if(!a) return '<div style="padding:16px">Autor no encontrado.</div>';
+  const url=a.token?auURLPublica(a.token):'';
+  const firmado=a.contrato&&a.contrato.aceptado;
+  const msg=`Hola ${String(a.nombre||'').split(' ')[0]}, te comparto tu enlace privado de La Madriguera. Ahí puedes leer y aceptar el contrato de consignación, ver tus obras en exhibición y seguir tus ventas al día:\n\n${url}\n\nEl enlace es solo tuyo, no caduca y se actualiza cada vez que se vende un ejemplar.`;
+  return `<div class="card" style="padding:16px;max-width:620px">
+    <h3 style="margin:0 0 4px">Enlace de ${esc(a.nombre)}</h3>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:12px">
+      ${firmado?`Contrato aceptado el ${fechaCorta(a.contrato.fecha)}.`:'El autor todavía no ha aceptado el contrato en el enlace.'}
+    </div>
+    ${url?`<div class="fg"><label>Enlace privado</label><input id="au-url" value="${esc(url)}" readonly style="font-size:11.5px"></div>
+    <div class="fg"><label>Mensaje listo para enviar</label><textarea id="au-msg" readonly style="min-height:120px;font-size:12px">${esc(msg)}</textarea></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn btn-g btn-sm" id="au-copyurl">Copiar enlace</button>
+      <button class="btn btn-g btn-sm" id="au-copymsg">Copiar mensaje</button>
+      <button class="btn btn-g btn-sm" id="au-republicar">Actualizar reporte</button>
+      <a class="btn btn-g btn-sm" href="${esc(url)}" target="_blank" rel="noopener">Abrir como lo ve el autor ↗</a>
+    </div>`:`<div class="fg"><button class="btn btn-acc" id="au-crearenlace">Generar el enlace de este autor</button></div>`}
+    <div style="margin-top:14px;font-size:11.5px;color:var(--text3);line-height:1.5">
+      El enlace no exige cuenta: funciona porque el POS publica una copia del estado de este autor en una colección de lectura pública, alcanzable solo con el token. Esa copia no lleva cédula, teléfono ni forma de pago.
+    </div>
+    <div style="margin-top:12px"><button class="btn btn-g btn-sm" id="au-cerrarenlace">Volver</button></div>
+  </div>`;
+}
+
+/* ── Sub-vista: Obras ───────────────────────────────────────── */
+function rAuObras(){
+  const soloConsulta=MI_ROL!=='admin';
+  if(auAddObraTo){
+    const a=autorECPorId(auAddObraTo);
+    const plazo=(a&&a.plazoDias)||AU_PLAZO_DEF;
+    const recientes=(AU.obras||[]).filter(o=>o.autorId===auAddObraTo)
+      .sort((x,y)=>String(y.fechaIngreso).localeCompare(String(x.fechaIngreso))).slice(0,8);
+    return `<div class="card" style="padding:16px;max-width:620px">
+      <h3 style="margin:0 0 4px">Recibir obra en consignación</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">Autor: <b>${a?esc(a.nombre):''}</b> · ${auPct(pctAutorEC(a))} para el autor · vence en ${plazo} días</div>
+      <div class="two-col"><div class="fg" style="grid-column:1/3"><label>Título de la obra *</label><input id="ob-titulo" placeholder="Título tal como va en la percha"></div></div>
+      <div class="two-col">
+        <div class="fg"><label>ISBN o código de barras</label><input id="ob-isbn" placeholder="Escanea o deja vacío"></div>
+        <div class="fg"><label>Categoría</label><input id="ob-cat" placeholder="Ej.: Poesía, Novela, Infantil"></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>PVP que fija el autor (USD) *</label><input id="ob-pvp" type="number" step="0.25" placeholder="0.00"></div>
+        <div class="fg"><label>Ejemplares entregados *</label><input id="ob-ej" type="number" step="1" min="1" value="1"></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>% del autor para esta obra</label><input id="ob-pct" type="number" step="1" min="0" max="100" placeholder="${Math.round(pctAutorEC(a)*100)} (hereda del autor)"></div>
+        <div class="fg"><label>Plazo en días</label><input id="ob-plazo" type="number" step="15" min="15" placeholder="${plazo} (hereda del autor)"></div>
+      </div>
+      <div class="fg"><label>Notas</label><input id="ob-notas" placeholder="Ej.: edición firmada, viene con separador"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-g" id="ob-cancel">Cerrar</button>
+        <button class="btn btn-acc" style="flex:1" id="ob-save">+ Recibir obra</button>
+      </div>
+      ${recientes.length?`<div style="margin-top:16px">
+        <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px">OBRAS YA RECIBIDAS DE ESTE AUTOR</div>
+        ${recientes.map(o=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">${esc(o.titulo)} · ${fmt(o.pvp)} · ${+o.stock||0}/${+o.entregados||0} en percha</div>`).join('')}
+      </div>`:''}
+      <div style="margin-top:14px;font-size:11.5px;color:var(--text3)">Al terminar de recibir todo, imprime el contrato con su Anexo A desde la pestaña Autores: el anexo es el respaldo de la entrega.</div>
+    </div>`;
+  }
+  if(auEditObra){
+    const o=obraECPorId(auEditObra);
+    if(!o) { auEditObra=null; return rAuObras(); }
+    return `<div class="card" style="padding:16px;max-width:560px">
+      <h3 style="margin:0 0 4px">${esc(o.titulo)}</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">${esc(nombreAutorEC(o.autorId))} · recibidos ${+o.entregados||0} · en percha ${+o.stock||0} · vendidos ${+o.vendidos||0} · devueltos ${+o.devueltos||0}</div>
+      <div class="two-col">
+        <div class="fg"><label>PVP (USD)</label><input id="oe-pvp" type="number" step="0.25" value="${+o.pvp||0}"></div>
+        <div class="fg"><label>% del autor</label><input id="oe-pct" type="number" step="1" min="0" max="100" value="${o.pctAutor!=null&&o.pctAutor!==''?Math.round(o.pctAutor*100):''}" placeholder="${Math.round(pctObraEC(o)*100)} (hereda)"></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>Recibir más ejemplares</label><input id="oe-mas" type="number" step="1" min="0" value="0"></div>
+        <div class="fg"><label>Devolver ejemplares al autor</label><input id="oe-dev" type="number" step="1" min="0" max="${+o.stock||0}" value="0"></div>
+      </div>
+      <div class="fg"><label>Renovar plazo (días desde hoy)</label><input id="oe-plazo" type="number" step="15" min="0" value="0" placeholder="0 = no renovar"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn btn-g" id="oe-cancel">Cancelar</button>
+        <button class="btn btn-acc" style="flex:1" id="oe-save">Guardar</button>
+        ${o.estado!=='retirada'?`<button class="btn btn-g btn-sm" id="oe-retirar">Retirar de la percha</button>`:`<button class="btn btn-g btn-sm" id="oe-reactivar">Volver a exhibir</button>`}
+      </div>
+      <div style="margin-top:12px;font-size:11.5px;color:var(--text3)">Subir el PVP afecta solo a las ventas futuras. Lo ya vendido conserva el precio y el porcentaje con los que se cobró.</div>
+    </div>`;
+  }
+
+  const q=auSearch.trim().toLowerCase();
+  let obras=[...(AU.obras||[])].sort((a,b)=>String(b.fechaIngreso||'').localeCompare(String(a.fechaIngreso||'')));
+  if(q) obras=obras.filter(o=>String(o.titulo||'').toLowerCase().includes(q)
+    ||String(o.isbn||'').toLowerCase().includes(q)
+    ||nombreAutorEC(o.autorId).toLowerCase().includes(q));
+
+  const badge=o=>{
+    if(o.estado==='retirada') return '<span class="badge" style="background:#eee;color:#777">Retirada</span>';
+    if(!(+o.stock||0)) return '<span class="badge" style="background:#e0f2f1;color:#00695c">Agotada</span>';
+    if(o.fechaVence&&new Date(o.fechaVence)<new Date()) return '<span class="badge br">Plazo vencido</span>';
+    const d=o.fechaVence?diasEntre(new Date(),o.fechaVence):null;
+    if(d!==null&&d<=15) return `<span class="badge ba">Vence en ${d}d</span>`;
+    return '<span class="badge bg">En exhibición</span>';
+  };
+  const rows=obras.map(o=>`<div class="mrow">
+      <div style="flex:1;min-width:0">
+        <span style="font-weight:600;font-size:13px">${esc(o.titulo)}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:6px">${esc(nombreAutorEC(o.autorId))}</span>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">
+          ${fmt(o.pvp)} · ${auPct(pctObraEC(o))} autor · ${+o.stock||0} de ${+o.entregados||0} en percha · ${+o.vendidos||0} vendido(s)
+          ${o.isbn?' · '+esc(o.isbn):''}${o.fechaVence?' · vence '+fechaCorta(o.fechaVence):''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        ${badge(o)}
+        ${soloConsulta?'':`<button class="btn btn-g btn-sm" data-obedit="${o.id}">Gestionar</button>`}
+      </div>
+    </div>`).join('')||'<div style="color:var(--text3);font-size:13px;padding:16px">No hay obras que coincidan.</div>';
+
+  return `<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input id="au-search" placeholder="Buscar obra, ISBN o autor…" value="${auSearch.replace(/"/g,'&quot;')}" style="flex:1">
+    </div>
+    ${soloConsulta?'<div style="font-size:11.5px;color:var(--text3);margin-bottom:8px">Pestaña de consulta. Para recibir obras o liquidar, entra con la cuenta de administración.</div>':''}
+    ${rows}`;
+}
+
+/* ── Sub-vista: Ventas ──────────────────────────────────────── */
+function rAuVentas(){
+  const q=auSearch.trim().toLowerCase();
+  let v=[...(AU.ventas||[])].sort((a,b)=>String(b.fecha||'').localeCompare(String(a.fecha||'')));
+  if(q) v=v.filter(x=>String(x.titulo||'').toLowerCase().includes(q)||nombreAutorEC(x.autorId).toLowerCase().includes(q));
+  const bruto=_r2(v.reduce((a,x)=>a+(+x.bruto||0),0));
+  const pago=_r2(v.reduce((a,x)=>a+(+x.pagoAutor||0),0));
+  const rows=v.slice(0,300).map(x=>`<div class="mrow">
+      <div style="flex:1;min-width:0">
+        <span style="font-weight:600;font-size:13px">${esc(x.titulo)}</span>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${esc(nombreAutorEC(x.autorId))} · ${fechaCorta(x.fecha)} · ${+x.cantidad||0} ej. a ${fmt(x.pvp)} · ${auPct(x.pctAutor)} autor</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-weight:700;color:#0a7a4a">${fmt(x.pagoAutor)}</div>
+        <div style="font-size:10px;color:var(--text3)">${x.liquidacionId?'liquidada':'por pagar'}</div>
+      </div>
+    </div>`).join('')||'<div style="color:var(--text3);font-size:13px;padding:16px">Todavía no hay ventas de obras de autor.</div>';
+  return `<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <input id="au-search" placeholder="Buscar por obra o autor…" value="${auSearch.replace(/"/g,'&quot;')}" style="flex:1">
+      <button class="btn btn-g btn-sm" id="au-csv">CSV</button>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px">${v.length} venta(s) · bruto ${fmt(bruto)} · corresponde a los autores ${fmt(pago)} · comisión de la casa ${fmt(_r2(bruto-pago))}</div>
+    ${rows}
+    ${v.length>300?'<div style="font-size:11px;color:var(--text3);padding:10px">Se muestran las 300 más recientes. Descarga el CSV para el detalle completo.</div>':''}`;
+}
+
+/* ── Sub-vista: Liquidaciones ───────────────────────────────── */
+function rAuLiquidaciones(){
+  if(auLiquidarTo){
+    const a=autorECPorId(auLiquidarTo);
+    const s=saldoAutorEC(auLiquidarTo);
+    const filas=s.ventas.map(v=>`<div class="mrow">
+        <div style="flex:1"><span style="font-weight:600;font-size:13px">${esc(v.titulo)}</span>
+          <div style="font-size:11px;color:var(--text3)">${fechaCorta(v.fecha)} · ${+v.cantidad||0} ej. a ${fmt(v.pvp)} · ${auPct(v.pctAutor)}</div></div>
+        <div style="font-weight:700;color:#0a7a4a">${fmt(v.pagoAutor)}</div>
+      </div>`).join('')||'<div style="color:var(--text3);font-size:13px;padding:12px">No hay ventas pendientes de liquidar.</div>';
+    return `<div class="card" style="padding:16px;max-width:620px">
+      <h3 style="margin:0 0 4px">Liquidar a ${a?esc(a.nombre):''}</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px">${a&&a.formaPago?'Pago a: '+esc(a.formaPago):'Sin forma de pago registrada'}</div>
+      ${filas}
+      <div style="display:flex;justify-content:space-between;padding:12px 0;border-top:1px solid var(--border);margin-top:8px">
+        <div><div style="font-size:11px;color:var(--text3)">Venta bruta</div><div style="font-weight:700">${fmt(s.bruto)}</div></div>
+        <div><div style="font-size:11px;color:var(--text3)">Comisión de la casa</div><div style="font-weight:700">${fmt(s.comision)}</div></div>
+        <div style="text-align:right"><div style="font-size:11px;color:var(--text3)">A pagar al autor</div><div style="font-weight:700;font-size:18px;color:#0a7a4a">${fmt(s.pago)}</div></div>
+      </div>
+      <div class="two-col">
+        <div class="fg"><label>Método de pago</label><select id="al-metodo"><option>Transferencia</option><option>Efectivo</option><option>Nota de crédito</option></select></div>
+        <div class="fg"><label>Notas</label><input id="al-notas" placeholder="Ej.: comprobante 00123"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-g" id="al-cancel">Cancelar</button>
+        <button class="btn btn-acc" style="flex:1" id="al-pagar" ${s.ventas.length===0?'disabled':''}>Registrar pago de ${fmt(s.pago)}</button>
+      </div>
+      <div style="margin-top:12px;font-size:11.5px;color:var(--text3)">Al registrar el pago se genera el acta de liquidación con el detalle de ejemplares y el porcentaje aplicado en cada venta. Esas ventas quedan cerradas: anularlas después exige revisión manual.</div>
+    </div>`;
+  }
+  const conSaldo=(AU.autores||[]).map(a=>({a,s:saldoAutorEC(a.id)})).filter(x=>x.s.pago>0)
+    .sort((x,y)=>y.s.pago-x.s.pago);
+  const rows=conSaldo.map(({a,s})=>`<div class="mrow">
+      <div style="flex:1"><span style="font-weight:600;font-size:13px">${esc(a.nombre)}</span>
+        <div style="font-size:11px;color:var(--text3)">${s.unidades} ejemplar(es) vendido(s) · bruto ${fmt(s.bruto)} · ${auPct(pctAutorEC(a))}</div></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="font-weight:700;color:#0a7a4a">${fmt(s.pago)}</div>
+        <button class="btn btn-acc btn-sm" data-aliq="${a.id}">Liquidar</button>
+      </div>
+    </div>`).join('')||'<div style="color:var(--text3);font-size:13px;padding:16px">No hay saldos pendientes de pago.</div>';
+
+  const hist=[...(AU.liquidaciones||[])].sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha))).slice(0,20)
+    .map(l=>`<div class="mrow" style="opacity:.9">
+      <div style="flex:1"><span style="font-size:12px">${esc(l.numero||'')} · ${esc(nombreAutorEC(l.autorId))}</span>
+        <div style="font-size:11px;color:var(--text3)">${fechaCorta(l.fecha)} · ${+l.unidades||0} ej. · bruto ${fmt(l.bruto)} · ${esc(l.metodo||'')}</div></div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <div style="font-weight:700">${fmt(l.pagoAutor)}</div>
+        <button class="btn btn-g btn-sm" data-alacta="${l.id}">Acta</button>
+      </div></div>`).join('')||'<div style="color:var(--text3);font-size:12px;padding:12px">Sin liquidaciones aún.</div>';
+
+  return `<h3 style="margin:0 0 10px;font-size:14px">Pendientes de pago</h3>${rows}
+    <h3 style="margin:20px 0 10px;font-size:14px">Historial de liquidaciones</h3>${hist}`;
+}
+
+/* Acta de liquidación: el respaldo del pago, con el porcentaje de cada venta. */
+function textoActaLiquidacionEC(l){
+  const a=autorECPorId(l.autorId)||{};
+  const vs=(AU.ventas||[]).filter(v=>(l.ventaIds||[]).includes(v.id));
+  const filas=vs.map((v,i)=>`<tr>
+      <td style="text-align:center">${i+1}</td>
+      <td>${esc(v.titulo)}</td>
+      <td style="text-align:center">${String(v.fecha||'').slice(0,10)}</td>
+      <td style="text-align:center">${+v.cantidad||0}</td>
+      <td style="text-align:right">${fmt(v.pvp)}</td>
+      <td style="text-align:right">${fmt(v.bruto)}</td>
+      <td style="text-align:center">${auPct(v.pctAutor)}</td>
+      <td style="text-align:right">${fmt(v.pagoAutor)}</td>
+    </tr>`).join('');
+  return `<div class="au-contrato">
+    <h2 style="text-align:center;margin:0 0 2px">ACTA DE LIQUIDACIÓN DE VENTAS EN CONSIGNACIÓN</h2>
+    <p style="text-align:center;font-size:11px;margin:0 0 14px">${esc(l.numero||'')} · ${esc(AU_CASA.nombre)}</p>
+    <p><b>Autor (comitente):</b> ${esc(a.nombre||'')}${a.cedula?' · C.C. '+esc(a.cedula):''}${a.ruc?' · RUC '+esc(a.ruc):''}<br>
+    <b>Fecha de liquidación:</b> ${fechaCorta(l.fecha)}<br>
+    <b>Forma de pago:</b> ${esc(l.metodo||'')}${l.notas?' · '+esc(l.notas):''}</p>
+    <table class="au-tabla">
+      <thead><tr><th>#</th><th>Obra</th><th>Fecha venta</th><th>Ej.</th><th>PVP</th><th>Bruto</th><th>% autor</th><th>A pagar</th></tr></thead>
+      <tbody>${filas||'<tr><td colspan="8" style="text-align:center">Sin detalle</td></tr>'}</tbody>
+      <tfoot>
+        <tr><th colspan="5">TOTAL VENTA BRUTA</th><th style="text-align:right">${fmt(l.bruto)}</th><th></th><th></th></tr>
+        <tr><th colspan="7">COMISIÓN DE LA CASA</th><th style="text-align:right">${fmt(l.comision)}</th></tr>
+        <tr><th colspan="7">VALOR LIQUIDADO AL AUTOR</th><th style="text-align:right">${fmt(l.pagoAutor)}</th></tr>
+      </tfoot>
+    </table>
+    <p style="font-size:11.5px;margin-top:10px">Declaro haber recibido a mi entera satisfacción el valor liquidado en la presente acta, por concepto de las ventas detalladas, y nada más tengo que reclamar por ellas.</p>
+    <table class="au-firmas"><tr>
+      <td>_______________________________<br><b>EL COMITENTE</b><br>${esc(a.nombre||'')}<br>C.C. ${esc(a.cedula||'………………')}</td>
+      <td>_______________________________<br><b>EL COMISIONISTA</b><br>${esc(AU_CASA.representante)}<br>${esc(AU_CASA.nombre)}</td>
+    </tr></table></div>`;
+}
+
+function attachAutoresEC(){
+  const mc=document.getElementById('mc');
+  const reRender=()=>render();
+
+  mc.querySelectorAll('[data-asub]').forEach(b=>b.addEventListener('click',()=>{
+    auSub=b.dataset.asub; auEditAutor=null; auAddObraTo=null; auEditObra=null;
+    auLiquidarTo=null; auEnlaceDe=null; reRender();
+  }));
+
+  const search=mc.querySelector('#au-search');
+  if(search) search.addEventListener('input',e=>{
+    auSearch=e.target.value;
+    const cur=e.target.selectionStart; reRender();
+    const ns=document.getElementById('au-search'); if(ns){ ns.focus(); ns.setSelectionRange(cur,cur); }
+  });
+
+  /* ── Autores ── */
+  mc.querySelector('#au-new')?.addEventListener('click',()=>{ auEditAutor='new'; reRender(); });
+  mc.querySelector('#au-cancel')?.addEventListener('click',()=>{ auEditAutor=null; reRender(); });
+  mc.querySelectorAll('[data-auedit]').forEach(el=>el.addEventListener('click',()=>{ auEditAutor=el.dataset.auedit; reRender(); }));
+  mc.querySelector('#au-save')?.addEventListener('click',async()=>{
+    const nombre=document.getElementById('au-nombre').value.trim();
+    if(!nombre){ alert('El nombre del autor es obligatorio: va en el contrato.'); return; }
+    const pctRaw=parseFloat(document.getElementById('au-pct').value);
+    if(!(pctRaw>=0&&pctRaw<=100)){ alert('El porcentaje del autor debe estar entre 0 y 100.'); return; }
+    const plazo=parseInt(document.getElementById('au-plazo').value)||AU_PLAZO_DEF;
+    const datos={nombre,
+      cedula:document.getElementById('au-cedula').value.trim(),
+      ruc:document.getElementById('au-ruc').value.trim(),
+      telefono:document.getElementById('au-tel').value.trim(),
+      email:document.getElementById('au-email').value.trim(),
+      formaPago:document.getElementById('au-pago').value.trim(),
+      notas:document.getElementById('au-notas').value.trim(),
+      pctAutor:_r2(pctRaw/100), plazoDias:plazo};
+    AU.autores=AU.autores||[];
+    if(auEditAutor==='new'){
+      AU.autores.push(Object.assign({id:auId('au'),codigo:auCodigo('autor'),fecha:localISO(),
+        token:auToken(),contrato:{generado:false,aceptado:false}},datos));
+    }else{
+      const a=autorECPorId(auEditAutor);
+      if(a){
+        const cambioPct=a.pctAutor!==datos.pctAutor;
+        Object.assign(a,datos);
+        if(cambioPct&&(AU.ventas||[]).some(v=>v.autorId===a.id)){
+          alert('Aviso: cambiaste el reparto de '+a.nombre+'.\n\nLas ventas ya cobradas conservan el porcentaje con el que se vendieron. El nuevo porcentaje rige desde la próxima venta. Si el cambio se pactó con el autor, conviene imprimir un contrato nuevo o un anexo.');
+        }
+      }
+    }
+    await sAU();
+    auEditAutor=null; reRender();
+    auPublicarPronto();
+  });
+  mc.querySelectorAll('[data-auobras]').forEach(el=>el.addEventListener('click',()=>{
+    auAddObraTo=el.dataset.auobras; auSub='obras'; reRender();
+  }));
+  mc.querySelectorAll('[data-aucontrato]').forEach(el=>el.addEventListener('click',async()=>{
+    const a=autorECPorId(el.dataset.aucontrato);
+    if(a&&!(AU.obras||[]).some(o=>o.autorId===a.id)){
+      if(!confirm('Este autor todavía no tiene obras registradas, así que el Anexo A saldría vacío.\n\n¿Imprimir el contrato de todas formas?')) return;
+    }
+    if(a&&a.contrato&&!a.contrato.generado){ a.contrato.generado=true; await sAU(); }
+    auImprimirContrato(el.dataset.aucontrato);
+  }));
+  mc.querySelectorAll('[data-auenlace]').forEach(el=>el.addEventListener('click',async()=>{
+    auEnlaceDe=el.dataset.auenlace;
+    reRender();
+    const ok=await auPublicar(auEnlaceDe);
+    if(ok) reRender();
+  }));
+  mc.querySelector('#au-sincfirmas')?.addEventListener('click',async e=>{
+    const b=e.currentTarget; const t0=b.textContent; b.textContent='Revisando…'; b.disabled=true;
+    const n=await auLeerAceptaciones();
+    b.textContent=t0; b.disabled=false;
+    alert(n?(n+' contrato(s) aceptado(s) por el autor se registraron aquí.')
+          :'Ningún contrato nuevo aceptado desde la última revisión.');
+    reRender();
+  });
+
+  /* ── Enlace ── */
+  mc.querySelector('#au-cerrarenlace')?.addEventListener('click',()=>{ auEnlaceDe=null; reRender(); });
+  mc.querySelector('#au-crearenlace')?.addEventListener('click',async()=>{
+    const a=autorECPorId(auEnlaceDe); if(!a) return;
+    a.token=a.token||auToken(); await sAU();
+    await auPublicar(a.id); reRender();
+  });
+  const copiar=(sel,msg)=>{
+    const el=document.querySelector(sel); if(!el) return;
+    el.select?.(); 
+    const txt=el.value||'';
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(()=>alert(msg),()=>alert('Copia manualmente: el navegador no dio permiso al portapapeles.'));
+    }else{ try{ document.execCommand('copy'); alert(msg); }catch(e){ alert('Copia manualmente el texto seleccionado.'); } }
+  };
+  mc.querySelector('#au-copyurl')?.addEventListener('click',()=>copiar('#au-url','Enlace copiado.'));
+  mc.querySelector('#au-copymsg')?.addEventListener('click',()=>copiar('#au-msg','Mensaje copiado. Pégalo en WhatsApp o en el correo.'));
+  mc.querySelector('#au-republicar')?.addEventListener('click',async e=>{
+    const b=e.currentTarget; b.disabled=true; b.textContent='Actualizando…';
+    const ok=await auPublicar(auEnlaceDe);
+    b.disabled=false; b.textContent='Actualizar reporte';
+    if(ok) alert('Reporte actualizado. El autor ya ve sus cifras al día.');
+  });
+
+  /* ── Obras ── */
+  mc.querySelector('#ob-cancel')?.addEventListener('click',()=>{ auAddObraTo=null; reRender(); });
+  mc.querySelector('#ob-save')?.addEventListener('click',async()=>{
+    const titulo=document.getElementById('ob-titulo').value.trim();
+    const pvp=parseFloat(document.getElementById('ob-pvp').value);
+    const ej=parseInt(document.getElementById('ob-ej').value);
+    if(!titulo){ alert('El título es obligatorio.'); return; }
+    if(!(pvp>0)){ alert('El PVP que fija el autor es obligatorio y debe ser mayor que cero.'); return; }
+    if(!(ej>0)){ alert('Indica cuántos ejemplares entregó el autor.'); return; }
+    const a=autorECPorId(auAddObraTo);
+    const pctRaw=document.getElementById('ob-pct').value.trim();
+    const plazoRaw=document.getElementById('ob-plazo').value.trim();
+    const plazo=plazoRaw?parseInt(plazoRaw):((a&&a.plazoDias)||AU_PLAZO_DEF);
+    let code=document.getElementById('ob-isbn').value.trim();
+    const hoy=localISO();
+    AU.obras=AU.obras||[];
+    AU.obras.push({
+      id:auId('ob'), autorId:auAddObraTo, codigo:auCodigo('obra'),
+      titulo, isbn:code, code:code||('AE'+Date.now().toString().slice(-8)),
+      categoria:document.getElementById('ob-cat').value.trim(),
+      pvp:_r2(pvp), entregados:ej, stock:ej, vendidos:0, devueltos:0,
+      pctAutor:pctRaw!==''?_r2(parseFloat(pctRaw)/100):null,
+      plazoDias:plazoRaw?plazo:null,
+      fechaIngreso:hoy, fechaVence:localISO(new Date(Date.now()+plazo*86400000)),
+      estado:'activa', notas:document.getElementById('ob-notas').value.trim()
+    });
+    await sAU(); injectAutorProducts();
+    reRender(); auPublicarPronto();
+  });
+  mc.querySelectorAll('[data-obedit]').forEach(el=>el.addEventListener('click',()=>{ auEditObra=el.dataset.obedit; reRender(); }));
+  mc.querySelector('#oe-cancel')?.addEventListener('click',()=>{ auEditObra=null; reRender(); });
+  mc.querySelector('#oe-save')?.addEventListener('click',async()=>{
+    const o=obraECPorId(auEditObra); if(!o) return;
+    const pvp=parseFloat(document.getElementById('oe-pvp').value);
+    if(!(pvp>0)){ alert('El PVP debe ser mayor que cero.'); return; }
+    const pctRaw=document.getElementById('oe-pct').value.trim();
+    const mas=parseInt(document.getElementById('oe-mas').value)||0;
+    const dev=parseInt(document.getElementById('oe-dev').value)||0;
+    const renov=parseInt(document.getElementById('oe-plazo').value)||0;
+    if(dev>(+o.stock||0)){ alert('No puedes devolver más ejemplares de los que hay en percha.'); return; }
+    if(dev&&!confirm('¿Registrar la devolución de '+dev+' ejemplar(es) de "'+o.titulo+'" al autor?\n\nFírmale el acta o déjalo por escrito: es el respaldo de que salieron de la percha.')) return;
+    o.pvp=_r2(pvp);
+    o.pctAutor=pctRaw!==''?_r2(parseFloat(pctRaw)/100):null;
+    if(mas>0){ o.entregados=(+o.entregados||0)+mas; o.stock=(+o.stock||0)+mas; }
+    if(dev>0){ o.stock=(+o.stock||0)-dev; o.devueltos=(+o.devueltos||0)+dev; }
+    if(renov>0){ o.fechaVence=localISO(new Date(Date.now()+renov*86400000)); }
+    await sAU(); injectAutorProducts();
+    auEditObra=null; reRender(); auPublicarPronto();
+  });
+  mc.querySelector('#oe-retirar')?.addEventListener('click',async()=>{
+    const o=obraECPorId(auEditObra); if(!o) return;
+    if(!confirm('¿Retirar "'+o.titulo+'" de la percha?\n\nDeja de aparecer en la caja. Los '+(+o.stock||0)+' ejemplar(es) que queden siguen contando como entregados hasta que registres su devolución.')) return;
+    o.estado='retirada';
+    await sAU(); injectAutorProducts(); auEditObra=null; reRender(); auPublicarPronto();
+  });
+  mc.querySelector('#oe-reactivar')?.addEventListener('click',async()=>{
+    const o=obraECPorId(auEditObra); if(!o) return;
+    o.estado='activa';
+    await sAU(); injectAutorProducts(); auEditObra=null; reRender(); auPublicarPronto();
+  });
+
+  /* ── Ventas: CSV ── */
+  mc.querySelector('#au-csv')?.addEventListener('click',()=>{
+    const rows=[['Fecha','Autor','Obra','Ejemplares','PVP','Bruto','% autor','A pagar autor','Comision casa','Liquidada','Venta POS']];
+    [...(AU.ventas||[])].sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha))).forEach(v=>{
+      rows.push([String(v.fecha||'').slice(0,10),nombreAutorEC(v.autorId),v.titulo,+v.cantidad||0,
+        (+v.pvp||0).toFixed(2),(+v.bruto||0).toFixed(2),Math.round((+v.pctAutor||0)*100)+'%',
+        (+v.pagoAutor||0).toFixed(2),(+v.comision||0).toFixed(2),v.liquidacionId?'si':'no',v.ventaId||'']);
+    });
+    const csv='﻿'+rows.map(r=>r.map(x=>{
+      const s=String(x);
+      return '"'+(/^\s*[=+@-]/.test(s)&&Number.isNaN(Number(s))?"'":'')+s.replace(/"/g,'""')+'"';
+    }).join(';')).join('\n');
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    a.download='ventas-autores-'+localISO().slice(0,10)+'.csv';
+    a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  });
+
+  /* ── Liquidaciones ── */
+  mc.querySelectorAll('[data-aliq]').forEach(el=>el.addEventListener('click',()=>{ auLiquidarTo=el.dataset.aliq; reRender(); }));
+  mc.querySelector('#al-cancel')?.addEventListener('click',()=>{ auLiquidarTo=null; reRender(); });
+  mc.querySelector('#al-pagar')?.addEventListener('click',async()=>{
+    const aid=auLiquidarTo;
+    const a=autorECPorId(aid); const s=saldoAutorEC(aid);
+    if(!s.ventas.length) return;
+    const metodo=document.getElementById('al-metodo').value;
+    const notas=document.getElementById('al-notas').value.trim();
+    if(!confirm('¿Registrar el pago de '+fmt(s.pago)+' a '+(a?a.nombre:'')+' por '+metodo+'?\n\nSe generará el acta de liquidación y esas '+s.ventas.length+' venta(s) quedarán cerradas.')) return;
+    AU.liquidaciones=AU.liquidaciones||[];
+    const numero='LIQ-'+String((AU.liquidaciones.length+1)).padStart(4,'0');
+    const liq={id:auId('al'),autorId:aid,numero,fecha:localISO(),
+      ventaIds:s.ventas.map(v=>v.id),unidades:s.unidades,
+      bruto:s.bruto,comision:s.comision,pagoAutor:s.pago,
+      metodo,notas,user:(typeof turnoUser!=='undefined'?turnoUser:'')||''};
+    AU.liquidaciones.push(liq);
+    s.ventas.forEach(v=>{ v.liquidacionId=liq.id; });
+    await sAU();
+    try{ bitacora('liquidacion_autor',{autor:a?a.nombre:'',numero,monto:s.pago,metodo,ventas:s.ventas.length}); }catch(e){}
+    auLiquidarTo=null; reRender(); auPublicarPronto();
+    if(confirm('Pago registrado como '+numero+'.\n\n¿Imprimir el acta de liquidación para la firma del autor?')){
+      auImprimirDoc(textoActaLiquidacionEC(liq),'Acta '+numero);
+    }
+  });
+  mc.querySelectorAll('[data-alacta]').forEach(el=>el.addEventListener('click',()=>{
+    const l=(AU.liquidaciones||[]).find(x=>x.id===el.dataset.alacta);
+    if(l) auImprimirDoc(textoActaLiquidacionEC(l),'Acta '+(l.numero||''));
+  }));
+}
+
 const cartaElegible=p=>!!p&&!!p.id&&!p.esConsignado&&p.category!=='Libros'&&p.category!=='Consignados'&&p.category!=='Taller & Merch';
 function cartaDisponible(p){ return !!p&&p.active!==false&&(p.stockControl!=='unidad'||(+p.stock||0)>0); }
 function cartaEstadoTemp(c,hoy){
@@ -10364,7 +11363,7 @@ async function pwCargar(id,mesaId){
     buenas.forEach(({p,cant})=>{
       const lid=p.id+'_base', ex=t.order.find(i=>i.lid===lid);
       if(ex) ex.qty+=cant;
-      else t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:cant,variant:null,stockControl:p.stockControl||'sin_control',persona:null});
+      else t.order.push({lid,productId:p.id,name:p.name,price:p.price,cost:(typeof p.cost==='number')?p.cost:null,proveedor:p.esAutorEC?('Autor EC: '+(p.subcategory||'')):p.esConsignado?('Consignación: '+(p.subcategory||'')):(p.author||null),editorial:p.esConsignado?'':(p.subcategory||null),isbn:p.code||null,category:p.category||'',qty:cant,variant:null,stockControl:p.stockControl||'sin_control',persona:null});
     });
     t.status='ocupada'; t.openedAt=localISO();
     t.pedidoWeb={id:String(id),ref:pd.ref||'',cliente:pd.cliente||'',openedAt:t.openedAt};
