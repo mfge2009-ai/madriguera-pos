@@ -572,7 +572,7 @@ function metodoPago(m){
 // Efectivo cobrado en una venta, contemplando el pago dividido
 function efectivoDe(s){
   if(s.pagosParciales&&s.pagosParciales.length>0)
-    return s.pagosParciales.filter(p=>!p.anticipoId&&!p.reservaId&&metodoPago(p.metodo)==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
+    return s.pagosParciales.filter(p=>!p.anticipoId&&!p.reservaId&&!p.apartadoAbonoId&&metodoPago(p.metodo)==='Efectivo').reduce((a,p)=>a+(+p.monto||0),0);
   return metodoPago(s.paymentMethod)==='Efectivo' ? (+s.total||0) : 0;
 };
 // Categorías de gasto: [nombre, tipo] donde tipo = 'fijo' o 'variable'
@@ -791,8 +791,9 @@ let actaConsignante=null,actaLibros=[];
 let consignaSub='libros',editConsignante=null,addLibrosTo=null,csearch='',liquidarTo=null;
 let devolverTo=null,devolSel={},devolSoloVencidos=false; // devolución masiva por consignante
 // Autores ecuatorianos: obras y productos dejados en consignación por su autor
-let AU={autores:[],obras:[],ventas:[],liquidaciones:[]};
+let AU={autores:[],obras:[],ventas:[],liquidaciones:[],devoluciones:[]};
 let auSub='autores',auEditAutor=null,auAddObraTo=null,auEditObra=null,auSearch='',auLiquidarTo=null,auEnlaceDe=null;
+let auDevolverA=null,auDevSel={};
 // ══════════════════════════════════════════════════════════════
 //  CONSIGNACIÓN — Programa «Tu libro tiene otra vida»
 //  Reparto de CADA venta de un libro consignado.
@@ -1981,7 +1982,7 @@ function subRT(){
         if(k==='tables')T=snap.data().v||[];
         if(k==='clientes')CL=snap.data().v||[];
         if(k==='consigna'){CG=snap.data().v||{consignantes:[],libros:[],liquidaciones:[]};injectConsignaProducts();}
-        if(k==='autores'){AU=snap.data().v||{autores:[],obras:[],ventas:[],liquidaciones:[]};AU.autores=AU.autores||[];AU.obras=AU.obras||[];AU.ventas=AU.ventas||[];AU.liquidaciones=AU.liquidaciones||[];injectAutorProducts();}
+        if(k==='autores'){AU=snap.data().v||{};AU.autores=AU.autores||[];AU.obras=AU.obras||[];AU.ventas=AU.ventas||[];AU.liquidaciones=AU.liquidaciones||[];AU.devoluciones=AU.devoluciones||[];injectAutorProducts();}
         if(k==='nomina'){const d=snap.data().v||{};NOM={empleados:d.empleados||[],anticipos:d.anticipos||[],pagos:d.pagos||[],horas:d.horas||[]};_publicarPersonal();}
         if(k==='gastos_fijos'){GF=snap.data().v||[];}
       }
@@ -2510,7 +2511,7 @@ function attachPOS(){
   }));
 
   // Cobro
-  mc.querySelector('#bcobrar')?.addEventListener('click',()=>{if(!cajaPuedeCobrar())return;cobConf=true;modoParcial=false;pagosParciales=[];itemSel=null;render();});
+  mc.querySelector('#bcobrar')?.addEventListener('click',()=>{if(!cajaPuedeCobrar())return;cobConf=true;modoParcial=false;pagosParciales=[];itemSel=null;apPrecargarPagos();render();});
   mc.querySelector('#bscan')?.addEventListener('click',()=>openScanner());
   mc.querySelector('#bprecuenta')?.addEventListener('click',()=>{ const t=T.find(x=>x.id===selT); if(t) imprimirPrecuenta(t); });
   mc.querySelectorAll('[data-precuenta-persona]').forEach(el=>el.addEventListener('click',()=>{ const t=T.find(x=>x.id===selT); if(t) imprimirPrecuenta(t,+el.dataset.precuentaPersona); }));
@@ -2642,7 +2643,7 @@ function attachPOS(){
     t.order=t.order.filter(i=>i.qty>0);
     // Deduct stock for unit-control products in split (transaccion atomica)
     splitOrder.forEach(i=>{
-      if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,-i.qty); }
+      if(i.stockControl==='unidad'&&i.productId&&!i.apYaDescontado){ ajustarStock(i.productId,-i.qty); }
     });
     // If no items left, free the table
     if(t.order.length===0){t.status='libre';t.openedAt=null;t.comandas=[];selT=null;}
@@ -3120,6 +3121,8 @@ async function anularVenta(ventaId){
   if(!venta){alert('Venta no encontrada');return;}
   const _ctlFac=await sriControlAnulacion(venta);
   if(!_ctlFac.ok){alert('Anulación cancelada: la venta tiene factura electrónica.');return;}
+  // La venta de un apartado entregado: al anularla el apartado se reabre.
+  if(venta.apartadoId && !confirm('Esta venta corresponde a un APARTADO entregado.\n\nAl anularla el apartado vuelve a quedar abierto con sus abonos, y el producto sigue contando como reservado (no se repone a percha).\n\n¿Continuar?')) return;
   const _resumen=(venta.items||[]).map(i=>(i.qty||1)+'x '+(i.name||'?')+(i.variant?' ('+i.variant+')':'')).join(', ');
   const motivo=prompt('Motivo de la anulación (obligatorio):');
   if(!motivo||!motivo.trim()){alert('Debes indicar un motivo');return;}
@@ -3149,8 +3152,9 @@ async function anularVenta(ventaId){
   revertirAutorECVenta(venta);
   // Restore stock for unidad products (transaccion atomica por producto)
   venta.items?.forEach(i=>{
-    if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,i.qty); }
+    if(i.stockControl==='unidad'&&i.productId&&!i.apYaDescontado){ ajustarStock(i.productId,i.qty); }
   });
+  if(venta.apartadoId) await apReabrir(venta,motivo.trim());
   render();
   alert('✓ Venta anulada correctamente');
 }
@@ -3176,6 +3180,8 @@ async function confirmarCobro(){
     const errAnt=antValidarPagos(pagosParciales);
     if(errAnt){ alert(errAnt); return; }
   }
+  const _errAp=apValidarPagosMesa(t,modoParcial?pagosParciales:[]);
+  if(_errAp){ alert(_errAp); return; }
   cobrando=true;
   try{
     const _ventaId=`s${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
@@ -3183,11 +3189,14 @@ async function confirmarCobro(){
     if(modoParcial&&pagosParciales.some(p=>p.reservaId)){
       if(!(await resReclamar(_ventaId,pagosParciales))) return null;
     }
-    const metodo=modoParcial?pagosParciales.map(p=>(p.reservaId?'Reserva ('+p.metodo+')':p.anticipoId?'Abono ('+p.metodo+')':p.metodo)+' '+fmt(p.monto)).join(' / '):selPay;
+    const metodo=modoParcial?pagosParciales.map(p=>(p.reservaId?'Reserva ('+p.metodo+')':p.anticipoId?'Abono ('+p.metodo+')':p.apartadoAbonoId?'Apartado ('+p.metodo+')':p.metodo)+' '+fmt(p.monto)).join(' / '):selPay;
     const venta={id:_ventaId,tableId:t.id,tableName:t.name,items:t.order.map(i=>({...i})),subtotal,descuento:descMonto>0?descMonto:0,descuentoTipo:descMonto>0?descuentoTipo:null,descuentoMotivo:descMonto>0?(descuentoMotivo||null):null,descuentoAutor:descMonto>0?(descuentoAutor||null):null,descuentoAutorAuth:descMonto>0?(descuentoAutorAuth||null):null,total,paymentMethod:metodo,pagosParciales:modoParcial?[...pagosParciales]:null,date:localISO(),closed:false,user:turnoUser,userAuth:authUser()};
     // Id del registro de bitacora firmado por el administrador que autorizo el
     // descuento: las reglas de Firestore lo verifican al guardar la venta.
     if(venta.descuento>0) venta.descuentoAutId=descuentoAutId||null;
+    // ── Apartado entregado: la venta lo cierra y le pone la factura ──
+    const _apRef=(t.apartadoRef&&t.apartadoRef.openedAt===t.openedAt)?t.apartadoRef:null;
+    if(_apRef) venta.apartadoId=String(_apRef.id);
     // Snapshot before clearing
     const ticketItems=t.order.map(i=>({...i}));
     const ticketTotal=total;
@@ -3195,13 +3204,13 @@ async function confirmarCobro(){
     const ticketPay=metodo;
     // Deduct stock: mutacion local inmediata + transaccion atomica en Firestore
     t.order.forEach(i=>{
-      if(i.stockControl==='unidad'&&i.productId){ ajustarStock(i.productId,-i.qty); }
+      if(i.stockControl==='unidad'&&i.productId&&!i.apYaDescontado){ ajustarStock(i.productId,-i.qty); }
     });
     // Pedido web cargado a esta mesa (solo si es de ESTA apertura de la mesa)
     const _pw=(t.pedidoWeb&&t.pedidoWeb.openedAt===t.openedAt)?t.pedidoWeb:null;
     if(_pw) venta.pedidoWebId=_pw.id;
     // Clear table
-    t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;t.pedidoWeb=null;
+    t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;t.pedidoWeb=null;t.apartadoRef=null;
     cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};descuento=0;descuentoTipo='monto';descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';descuentoAutId='';
     selT=null;
     // Marcar ventas de libros consignados y actualizar saldo del consignante
@@ -3215,6 +3224,7 @@ async function confirmarCobro(){
     await _appendSale(venta);
     sT();
     if(_pw) pwMarcarCobrado(_pw,venta);
+    if(_apRef) apMarcarFacturado(_apRef,venta);
     return venta;
   }catch(err){
     console.error('Error en cobro:',err);
@@ -3413,12 +3423,14 @@ function rFooter(){
       </div>
       <button class="btn btn-full" style="padding:9px;margin-bottom:6px;background:#1a3f8b;color:#fff;border:none;font-weight:700" id="bcobrar-fac">🧾 Cobrar ${fmt(totalConDesc)} y emitir factura</button>
       <button class="btn btn-g btn-full" style="font-size:11px" id="bparcial">Dividir en varios métodos de pago</button>
+      <button class="btn btn-full" style="font-size:11px;margin-top:6px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;font-weight:700" id="bapartar">📦 Apartar (abono ahora, saldo despu&eacute;s)</button>
       ${resBotonHTML()}`;
     ftr.querySelector('#bant-aplicar')?.addEventListener('click',()=>resElegir(tot));
     ftr.querySelectorAll('.payb').forEach(el=>el.addEventListener('click',()=>{selPay=el.dataset.pay;rFooter();}));
     ftr.querySelector('#bccc')?.addEventListener('click',()=>{cobConf=false;modoParcial=false;pagosParciales=[];render();});
     ftr.querySelector('#bconf')?.addEventListener('click',async()=>await confirmarCobro(),{once:true});
     ftr.querySelector('#bparcial')?.addEventListener('click',()=>{modoParcial=true;pagosParciales=[];rFooter();});
+    ftr.querySelector('#bapartar')?.addEventListener('click',()=>apIniciar(totalConDesc));
     cajaCambioAttach(ftr,totalConDesc);
     ftr.querySelector('#bfactura2')?.addEventListener('click',()=>{window.openFacturaModal();});
     ftr.querySelector('#bcobrar-fac')?.addEventListener('click',()=>sriCobrarYFacturar(totalConDesc));
@@ -4741,7 +4753,7 @@ function rCaja(){
 
   const cierresAnteriores=S.filter(s=>s.esCierre&&s.date).sort((a,b)=>b.date.localeCompare(a.date));
   const tabs=`<div style="display:flex;border-bottom:1px solid var(--border);margin-bottom:14px;overflow-x:auto;scrollbar-width:none">
-    ${['resumen','gastos','contabilidad','cierre','reservas','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?(estadoCaja().e==='abierta'?'\uD83D\uDFE2 Cerrar caja':'\uD83D\uDD34 Abrir / cerrar caja'):t==='historial'?('Historial ('+cierresAnteriores.length+')'):t==='reservas'?('🎟 Reservas'+(resPorFacturar().filter(r=>r.fecha===today()).length?' ('+resPorFacturar().filter(r=>r.fecha===today()).length+')':'')):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
+    ${['resumen','gastos','contabilidad','cierre','reservas','apartados','historial','reconstruccion'].map(t=>`<button style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12px;font-family:inherit;font-weight:${cajaTab===t?'700':'400'};color:${cajaTab===t?'var(--acc)':'var(--text2)'};border-bottom:${cajaTab===t?'2px solid var(--acc)':'2px solid transparent'};margin-bottom:-1px;white-space:nowrap" data-cajatab="${t}">${t==='resumen'?'Resumen':t==='gastos'?'Gastos':t==='contabilidad'?'📊 Contabilidad':t==='cierre'?(estadoCaja().e==='abierta'?'\uD83D\uDFE2 Cerrar caja':'\uD83D\uDD34 Abrir / cerrar caja'):t==='historial'?('Historial ('+cierresAnteriores.length+')'):t==='reservas'?('🎟 Reservas'+(resPorFacturar().filter(r=>r.fecha===today()).length?' ('+resPorFacturar().filter(r=>r.fecha===today()).length+')':'')):t==='apartados'?('\uD83D\uDCE6 Apartados'+(apAbiertos().length?' ('+apAbiertos().length+')':'')):'\uD83D\uDD0E Reconstrucci\u00f3n'}</button>`).join('')}
   </div>`;
 
   let body='';
@@ -4962,6 +4974,7 @@ function rCaja(){
   }
   else if(cajaTab==='cierre'){ body=rCuadre(); }
   else if(cajaTab==='reservas'){ body=rReservasPOS(); }
+  else if(cajaTab==='apartados'){ body=rApartadosPOS(); }
 
   if(cajaTab==='reconstruccion'){ body=rReconstruccion(); }
 
@@ -5531,7 +5544,10 @@ const esAntCli=x=>!!(x&&x.esMovCaja&&x.tipo==='anticipo');
 function _esIngresoEf(x){
   if(!x||!x.esMovCaja||x.anulada) return false;
   if(x.tipo==='ingreso') return true;
-  return x.tipo==='anticipo' && metodoPago(x.metodo)==='Efectivo';
+  if(x.tipo==='abono_apartado') return metodoPago(x.metodo)==='Efectivo';
+  // noSumaCaja: saldo a favor nacido de un apartado; ese efectivo ya entro
+  // el dia del abono y contarlo aqui lo duplicaria.
+  return x.tipo==='anticipo' && !x.noSumaCaja && metodoPago(x.metodo)==='Efectivo';
 }
 function antAplicado(id){
   let t=0;
@@ -5586,6 +5602,456 @@ async function antAnular(id){
   bitacora('anular_abono_reserva_pos',{accion:'Anulo el abono registrado en el POS de '+((a.cliente&&a.cliente.nombre)||'')+' por '+fmt(a.monto)+': '+motivo,monto:a.monto,obs:motivo});
   render();
   if(ok) alert('✓ Abono anulado.'+(enCierre&&metodoPago(a.metodo)==='Efectivo'?'\n\nEse efectivo ya entró en un cierre de caja: si lo devuelves en efectivo, regístralo como gasto con la descripción «Devolución de reserva de cliente».':''));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  APARTADOS — el cliente deja separado un producto y abona una parte.
+//
+//  Criterio tributario (indicado por el contador, 16-nov-2026):
+//  LA FACTURA SE EMITE AL ENTREGAR, no al apartar. El abono es un
+//  anticipo (pasivo), no una venta: mientras el producto no se entrega
+//  no hay transferencia de dominio que acreditar. Por cada abono se
+//  entrega un RECIBO, que no es comprobante de venta.
+//  (El Art. 61 num. 1 LRTI menciona tambien el pago parcial; el criterio
+//  contrario — facturar al apartar — quedo implementado en la version
+//  2026-11-16b de 01_POS_versiones_anteriores, por si hay que volver.)
+//
+//  Como queda guardado:
+//   - El apartado es un documento propio (tipo 'apartado', total 0), NO
+//     una venta: no infla las ventas del dia.
+//   - El producto se descuenta del stock al apartar, porque sale de
+//     percha a la repisa de apartados: asi no se vende dos veces.
+//   - Cada abono es un movimiento de caja: el efectivo entra el dia que
+//     se recibe, sin contarse como venta.
+//   - Al entregar se carga el apartado a una mesa y se cobra normal: los
+//     abonos entran como pago y recien ahi sale la factura, por el total.
+//   - Si el cliente no vuelve, lo abonado pasa a SALDO A FAVOR para
+//     consumir en la tienda y el producto regresa a percha.
+// ═══════════════════════════════════════════════════════════════════════
+const AP_DIAS_DEF=15, AP_PCT_MIN=50;
+const esApartadoDoc=x=>!!(x&&x.esMovCaja&&x.tipo==='apartado');
+const esAbonoAp=x=>!!(x&&x.esMovCaja&&x.tipo==='abono_apartado'&&!x.anulada);
+
+function apAbonos(apId){ return S.filter(x=>esAbonoAp(x)&&String(x.apartadoId||'')===String(apId)); }
+function apAbonado(apId){ return _r2(apAbonos(apId).reduce((a,x)=>a+(+x.monto||0),0)); }
+function apSaldo(a){ return a?_r2(Math.max(0,(+a.montoTotal||0)-apAbonado(a.id))):0; }
+function apCliente(a){ return (a&&a.cliente)||{}; }
+function apVence(a){ return (a&&a.vence)||''; }
+function apDiasRest(a){
+  const f=apVence(a); if(!f) return null;
+  return Math.round((new Date(f+'T12:00:00')-new Date(today()+'T12:00:00'))/86400000);
+}
+function apResumenItems(a){
+  return ((a&&a.items)||[]).map(i=>((+i.qty||1)>1?i.qty+'x ':'')+(i.name||'')).join(', ');
+}
+function apEstado(a){
+  if(!a) return '';
+  if(a.estado==='facturado') return 'facturado';
+  if(a.estado==='saldo_favor') return 'saldo_favor';
+  if(a.anulada||a.estado==='anulado') return 'anulado';
+  if(apSaldo(a)<=0.004) return 'listo';
+  const f=apVence(a);
+  if(f&&f<today()) return 'vencido';
+  return 'vigente';
+}
+const AP_EST={
+  vigente:['Vigente','#1a3f8b','#dbeafe'], listo:['Pagado - falta entregar','#1f6b45','#dcfce7'],
+  vencido:['VENCIDO','#8b1a1a','#fee2e2'], facturado:['Entregado y facturado','#555','#eee'],
+  saldo_favor:['Pasó a saldo a favor','#7c3aed','#ede9fe'], anulado:['Anulado','#999','#f3f4f6']
+};
+const AP_CERRADO=['facturado','saldo_favor','anulado'];
+function apTodos(){ return S.filter(esApartadoDoc).sort((a,b)=>String(apVence(a)).localeCompare(String(apVence(b)))||String(a.date).localeCompare(String(b.date))); }
+function apAbiertos(){ return apTodos().filter(a=>!AP_CERRADO.includes(apEstado(a))); }
+function apVencidos(){ return apAbiertos().filter(a=>apEstado(a)==='vencido'); }
+function apListos(){ return apAbiertos().filter(a=>apEstado(a)==='listo'); }
+function apPorVencer(d){ return apAbiertos().filter(a=>{ const n=apDiasRest(a); return apEstado(a)!=='vencido'&&n!==null&&n>=0&&n<=(d||3); }); }
+function _apTipoId(id){
+  const d=String(id||'').replace(/\s+/g,'').toUpperCase();
+  if(/^\d{13}$/.test(d)) return 'RUC';
+  if(/^\d{10}$/.test(d)) return 'Cédula';
+  return d?'Pasaporte':'';
+}
+
+// ── Registrar un apartado desde el cobro ──────────────────────────
+// No emite factura: solo recibo del abono. El producto sale de percha.
+let _apOcupado=false;
+async function apIniciar(total){
+  if(_apOcupado||cobrando) return;
+  if(!cajaPuedeCobrar()) return;
+  const est=estadoCaja();
+  if(est.e==='cerrada'){ alert('Abre la caja antes de registrar un apartado.'); render(); return; }
+  const t=T.find(x=>x.id===selT);
+  if(!t||!t.order.length||!(total>0)){ alert('No hay nada que apartar.'); return; }
+  const minimo=_r2(total*AP_PCT_MIN/100);
+  const txt=prompt('APARTADO — total '+fmt(total)+'\n\nAbono minimo ('+AP_PCT_MIN+'%): '+fmt(minimo)+'\n\n¿Cuanto abona el cliente ahora?', minimo.toFixed(2));
+  if(txt===null) return;
+  let abono=parseFloat(String(txt).replace(',','.'));
+  if(isNaN(abono)||abono<=0){ alert('Escribe un monto valido.'); return; }
+  abono=_r2(abono);
+  if(abono>total+0.004){ alert('El abono no puede superar el total.'); return; }
+  if(abono<minimo-0.004){
+    if(MI_ROL!=='admin'){ alert('El abono minimo es '+fmt(minimo)+' ('+AP_PCT_MIN+'%).\n\nPara aceptar menos se necesita una cuenta de administracion.'); return; }
+    if(!confirm('El abono es menor al '+AP_PCT_MIN+'% ('+fmt(minimo)+').\n\n¿Aceptarlo de todas formas?')) return;
+  }
+  const met=prompt('Forma de pago del abono:\n\n1 = Efectivo\n2 = T.Credito\n3 = T.Debito\n4 = Transferencia','1');
+  if(met===null) return;
+  const metodo=({'1':'Efectivo','2':'T.Crédito','3':'T.Débito','4':'Transferencia'})[String(met).trim()];
+  if(!metodo){ alert('Opcion no valida.'); return; }
+  const nombre=(prompt('Nombre del cliente:','')||'').trim();
+  if(nombre.length<3){ alert('Hace falta el nombre del cliente.'); return; }
+  const ident=(prompt('Cedula, RUC o pasaporte (se usara en la factura al entregar):','')||'').trim().toUpperCase();
+  const tipoId=_apTipoId(ident);
+  if(ident&&!tipoId){ alert('Esa identificacion no es valida.'); return; }
+  const tel=(prompt('Telefono (para recordarle antes de que venza):','')||'').trim();
+  if(!tel && !confirm('Sin telefono no se le puede recordar al cliente y es mas probable que el apartado se venza.\n\n¿Continuar igual?')) return;
+  const dTxt=prompt('¿En cuantos dias vence el apartado?', String(AP_DIAS_DEF));
+  if(dTxt===null) return;
+  const dias=Math.max(1,Math.round(parseFloat(dTxt)||AP_DIAS_DEF));
+  const vence=localISO(new Date(Date.now()+dias*86400000)).slice(0,10);
+  const saldo=_r2(total-abono);
+  if(!confirm('APARTADO de '+nombre+'\n\n'+t.order.map(i=>((+i.qty||1)>1?i.qty+'x ':'')+i.name).join('\n')+'\n\nTotal: '+fmt(total)+'\nAbona ahora: '+fmt(abono)+' ('+metodo+')\nSaldo: '+fmt(saldo)+'\nVence: '+vence+'\n\nSe entrega un RECIBO, no una factura. La factura sale el dia que se lleve el producto.\n\n¿Registrar?')) return;
+  _apOcupado=true;
+  try{
+    const apId='apart'+Date.now()+'_'+Math.random().toString(36).slice(2,5);
+    const items=t.order.map(i=>Object.assign({},i,{apYaDescontado:i.stockControl==='unidad'&&!!i.productId}));
+    const ap={id:apId,esMovCaja:true,tipo:'apartado',total:0,closed:false,
+      cliente:{nombre,identificacion:ident,tipoId,telefono:tel,email:''},
+      items,montoTotal:_r2(total),vence,diasPlazo:dias,estado:'vigente',ventaId:null,
+      mesaOrigen:t.name||'',aperturaId:est.ap?est.ap.id:null,
+      date:localISO(),user:turnoUser,userAuth:authUser()};
+    const ab={id:'apab'+Date.now()+'_'+Math.random().toString(36).slice(2,5),esMovCaja:true,tipo:'abono_apartado',
+      apartadoId:apId,monto:abono,metodo,motivo:'Abono de apartado · '+nombre,
+      cliente:{nombre,identificacion:ident},
+      aperturaId:est.ap?est.ap.id:null,date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
+    if(!(await saveVenta(ap))){ alert('No se pudo guardar el apartado. No se registro nada.'); return; }
+    await saveVenta(ab);
+    items.forEach(i=>{ if(i.apYaDescontado) ajustarStock(i.productId,-(+i.qty||1)); });
+    t.order=[];t.status='libre';t.comandas=[];t.openedAt=null;t.pedidoWeb=null;
+    cobConf=false;modoParcial=false;pagosParciales=[];splitMode=false;splitItems={};
+    descuento=0;descuentoTipo='monto';descuentoMotivo='';descuentoAutor='';descuentoAutorAuth='';descuentoAutId='';
+    selT=null;
+    sT();
+    bitacora('apartado_creado',{accion:'Aparto '+fmt(total)+' para '+nombre+' con abono de '+fmt(abono)+' en '+metodo+'; saldo '+fmt(saldo)+', vence '+vence,monto:total});
+    render();
+    try{ apImprimirRecibo(ap,ab); }catch(e){ console.error('recibo',e); }
+    try{ apImprimirEtiqueta(ap); }catch(e){ console.error('etiqueta',e); }
+    alert('✓ Apartado registrado.\n\nSaldo: '+fmt(saldo)+'\nVence: '+vence+'\n\nEntrega el RECIBO al cliente, pega la etiqueta al producto y guardalo en la repisa de apartados.\n\nLa factura se emite el dia que se lo lleve.');
+  } finally { _apOcupado=false; render(); }
+}
+
+// ── Recibir un abono posterior ────────────────────────────────────
+async function apAbonar(apId){
+  if(_apOcupado) return;
+  const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(apId));
+  if(!a) return;
+  if(AP_CERRADO.includes(apEstado(a))){ alert('Este apartado ya esta cerrado.'); return; }
+  const sal=apSaldo(a);
+  if(sal<=0.004){ alert('Este apartado ya esta pagado por completo. Falta entregarlo y facturarlo.'); return; }
+  if(!cajaPuedeCobrar()) return;
+  const est=estadoCaja();
+  if(est.e==='cerrada'){ alert('Abre la caja antes de recibir el abono.'); render(); return; }
+  const txt=prompt('Saldo pendiente: '+fmt(sal)+'\n\n¿Cuanto abona ahora? (Enter para el saldo completo)', sal.toFixed(2));
+  if(txt===null) return;
+  let m=parseFloat(String(txt).replace(',','.'));
+  if(isNaN(m)||m<=0){ alert('Escribe un monto valido.'); return; }
+  m=_r2(Math.min(m,sal));
+  const met=prompt('Forma de pago:\n\n1 = Efectivo\n2 = T.Credito\n3 = T.Debito\n4 = Transferencia','1');
+  if(met===null) return;
+  const metodo=({'1':'Efectivo','2':'T.Crédito','3':'T.Débito','4':'Transferencia'})[String(met).trim()];
+  if(!metodo){ alert('Opcion no valida.'); return; }
+  const nuevo=_r2(sal-m);
+  if(!confirm('¿Registrar '+fmt(m)+' en '+metodo+' del apartado de '+(apCliente(a).nombre||'')+'?\n\n'+(nuevo<=0.004?'Queda PAGADO: ya se puede entregar y facturar.':'Quedara un saldo de '+fmt(nuevo)+'.'))) return;
+  _apOcupado=true;
+  try{
+    const ab={id:'apab'+Date.now()+'_'+Math.random().toString(36).slice(2,5),esMovCaja:true,tipo:'abono_apartado',
+      apartadoId:String(a.id),monto:m,metodo,motivo:'Abono de apartado · '+(apCliente(a).nombre||''),
+      cliente:{nombre:apCliente(a).nombre||'',identificacion:apCliente(a).identificacion||''},
+      aperturaId:est.ap?est.ap.id:null,date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
+    const ok=await saveVenta(ab);
+    bitacora('abono_apartado',{accion:'Recibio '+fmt(m)+' en '+metodo+' del apartado de '+(apCliente(a).nombre||'')+' (saldo anterior '+fmt(sal)+')',monto:m});
+    render();
+    try{ apImprimirRecibo(a,ab); }catch(e){}
+    if(ok) alert('✓ Abono de '+fmt(m)+' registrado.\n\n'+(nuevo<=0.004?'APARTADO PAGADO. Cuando venga por el producto, usa «Entregar y facturar».':'Saldo pendiente: '+fmt(nuevo)));
+  } finally { _apOcupado=false; }
+}
+
+// ── Entregar: cargar a una mesa para cobrar y facturar ────────────
+// Los abonos ya recibidos entran como pago; la factura sale por el total.
+function apEntregar(apId){
+  const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(apId));
+  if(!a) return;
+  if(AP_CERRADO.includes(apEstado(a))){ alert('Este apartado ya esta cerrado.'); return; }
+  if(!cajaPuedeCobrar()) return;
+  const libres=T.filter(x=>!x.order||!x.order.length);
+  if(!libres.length){ alert('No hay ninguna mesa libre para cargar el apartado. Cierra una mesa e intentalo de nuevo.'); return; }
+  const nom=prompt('¿A que mesa cargo el apartado para cobrarlo y facturarlo?\n\nLibres: '+libres.map(x=>x.name).join(', '), libres[0].name);
+  if(nom===null) return;
+  const t=libres.find(x=>String(x.name).toLowerCase()===String(nom).trim().toLowerCase())||libres.find(x=>String(x.id)===String(nom).trim());
+  if(!t){ alert('No encontre esa mesa libre.'); return; }
+  const abon=apAbonado(a.id);
+  t.order=(a.items||[]).map(i=>Object.assign({},i));
+  t.status='ocupada'; t.openedAt=localISO(); t.pedidoWeb=null;
+  t.apartadoRef={id:String(a.id),cliente:apCliente(a).nombre||'',abonado:abon,openedAt:t.openedAt};
+  sT();
+  bitacora('apartado_a_mesa',{accion:'Cargo el apartado de '+(apCliente(a).nombre||'')+' a la mesa '+t.name+' para cobrarlo y facturarlo'});
+  selT=t.id; cobConf=false; modoParcial=false; pagosParciales=[];
+  irA('pos');
+  setTimeout(()=>alert('Apartado cargado a la mesa '+t.name+'.\n\nPulsa «Cobrar»: los '+fmt(abon)+' ya abonados se aplican solos y solo se cobra la diferencia.\n\nTermina con «Cobrar y emitir factura».'),80);
+}
+
+// ── Vencido sin reclamar: pasa a saldo a favor ────────────────────
+// El dinero ya esta en caja; se convierte en un abono de cliente
+// aplicable en cualquier consumo, y el producto vuelve a percha.
+// noSumaCaja evita contar ese efectivo dos veces: ya entro con el abono.
+async function apSaldoAFavor(apId){
+  if(_apOcupado) return;
+  if(MI_ROL!=='admin'){ alert('Convertir un apartado en saldo a favor requiere una cuenta de administracion.'); return; }
+  const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(apId));
+  if(!a||AP_CERRADO.includes(apEstado(a))) return;
+  const abonado=apAbonado(a.id);
+  if(abonado<=0.004){ alert('Este apartado no tiene abonos: anulalo en vez de convertirlo.'); return; }
+  const motivo=(prompt('Motivo (obligatorio):','El cliente no retiro el producto en el plazo')||'').trim();
+  if(motivo.length<4){ alert('Debes indicar el motivo.'); return; }
+  if(!confirm('Apartado de '+(apCliente(a).nombre||'')+'\n\nAbonado: '+fmt(abonado)+'\n\n• El producto vuelve a percha (se repone el stock).\n• Los '+fmt(abonado)+' quedan como SALDO A FAVOR del cliente, aplicable en cualquier consumo.\n• No se devuelve efectivo.\n\n¿Confirmas?')) return;
+  _apOcupado=true;
+  try{
+    const metodoMay=(apAbonos(a.id).slice().sort((x,y)=>(+y.monto||0)-(+x.monto||0))[0]||{}).metodo||'Efectivo';
+    const sf={id:'antcli'+Date.now()+'_'+Math.random().toString(36).slice(2,5),esMovCaja:true,tipo:'anticipo',
+      esAnticipoCliente:true,noSumaCaja:true,origenApartadoId:String(a.id),
+      monto:abonado,metodo:metodoMay,referencia:'Saldo a favor de apartado',
+      cliente:{nombre:apCliente(a).nombre||'',identificacion:apCliente(a).identificacion||'',
+               tipo:apCliente(a).tipoId||'',telefono:apCliente(a).telefono||'',email:apCliente(a).email||''},
+      evento:'Saldo a favor (apartado no retirado)',fechaEvento:today(),
+      aperturaId:(estadoCaja().ap||{}).id||null,date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
+    if(!(await saveVenta(sf))){ alert('No se pudo crear el saldo a favor. No se cambio nada.'); return; }
+    const rec=Object.assign({},a,{estado:'saldo_favor',saldoFavorId:sf.id,motivoCierre:motivo,
+      fechaCierre:localISO(),cerradoPor:authUser()});
+    await saveVenta(rec);
+    (a.items||[]).forEach(i=>{ if(i.apYaDescontado) ajustarStock(i.productId,+(+i.qty||1)); });
+    sT();
+    bitacora('apartado_saldo_favor',{accion:'Convirtio el apartado de '+(apCliente(a).nombre||'')+' en saldo a favor de '+fmt(abonado)+' y repuso el producto: '+motivo,monto:abonado,obs:motivo});
+    render();
+    alert('✓ Saldo a favor de '+fmt(abonado)+' creado para '+(apCliente(a).nombre||'')+'.\n\nSe aplica desde el cobro, con el boton de abonos de cliente.\n\nEl producto volvio a percha.');
+  } finally { _apOcupado=false; }
+}
+
+// ── Anular un apartado sin abonos ─────────────────────────────────
+async function apAnular(apId){
+  if(_apOcupado) return;
+  if(MI_ROL!=='admin'){ alert('Anular un apartado requiere una cuenta de administracion.'); return; }
+  const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(apId));
+  if(!a||AP_CERRADO.includes(apEstado(a))) return;
+  const abonado=apAbonado(a.id);
+  if(abonado>0.004){ alert('Este apartado tiene '+fmt(abonado)+' en abonos.\n\nUsa «Pasar a saldo a favor». Si de verdad vas a devolver el efectivo, anula primero cada abono en Caja → Abrir / cerrar caja → Ingresos.'); return; }
+  const motivo=(prompt('Motivo de la anulacion (obligatorio):')||'').trim();
+  if(motivo.length<4){ alert('Debes indicar el motivo.'); return; }
+  _apOcupado=true;
+  try{
+    const rec=Object.assign({},a,{estado:'anulado',motivoCierre:motivo,fechaCierre:localISO(),cerradoPor:authUser()});
+    const ok=await saveVenta(rec);
+    (a.items||[]).forEach(i=>{ if(i.apYaDescontado) ajustarStock(i.productId,+(+i.qty||1)); });
+    sT();
+    bitacora('apartado_anulado',{accion:'Anulo el apartado de '+(apCliente(a).nombre||'')+' y repuso el producto: '+motivo,obs:motivo});
+    render();
+    if(ok) alert('✓ Apartado anulado. El producto volvio a percha.');
+  } finally { _apOcupado=false; }
+}
+
+// ── Recordatorio al cliente por WhatsApp ──────────────────────────
+function apWhatsApp(apId){
+  const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(apId));
+  if(!a) return;
+  const c=apCliente(a), sal=apSaldo(a), n=apDiasRest(a);
+  const tel=String(c.telefono||'').replace(/\D/g,'');
+  if(!tel){ alert('Este apartado no tiene telefono registrado.'); return; }
+  const num=tel.length===10&&tel[0]==='0' ? '593'+tel.slice(1) : tel;
+  const cuando = sal<=0.004 ? 'ya esta pagado y te espera'
+    : n===null?'' : n<0?('vencio el '+apVence(a)) : n===0?'vence HOY' : n===1?'vence mañana' : ('vence el '+apVence(a));
+  const msg='Hola '+(c.nombre||'')+', te saludamos de La Madriguera. Tu apartado de '+apResumenItems(a)+' '+cuando+
+    (sal>0.004?'. Saldo pendiente: $'+sal.toFixed(2):'')+'. Te esperamos en Urdesa Central. ¡Gracias!';
+  window.open('https://wa.me/'+num+'?text='+encodeURIComponent(msg),'_blank');
+}
+
+// ── Recibo de 80 mm del abono (NO es comprobante de venta) ────────
+function apImprimirRecibo(a,ab){
+  const c=apCliente(a), sal=_r2(apSaldo(a));
+  const now=new Date((ab&&ab.date)||a.date||Date.now());
+  let b='<div class="c b" style="font-size:13pt">LA MADRIGUERA</div><div class="c">Cafe-Libreria - Urdesa Central</div><div class="line"></div>';
+  b+='<div class="c b">RECIBO DE ABONO POR APARTADO</div><div class="c">NO ES COMPROBANTE DE VENTA</div><div class="line"></div>';
+  b+='<div>Fecha: '+now.toLocaleDateString('es-EC')+'</div><div>Cliente: '+sanitize(c.nombre||'')+'</div>';
+  if(c.identificacion) b+='<div>Identificacion: '+sanitize(c.identificacion)+'</div>';
+  b+='<div class="line"></div><div style="font-size:9pt">'+sanitize(apResumenItems(a))+'</div><div class="line"></div>';
+  b+='<div class="row"><span>Total del apartado</span><span>$'+(+a.montoTotal||0).toFixed(2)+'</span></div>';
+  if(ab) b+='<div class="row b"><span>ABONA HOY</span><span>$'+(+ab.monto||0).toFixed(2)+'</span></div><div>Forma de pago: '+sanitize(ab.metodo||'')+'</div>';
+  b+='<div class="row"><span>Abonado en total</span><span>$'+apAbonado(a.id).toFixed(2)+'</span></div>';
+  b+='<div class="row b"><span>SALDO</span><span>$'+sal.toFixed(2)+'</span></div>';
+  b+='<div class="line"></div><div class="c b">VENCE '+sanitize(apVence(a))+'</div>';
+  b+='<div style="font-size:8pt;margin-top:4px">La factura se emite al entregar el producto. El producto se entrega con el saldo cancelado. Vencido el plazo, lo abonado queda como saldo a favor para consumir en la tienda.</div>';
+  b+='<div style="font-size:7pt">Ref: '+sanitize(String(a.id))+'</div>';
+  printViaIframe(b);
+}
+
+// ── Etiqueta de 80 mm para pegar al producto ──────────────────────
+function apImprimirEtiqueta(a){
+  const c=apCliente(a), sal=apSaldo(a);
+  let b='<div class="c b" style="font-size:15pt">APARTADO</div>';
+  b+='<div class="c" style="font-size:8pt">LA MADRIGUERA - NO VENDER</div><div class="line"></div>';
+  b+='<div class="c b" style="font-size:14pt">'+sanitize(c.nombre||'')+'</div>';
+  b+='<div class="c" style="font-size:11pt">'+sanitize(c.telefono||'')+'</div><div class="line"></div>';
+  b+='<div style="font-size:9pt">'+sanitize(apResumenItems(a))+'</div><div class="line"></div>';
+  b+='<div class="row b" style="font-size:13pt"><span>SALDO</span><span>$'+sal.toFixed(2)+'</span></div>';
+  b+='<div class="c b" style="font-size:13pt;margin-top:4px">VENCE '+sanitize(apVence(a))+'</div>';
+  b+='<div class="line"></div><div class="c" style="font-size:8pt">Entregar solo con saldo en $0.00</div>';
+  b+='<div style="font-size:7pt">Ref: '+sanitize(String(a.id))+'</div>';
+  printViaIframe(b);
+}
+
+
+// ── Al cobrar una mesa que trae un apartado ───────────────────────
+// Los abonos ya recibidos se cargan solos como pago: el cajero solo
+// cobra la diferencia. Llevan apartadoAbonoId para que efectivoDe NO
+// los vuelva a contar: ese efectivo entro el dia del abono.
+function apRefDeMesa(t){
+  return (t&&t.apartadoRef&&t.apartadoRef.openedAt===t.openedAt)?t.apartadoRef:null;
+}
+function apPrecargarPagos(){
+  const t=T.find(x=>x.id===selT), ref=apRefDeMesa(t);
+  if(!ref) return;
+  const abs=apAbonos(ref.id);
+  if(!abs.length) return;
+  modoParcial=true;
+  pagosParciales=abs.map(x=>({metodo:x.metodo||'Efectivo',monto:_r2(+x.monto||0),
+    apartadoAbonoId:String(x.id),apartadoCliente:ref.cliente||''}));
+}
+function apValidarPagosMesa(t,pagos){
+  const ref=apRefDeMesa(t);
+  if(!ref) return '';
+  const puestos=_r2((pagos||[]).filter(p=>p&&p.apartadoAbonoId).reduce((a,p)=>a+(+p.monto||0),0));
+  const debidos=apAbonado(ref.id);
+  if(puestos<debidos-0.005)
+    return 'Este apartado ya tiene '+fmt(debidos)+' abonados y en el cobro solo constan '+fmt(puestos)+'.\n\nSi cobras asi, le cobrarias al cliente dinero que ya pagó. Vuelve atrás y usa «Cobrar» de nuevo para que los abonos se carguen solos.';
+  return '';
+}
+async function apMarcarFacturado(ref,venta){
+  try{
+    const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(ref.id));
+    if(!a) return;
+    await saveVenta(Object.assign({},a,{estado:'facturado',ventaId:String(venta.id),
+      fechaCierre:localISO(),cerradoPor:authUser()}));
+    bitacora('apartado_entregado',{accion:'Entregó y facturó el apartado de '+(apCliente(a).nombre||'')+' ('+fmt(a.montoTotal)+')',monto:+a.montoTotal||0});
+  }catch(e){ console.warn('apMarcarFacturado:',e); }
+}
+// Comprador para prellenar la factura cuando la mesa trae un apartado
+function apCompradorDeMesa(t){
+  const ref=apRefDeMesa(t); if(!ref) return null;
+  const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(ref.id)); if(!a) return null;
+  const c=apCliente(a);
+  if(!c.identificacion&&!c.nombre) return null;
+  return {tipo:c.tipoId||'',identificacion:c.identificacion||'',nombre:c.nombre||'',email:c.email||''};
+}
+// Si se anula la venta de un apartado, el apartado vuelve a abrirse:
+// el cliente no se llevo nada y el producto sigue en la repisa.
+async function apReabrir(venta,motivo){
+  try{
+    const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(venta.apartadoId));
+    if(!a||a.estado!=='facturado') return;
+    await saveVenta(Object.assign({},a,{estado:'vigente',ventaId:null,fechaCierre:null,cerradoPor:null,
+      notaReapertura:'Se anuló la venta '+String(venta.id)+': '+(motivo||'')}));
+    bitacora('apartado_reabierto',{accion:'Se anuló la venta del apartado de '+(apCliente(a).nombre||'')+'; el apartado vuelve a quedar abierto',obs:motivo||''});
+  }catch(e){ console.warn('apReabrir:',e); }
+}
+
+// ── Pestaña «📦 Apartados» (Caja) ─────────────────────────────────
+// El cliente llega y dice «vengo por mi libro»: el cajero escribe el
+// nombre o la cedula y aqui esta todo.
+let apTab='abiertos', apBusca='';
+function apFiltrados(){
+  let l = apTab==='cerrados' ? apTodos().filter(a=>AP_CERRADO.includes(apEstado(a)))
+        : apTab==='vencidos' ? apVencidos()
+        : apTab==='listos'   ? apListos()
+        : apAbiertos();
+  const q=apBusca.trim().toLowerCase();
+  if(q) l=l.filter(a=>{
+    const c=apCliente(a);
+    return (String(c.nombre||'')+' '+String(c.identificacion||'')+' '+String(c.telefono||'')+' '+apResumenItems(a)).toLowerCase().includes(q);
+  });
+  return l;
+}
+function apTarjeta(a){
+  const c=apCliente(a), est=apEstado(a), E=AP_EST[est]||AP_EST.vigente;
+  const sal=apSaldo(a), pag=apAbonado(a.id), n=apDiasRest(a);
+  const cerrado=AP_CERRADO.includes(est);
+  const cuando = est==='facturado' ? 'Entregado y facturado el '+String(a.fechaCierre||'').slice(0,10)
+    : est==='saldo_favor' ? 'Pasó a saldo a favor el '+String(a.fechaCierre||'').slice(0,10)
+    : est==='anulado' ? 'Anulado el '+String(a.fechaCierre||'').slice(0,10)
+    : n===null ? '' : n<0 ? ('Venció hace '+Math.abs(n)+' día(s)') : n===0 ? 'Vence HOY' : n===1 ? 'Vence mañana' : ('Vence en '+n+' días · '+apVence(a));
+  const listo = !cerrado && sal<=0.004;
+  const admin = MI_ROL==='admin';
+  return `<div style="border:1px solid var(--border);border-radius:var(--rs);padding:10px;margin-bottom:8px;background:var(--card);${cerrado?'opacity:.72':''}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+      <div style="min-width:0">
+        <b style="font-size:13px">${esc(c.nombre||'(sin nombre)')}</b>
+        <div style="font-size:11px;color:var(--text3)">${esc(c.identificacion||'')}${c.telefono?' · '+esc(c.telefono):''}</div>
+      </div>
+      <span style="font-size:10px;font-weight:700;padding:3px 7px;border-radius:10px;background:${E[2]};color:${E[1]};white-space:nowrap">${E[0]}</span>
+    </div>
+    <div style="font-size:11.5px;margin:6px 0;color:var(--text2)">${esc(apResumenItems(a))}</div>
+    <div style="display:flex;gap:10px;font-size:11px;flex-wrap:wrap">
+      <span>Total <b>${fmt(a.montoTotal)}</b></span>
+      <span style="color:#1f6b45">Abonado <b>${fmt(pag)}</b></span>
+      <span style="color:${sal>0.004?'#8b1a1a':'#1f6b45'}">Saldo <b>${fmt(sal)}</b></span>
+    </div>
+    <div style="font-size:10.5px;color:${est==='vencido'?'#8b1a1a':'var(--text3)'};margin-top:3px;font-weight:${est==='vencido'?'700':'400'}">${esc(cuando)}</div>
+    ${a.motivoCierre?`<div style="font-size:10px;color:var(--text3);margin-top:2px;font-style:italic">${esc(a.motivoCierre)}</div>`:''}
+    <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
+      ${(!cerrado&&sal>0.004)?`<button class="btn btn-sm" style="background:#dcfce7;color:#1f6b45;border:1px solid #86efac;font-size:10.5px;font-weight:700" data-apab="${esc(a.id)}">💵 Recibir abono</button>`:''}
+      ${cerrado?'':`<button class="btn btn-sm" style="font-size:10.5px;${listo?'background:#1a3f8b;color:#fff;border:none;font-weight:700':'background:#eee;color:#999;border:1px solid #ddd;cursor:not-allowed'}" data-apent="${esc(a.id)}" data-ok="${listo?'1':'0'}">🧾 Entregar y facturar</button>`}
+      ${(c.telefono&&!cerrado)?`<button class="btn btn-sm btn-g" style="font-size:10.5px" data-apwa="${esc(a.id)}">💬 Recordar</button>`:''}
+      <button class="btn btn-sm btn-g" style="font-size:10.5px" data-aprec="${esc(a.id)}">🧾 Recibo</button>
+      ${cerrado?'':`<button class="btn btn-sm btn-g" style="font-size:10.5px" data-apetq="${esc(a.id)}">🏷 Etiqueta</button>`}
+      ${(admin&&!cerrado&&pag>0.004)?`<button class="btn btn-sm btn-g" style="font-size:10.5px;color:#7c3aed" data-apsf="${esc(a.id)}">↩ Pasar a saldo a favor</button>`:''}
+      ${(admin&&!cerrado&&pag<=0.004)?`<button class="btn btn-sm btn-g" style="font-size:10.5px;color:var(--red)" data-apanu="${esc(a.id)}">✕ Anular</button>`:''}
+    </div>
+  </div>`;
+}
+function rApartadosPOS(){
+  const ab=apAbiertos(), ven=apVencidos(), lis=apListos();
+  const tabs=[['abiertos','Abiertos ('+ab.length+')'],['listos','Pagados ('+lis.length+')'],['vencidos','Vencidos ('+ven.length+')'],['cerrados','Cerrados']];
+  const l=apFiltrados();
+  return `<div style="padding:10px">
+    ${ven.length?`<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--rs);padding:8px 10px;margin-bottom:9px;font-size:11.5px;color:#8b1a1a">
+      <b>${ven.length} apartado(s) vencido(s)</b> con ${fmt(ven.reduce((s,a)=>s+apAbonado(a.id),0))} ya abonados. Llama al cliente; si no viene, pásalo a saldo a favor.</div>`:''}
+    ${lis.length?`<div style="background:#dcfce7;border:1px solid #86efac;border-radius:var(--rs);padding:8px 10px;margin-bottom:9px;font-size:11.5px;color:#1f6b45">
+      <b>${lis.length} apartado(s) pagado(s)</b> esperando que el cliente los retire. Se factura al entregar.</div>`:''}
+    <div style="display:flex;gap:4px;margin-bottom:8px;overflow-x:auto">
+      ${tabs.map(t=>`<button class="btn btn-sm" style="font-size:10.5px;white-space:nowrap;${apTab===t[0]?'background:var(--acc);color:#fff;border:none;font-weight:700':'background:var(--card);border:1px solid var(--border);color:var(--text2)'}" data-aptab="${t[0]}">${t[1]}</button>`).join('')}
+    </div>
+    <input id="ap-busca" type="search" placeholder="Buscar por nombre, cédula o producto…" value="${esc(apBusca)}" style="width:100%;padding:8px 10px;border-radius:var(--rs);border:1.5px solid var(--b2);font-size:12px;font-family:inherit;margin-bottom:9px">
+    ${l.length?l.map(apTarjeta).join(''):`<div style="text-align:center;color:var(--text3);font-size:12px;padding:22px 0">No hay apartados ${apBusca?'que coincidan con la búsqueda':'en esta lista'}.</div>`}
+    <div style="font-size:10px;color:var(--text3);margin-top:10px;line-height:1.5;border-top:1px solid var(--border);padding-top:8px">
+      El abono es un anticipo, no una venta: se entrega recibo, no factura. La factura se emite al entregar el producto, por el total, y ahí los abonos entran como pago. El producto ya está descontado del stock desde que se apartó.
+    </div>
+  </div>`;
+}
+function attachApartadosPOS(mc){
+  mc.querySelectorAll('[data-aptab]').forEach(el=>el.addEventListener('click',()=>{apTab=el.dataset.aptab;render();}));
+  const b=mc.querySelector('#ap-busca');
+  if(b) b.addEventListener('input',()=>{
+    apBusca=b.value;
+    clearTimeout(window._apT);
+    window._apT=setTimeout(()=>{ const pos=b.selectionStart; render(); const nb=document.getElementById('ap-busca'); if(nb){nb.focus(); try{nb.setSelectionRange(pos,pos);}catch(e){}} },250);
+  });
+  const doc1=(sel,fn)=>mc.querySelectorAll(sel).forEach(el=>el.addEventListener('click',()=>fn(el)));
+  doc1('[data-apab]', el=>apAbonar(el.dataset.apab));
+  doc1('[data-apwa]', el=>apWhatsApp(el.dataset.apwa));
+  doc1('[data-apsf]', el=>apSaldoAFavor(el.dataset.apsf));
+  doc1('[data-apanu]', el=>apAnular(el.dataset.apanu));
+  doc1('[data-aprec]', el=>{ const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(el.dataset.aprec)); if(a) apImprimirRecibo(a,null); });
+  doc1('[data-apetq]', el=>{ const a=S.find(x=>esApartadoDoc(x)&&String(x.id)===String(el.dataset.apetq)); if(a) apImprimirEtiqueta(a); });
+  doc1('[data-apent]', el=>{
+    if(el.dataset.ok!=='1'){ alert('Todavía hay saldo pendiente. Recibe el saldo antes de entregar y facturar.'); return; }
+    apEntregar(el.dataset.apent);
+  });
 }
 
 // ── Reservas de la app (lm_entradas) ──
@@ -6226,6 +6692,7 @@ function attachCaja(){
   mc.querySelector('#bctcambio')?.addEventListener('click',()=>cerrarSesionPOS('cambio de turno'));
   if(cajaTab==='reconstruccion') attachReconstruccion();
   if(cajaTab==='reservas') attachReservasPOS(mc);
+  if(cajaTab==='apartados') attachApartadosPOS(mc);
   mc.querySelector('#bhistmes')?.addEventListener('click',async()=>{
     if(!histMesPtr)histMesPtr=VENTAS_DESDE.slice(0,7);
     const d=new Date(histMesPtr+'-15');d.setMonth(d.getMonth()-1);
@@ -10452,6 +10919,11 @@ async function auPublicar(aid,silencioso){
     .sort((x,y)=>String(y.fecha).localeCompare(String(x.fecha)))
     .map(l=>({numero:l.numero||'',fecha:String(l.fecha||'').slice(0,10),
       unidades:+l.unidades||0,bruto:+l.bruto||0,pagoAutor:+l.pagoAutor||0,metodo:l.metodo||''}));
+  const devoluciones=(AU.devoluciones||[]).filter(d=>d.autorId===aid)
+    .sort((x,y)=>String(y.fecha).localeCompare(String(x.fecha)))
+    .map(d=>({numero:d.numero||'',fecha:String(d.fecha||'').slice(0,10),
+      unidades:+d.unidades||0,motivo:d.motivo||'',
+      lineas:(d.lineas||[]).map(l=>({titulo:l.titulo,cantidad:+l.cantidad||0}))}));
   const foto={
     autor:{nombre:a.nombre||'',codigo:a.codigo||''},
     casa:{nombre:AU_CASA.nombre,direccion:AU_CASA.direccion,ciudad:AU_CASA.ciudad},
@@ -10460,7 +10932,7 @@ async function auPublicar(aid,silencioso){
       fecha:(a.contrato&&a.contrato.fecha)||'',
       nombre:(a.contrato&&a.contrato.nombre)||''},
     contratoTexto:textoContratoAutorEC(Object.assign({},a,{cedula:''}),r.obras),
-    obras,ventas,liquidaciones,
+    obras,ventas,liquidaciones,devoluciones,
     totales:{titulos:r.titulos,entregados:r.entregados,stock:r.stock,vendidos:r.vendidos,
       devueltos:r.devueltos,brutoPendiente:s.bruto,porPagar:s.pago,unidadesPendientes:s.unidades},
     actualizado:localISO()
@@ -10524,10 +10996,10 @@ function repCorresponde(g){
 /* ====================== PESTAÑA: AUTORES ECUATORIANOS ====================== */
 function rAutoresEC(){
   const soloConsulta=MI_ROL!=='admin';
-  if(soloConsulta){ auEditAutor=null; auAddObraTo=null; auLiquidarTo=null; auEditObra=null;
+  if(soloConsulta){ auEditAutor=null; auAddObraTo=null; auLiquidarTo=null; auEditObra=null; auDevolverA=null;
     if(auSub!=='obras'&&auSub!=='ventas') auSub='obras'; }
   const subs=soloConsulta?[['obras','Obras'],['ventas','Ventas']]
-    :[['autores','Autores'],['obras','Obras'],['ventas','Ventas'],['liq','Liquidaciones']];
+    :[['autores','Autores'],['obras','Obras'],['ventas','Ventas'],['dev','Devoluciones'],['liq','Liquidaciones']];
   const tabs=subs.map(([k,l])=>`<button class="ctab${auSub===k?' on':''}" data-asub="${k}">${l}</button>`).join('');
 
   const nAut=(AU.autores||[]).length;
@@ -10550,6 +11022,7 @@ function rAutoresEC(){
   else if(auSub==='autores') body=rAuAutores();
   else if(auSub==='obras') body=rAuObras();
   else if(auSub==='ventas') body=rAuVentas();
+  else if(auSub==='dev') body=rAuDevoluciones();
   else body=rAuLiquidaciones();
 
   return `<h2 style="margin:0 0 4px">Autores ecuatorianos</h2>
@@ -10704,7 +11177,7 @@ function rAuObras(){
       </div>
       <div class="two-col">
         <div class="fg"><label>Recibir más ejemplares</label><input id="oe-mas" type="number" step="1" min="0" value="0"></div>
-        <div class="fg"><label>Devolver ejemplares al autor</label><input id="oe-dev" type="number" step="1" min="0" max="${+o.stock||0}" value="0"></div>
+        <div class="fg"><label>Devoluciones</label><button class="btn btn-g" style="width:100%" id="oe-devolver">Registrar devolución…</button></div>
       </div>
       <div class="fg"><label>Renovar plazo (días desde hoy)</label><input id="oe-plazo" type="number" step="15" min="0" value="0" placeholder="0 = no renovar"></div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
@@ -10712,7 +11185,7 @@ function rAuObras(){
         <button class="btn btn-acc" style="flex:1" id="oe-save">Guardar</button>
         ${o.estado!=='retirada'?`<button class="btn btn-g btn-sm" id="oe-retirar">Retirar de la percha</button>`:`<button class="btn btn-g btn-sm" id="oe-reactivar">Volver a exhibir</button>`}
       </div>
-      <div style="margin-top:12px;font-size:11.5px;color:var(--text3)">Subir el PVP afecta solo a las ventas futuras. Lo ya vendido conserva el precio y el porcentaje con los que se cobró.</div>
+      <div style="margin-top:12px;font-size:11.5px;color:var(--text3)">Subir el PVP afecta solo a las ventas futuras. Lo ya vendido conserva el precio y el porcentaje con los que se cobró.<br>Las devoluciones se registran en su propia pestaña, porque generan un acta numerada que el autor firma.</div>
     </div>`;
   }
 
@@ -10869,13 +11342,163 @@ function textoActaLiquidacionEC(l){
     </tr></table></div>`;
 }
 
+/* ── Devoluciones al autor ──────────────────────────────────────
+   Antes la devolución se tecleaba dentro de «Gestionar obra» y solo
+   descontaba ejemplares: no quedaba constancia de qué salió, cuándo ni
+   con el visto de quién. Ahora toda devolución pasa por aquí y genera
+   un acta numerada, imprimible y consultable por el autor en su enlace.
+   dev: {id,numero,autorId,fecha,motivo,notas,unidades,user,
+         lineas:[{obraId,titulo,isbn,cantidad,pvp}]}                      */
+
+function auNumeroDev(){
+  return 'DEV-'+String(((AU.devoluciones||[]).length+1)).padStart(4,'0');
+}
+/* Teléfono en formato internacional para el enlace de WhatsApp.
+   En Ecuador el celular se escribe 09XXXXXXXX y viaja como 593XXXXXXXXX. */
+function auTelWA(tel){
+  let d=String(tel||'').replace(/\D/g,'');
+  if(!d) return '';
+  if(d.startsWith('593')) return d;
+  if(d.startsWith('0'))   return '593'+d.slice(1);
+  if(d.length===9)        return '593'+d;
+  return d;
+}
+function auMensajeDev(d){
+  const a=autorECPorId(d.autorId)||{};
+  const pila=String(a.nombre||'').split(' ')[0]||'';
+  const lineas=(d.lineas||[]).map(l=>'• '+l.titulo+' — '+l.cantidad+' ejemplar(es)').join('\n');
+  const enlace=a.token?auURLPublica(a.token):'';
+  return 'Hola'+(pila?' '+pila:'')+', te confirmo la devolución de '+(+d.unidades||0)
+    +' ejemplar(es) de tus obras, registrada el '+fechaCorta(d.fecha)+' con el acta '+(d.numero||'')+':\n\n'
+    +lineas
+    +(d.motivo?'\n\nMotivo: '+d.motivo:'')
+    +(enlace?'\n\nQueda constancia en tu página, junto con tus ventas:\n'+enlace:'')
+    +'\n\nGracias por confiar en La Madriguera.';
+}
+function auEnlaceWA(d){
+  const a=autorECPorId(d.autorId)||{};
+  const tel=auTelWA(a.telefono);
+  const txt=encodeURIComponent(auMensajeDev(d));
+  return tel ? ('https://wa.me/'+tel+'?text='+txt) : ('https://wa.me/?text='+txt);
+}
+
+function textoActaDevolucionEC(d){
+  const a=autorECPorId(d.autorId)||{};
+  const filas=(d.lineas||[]).map((l,i)=>`<tr>
+      <td style="text-align:center">${i+1}</td>
+      <td>${esc(l.titulo)}</td>
+      <td style="text-align:center">${esc(l.isbn||'—')}</td>
+      <td style="text-align:center">${+l.cantidad||0}</td>
+      <td style="text-align:right">${fmt(l.pvp)}</td>
+      <td style="text-align:right">${fmt((+l.cantidad||0)*(+l.pvp||0))}</td>
+    </tr>`).join('');
+  const totVal=(d.lineas||[]).reduce((s,l)=>s+(+l.cantidad||0)*(+l.pvp||0),0);
+  const enlace=a.token?auURLPublica(a.token):'';
+  return `<div class="au-contrato">
+    <h2 style="text-align:center;margin:0 0 2px">ACTA DE DEVOLUCIÓN DE EJEMPLARES EN CONSIGNACIÓN</h2>
+    <p style="text-align:center;font-size:11px;margin:0 0 14px">${esc(d.numero||'')} · ${esc(AU_CASA.nombre)}</p>
+    <p><b>Autor (comitente):</b> ${esc(a.nombre||'')}${a.cedula?' · C.C. '+esc(a.cedula):''}${a.ruc?' · RUC '+esc(a.ruc):''}<br>
+    <b>Fecha de devolución:</b> ${fechaCorta(d.fecha)}${d.motivo?`<br>
+    <b>Motivo:</b> ${esc(d.motivo)}`:''}${d.notas?`<br>
+    <b>Observaciones:</b> ${esc(d.notas)}`:''}</p>
+    <p style="font-size:11.5px">En la ciudad de ${esc(AU_CASA.ciudad)}, EL COMISIONISTA restituye a EL COMITENTE los ejemplares que a continuación se detallan, entregados oportunamente en consignación y no vendidos a la fecha:</p>
+    <table class="au-tabla">
+      <thead><tr><th>#</th><th>Obra</th><th>ISBN / código</th><th>Ejemplares</th><th>PVP</th><th>Valor PVP</th></tr></thead>
+      <tbody>${filas||'<tr><td colspan="6" style="text-align:center">Sin detalle</td></tr>'}</tbody>
+      <tfoot><tr><th colspan="3">TOTAL EJEMPLARES DEVUELTOS</th><th style="text-align:center">${+d.unidades||0}</th><th></th><th style="text-align:right">${fmt(totVal)}</th></tr></tfoot>
+    </table>
+    <p style="font-size:11.5px;margin-top:10px">El valor consignado en la columna PVP se expresa únicamente como referencia del precio de venta al público fijado por EL COMITENTE, y no constituye precio de compra ni obligación de pago alguna a cargo de EL COMISIONISTA.</p>
+    <p style="font-size:11.5px">Con la suscripción de la presente acta cesa la responsabilidad de custodia de EL COMISIONISTA respecto de los ejemplares devueltos. EL COMITENTE declara recibirlos a su entera satisfacción y en el estado que conoce, y nada más tiene que reclamar por ellos.</p>
+    <table class="au-firmas"><tr>
+      <td>_______________________________<br><b>EL COMITENTE</b><br>${esc(a.nombre||'')}<br>C.C. ${esc(a.cedula||'………………')}<br>Recibí conforme</td>
+      <td>_______________________________<br><b>EL COMISIONISTA</b><br>${esc(AU_CASA.representante)}<br>${esc(AU_CASA.nombre)}<br>Entregué conforme</td>
+    </tr></table>
+    ${enlace?`<div class="au-seguimiento">
+      <h3 style="margin:0 0 4px">CONSTANCIA EN LÍNEA</h3>
+      <p style="margin:0 0 6px;font-size:11.5px">Esta devolución queda registrada en su página privada, junto con sus obras y sus ventas:</p>
+      <p style="margin:0;font-family:system-ui,sans-serif;font-size:12px;word-break:break-all"><b>${esc(enlace)}</b></p>
+    </div>`:''}
+  </div>`;
+}
+
+/* ── Sub-vista: Devoluciones ────────────────────────────────── */
+function rAuDevoluciones(){
+  if(auDevolverA){
+    const a=autorECPorId(auDevolverA);
+    const obras=(AU.obras||[]).filter(o=>o.autorId===auDevolverA&&(+o.stock||0)>0);
+    if(!a) { auDevolverA=null; return rAuDevoluciones(); }
+    const filas=obras.map(o=>`<div class="mrow">
+        <div style="flex:1;min-width:0">
+          <span style="font-weight:600;font-size:13px">${esc(o.titulo)}</span>
+          <div style="font-size:11px;color:var(--text3)">${fmt(o.pvp)} · ${+o.stock||0} en percha · ${+o.vendidos||0} vendido(s)${o.fechaVence&&new Date(o.fechaVence)<new Date()?' · <b style="color:#b03030">plazo vencido</b>':''}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" class="dv-cant" data-dv="${o.id}" min="0" max="${+o.stock||0}" step="1"
+                 value="${auDevSel[o.id]!=null?auDevSel[o.id]:0}" style="width:74px;text-align:right">
+          <span style="font-size:11px;color:var(--text3)">de ${+o.stock||0}</span>
+        </div>
+      </div>`).join('');
+    return `<div class="card" style="padding:16px;max-width:640px">
+      <h3 style="margin:0 0 4px">Devolver ejemplares a ${esc(a.nombre)}</h3>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:12px">Indica cuántos ejemplares de cada obra se lleva el autor. Al registrar se genera el acta numerada para firmar.</div>
+      ${obras.length?`
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn btn-g btn-sm" id="dv-todo">Devolver todo lo que queda</button>
+        <button class="btn btn-g btn-sm" id="dv-nada">Limpiar</button>
+        <button class="btn btn-g btn-sm" id="dv-vencidas">Solo las de plazo vencido</button>
+      </div>
+      ${filas}
+      <div class="two-col" style="margin-top:12px">
+        <div class="fg"><label>Motivo</label><select id="dv-motivo">
+          <option>Vencimiento del plazo de exhibición</option>
+          <option>Petición del autor</option>
+          <option>Retiro de la obra del catálogo</option>
+          <option>Terminación del contrato</option>
+          <option>Otro</option>
+        </select></div>
+        <div class="fg"><label>Observaciones</label><input id="dv-notas" placeholder="Ej.: dos ejemplares con el lomo rozado"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-g" id="dv-cancel">Cancelar</button>
+        <button class="btn btn-acc" style="flex:1" id="dv-registrar">Registrar devolución y generar acta</button>
+      </div>
+      <div style="margin-top:12px;font-size:11.5px;color:var(--text3)">Los ejemplares devueltos salen de la percha y dejan de aparecer en la caja. Lo ya vendido no se toca.</div>
+      `:'<div style="color:var(--text3);font-size:13px;padding:16px">Este autor no tiene ejemplares en percha para devolver.</div>'}
+    </div>`;
+  }
+
+  const conStock=(AU.autores||[]).filter(a=>(AU.obras||[]).some(o=>o.autorId===a.id&&(+o.stock||0)>0));
+  const hist=[...(AU.devoluciones||[])].sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha))).slice(0,30);
+  const filasHist=hist.map(d=>`<div class="mrow">
+      <div style="flex:1;min-width:0">
+        <span style="font-weight:600;font-size:13px">${esc(d.numero||'')} · ${esc(nombreAutorEC(d.autorId))}</span>
+        <div style="font-size:11px;color:var(--text3)">${fechaCorta(d.fecha)} · ${+d.unidades||0} ejemplar(es) · ${(d.lineas||[]).length} título(s)${d.motivo?' · '+esc(d.motivo):''}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-g btn-sm" data-dvacta="${d.id}">Acta</button>
+        <button class="btn btn-g btn-sm" data-dvwa="${d.id}">WhatsApp</button>
+      </div>
+    </div>`).join('')||'<div style="color:var(--text3);font-size:13px;padding:16px">Todavía no se ha registrado ninguna devolución.</div>';
+
+  return `<div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
+      <select id="dv-autor" style="flex:1;min-width:200px">
+        <option value="">Elige el autor que retira sus libros…</option>
+        ${conStock.map(a=>`<option value="${a.id}">${esc(a.nombre)}</option>`).join('')}
+      </select>
+      <button class="btn btn-acc btn-sm" id="dv-nueva">Nueva devolución</button>
+    </div>
+    ${conStock.length?'':'<div style="font-size:11.5px;color:var(--text3);margin-bottom:10px">No hay autores con ejemplares en percha.</div>'}
+    <h3 style="margin:0 0 10px;font-size:14px">Actas de devolución</h3>
+    ${filasHist}`;
+}
+
 function attachAutoresEC(){
   const mc=document.getElementById('mc');
   const reRender=()=>render();
 
   mc.querySelectorAll('[data-asub]').forEach(b=>b.addEventListener('click',()=>{
     auSub=b.dataset.asub; auEditAutor=null; auAddObraTo=null; auEditObra=null;
-    auLiquidarTo=null; auEnlaceDe=null; reRender();
+    auLiquidarTo=null; auEnlaceDe=null; auDevolverA=null; auDevSel={}; reRender();
   }));
 
   const search=mc.querySelector('#au-search');
@@ -11008,17 +11631,17 @@ function attachAutoresEC(){
     if(!(pvp>0)){ alert('El PVP debe ser mayor que cero.'); return; }
     const pctRaw=document.getElementById('oe-pct').value.trim();
     const mas=parseInt(document.getElementById('oe-mas').value)||0;
-    const dev=parseInt(document.getElementById('oe-dev').value)||0;
     const renov=parseInt(document.getElementById('oe-plazo').value)||0;
-    if(dev>(+o.stock||0)){ alert('No puedes devolver más ejemplares de los que hay en percha.'); return; }
-    if(dev&&!confirm('¿Registrar la devolución de '+dev+' ejemplar(es) de "'+o.titulo+'" al autor?\n\nFírmale el acta o déjalo por escrito: es el respaldo de que salieron de la percha.')) return;
     o.pvp=_r2(pvp);
     o.pctAutor=pctRaw!==''?_r2(parseFloat(pctRaw)/100):null;
     if(mas>0){ o.entregados=(+o.entregados||0)+mas; o.stock=(+o.stock||0)+mas; }
-    if(dev>0){ o.stock=(+o.stock||0)-dev; o.devueltos=(+o.devueltos||0)+dev; }
     if(renov>0){ o.fechaVence=localISO(new Date(Date.now()+renov*86400000)); }
     await sAU(); injectAutorProducts();
     auEditObra=null; reRender(); auPublicarPronto();
+  });
+  mc.querySelector('#oe-devolver')?.addEventListener('click',()=>{
+    const o=obraECPorId(auEditObra); if(!o) return;
+    auEditObra=null; auSub='dev'; auDevolverA=o.autorId; auDevSel={}; reRender();
   });
   mc.querySelector('#oe-retirar')?.addEventListener('click',async()=>{
     const o=obraECPorId(auEditObra); if(!o) return;
@@ -11049,6 +11672,67 @@ function attachAutoresEC(){
     a.download='ventas-autores-'+localISO().slice(0,10)+'.csv';
     a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
   });
+
+  /* ── Devoluciones ── */
+  mc.querySelector('#dv-nueva')?.addEventListener('click',()=>{
+    const sel=document.getElementById('dv-autor');
+    const id=sel?sel.value:'';
+    if(!id){ alert('Elige primero el autor que retira sus libros.'); return; }
+    auDevolverA=id; auDevSel={}; reRender();
+  });
+  mc.querySelector('#dv-cancel')?.addEventListener('click',()=>{ auDevolverA=null; auDevSel={}; reRender(); });
+  const dvObras=()=>(AU.obras||[]).filter(o=>o.autorId===auDevolverA&&(+o.stock||0)>0);
+  // No se vuelve a dibujar al teclear: el cursor se quedaria saltando de campo.
+  mc.querySelectorAll('.dv-cant').forEach(el=>el.addEventListener('input',()=>{
+    const max=+el.max||0; let v=parseInt(el.value)||0;
+    if(v<0){ v=0; el.value=0; }
+    if(v>max){ v=max; el.value=max; }
+    auDevSel[el.dataset.dv]=v;
+  }));
+  mc.querySelector('#dv-todo')?.addEventListener('click',()=>{ dvObras().forEach(o=>{auDevSel[o.id]=+o.stock||0;}); reRender(); });
+  mc.querySelector('#dv-nada')?.addEventListener('click',()=>{ auDevSel={}; reRender(); });
+  mc.querySelector('#dv-vencidas')?.addEventListener('click',()=>{
+    auDevSel={};
+    dvObras().forEach(o=>{ if(o.fechaVence&&new Date(o.fechaVence)<new Date()) auDevSel[o.id]=+o.stock||0; });
+    reRender();
+  });
+  mc.querySelector('#dv-registrar')?.addEventListener('click',async()=>{
+    const a=autorECPorId(auDevolverA); if(!a) return;
+    const lineas=[];
+    dvObras().forEach(o=>{
+      const c=Math.min(+auDevSel[o.id]||0, +o.stock||0);
+      if(c>0) lineas.push({obraId:o.id,titulo:o.titulo,isbn:o.isbn||o.code||'',cantidad:c,pvp:+o.pvp||0});
+    });
+    if(!lineas.length){ alert('Indica al menos un ejemplar para devolver.'); return; }
+    const unidades=lineas.reduce((s,l)=>s+l.cantidad,0);
+    const motivo=document.getElementById('dv-motivo').value;
+    const notas=document.getElementById('dv-notas').value.trim();
+    if(!confirm('¿Registrar la devolución de '+unidades+' ejemplar(es) a '+a.nombre+'?\n\nSalen de la percha y se genera el acta '+auNumeroDev()+' para firmar.')) return;
+    AU.devoluciones=AU.devoluciones||[];
+    const d={id:auId('dv'),numero:auNumeroDev(),autorId:a.id,fecha:localISO(),
+      motivo,notas,unidades,lineas,user:(typeof turnoUser!=='undefined'?turnoUser:'')||''};
+    lineas.forEach(l=>{ const o=obraECPorId(l.obraId);
+      if(o){ o.stock=Math.max(0,(+o.stock||0)-l.cantidad); o.devueltos=(+o.devueltos||0)+l.cantidad; } });
+    AU.devoluciones.push(d);
+    await sAU(); injectAutorProducts();
+    try{ bitacora('devolucion_autor',{autor:a.nombre,numero:d.numero,unidades,titulos:lineas.length,motivo}); }catch(e){}
+    auDevolverA=null; auDevSel={}; reRender(); auPublicarPronto();
+    if(confirm('Devolución registrada como '+d.numero+'.\n\n¿Imprimir el acta para la firma del autor?')){
+      auImprimirDoc(textoActaDevolucionEC(d),'Acta '+d.numero);
+    }
+  });
+  mc.querySelectorAll('[data-dvacta]').forEach(el=>el.addEventListener('click',()=>{
+    const d=(AU.devoluciones||[]).find(x=>x.id===el.dataset.dvacta);
+    if(d) auImprimirDoc(textoActaDevolucionEC(d),'Acta '+(d.numero||''));
+  }));
+  mc.querySelectorAll('[data-dvwa]').forEach(el=>el.addEventListener('click',()=>{
+    const d=(AU.devoluciones||[]).find(x=>x.id===el.dataset.dvwa);
+    if(!d) return;
+    const a=autorECPorId(d.autorId)||{};
+    if(!auTelWA(a.telefono)
+       && !confirm('Este autor no tiene teléfono registrado.\n\nSe abrirá WhatsApp con el mensaje ya escrito para que elijas el contacto a mano. ¿Continuar?')) return;
+    window.open(auEnlaceWA(d),'_blank','noopener');
+  }));
 
   /* ── Liquidaciones ── */
   mc.querySelectorAll('[data-aliq]').forEach(el=>el.addEventListener('click',()=>{ auLiquidarTo=el.dataset.aliq; reRender(); }));
@@ -11664,8 +12348,23 @@ function iniAlertas(){
     else if(ec.e==='pendiente') add('alta','Hay un turno de caja sin cerrar','Quedó abierta la caja del '+ec.dia+'. Ciérrela contando el efectivo.','Ir al cierre',()=>irACaja(),'caja');
   }catch(e){}
   try{
-    const hoyA=today(), venc=antPendientes().filter(a=>a.fechaEvento&&a.fechaEvento<hoyA);
+    const hoyA=today(), venc=antPendientes().filter(a=>!a.origenApartadoId&&a.fechaEvento&&a.fechaEvento<hoyA);
+    const sfAp=antPendientes().filter(a=>a.origenApartadoId);
+    if(sfAp.length) add('baja',sfAp.length+' saldo(s) a favor de apartados sin usar',
+      fmt(sfAp.reduce((t,a)=>t+aclSaldo(a),0))+' de clientes que no retiraron su apartado. Se aplican en el cobro con el botón de abonos de cliente.',
+      'Ver',()=>irA('caja',()=>{cajaTab='reservas';}),'caja');
     if(venc.length) add('media',venc.length+' abono(s) de reserva registrados en el POS con saldo','De funciones pasadas: '+fmt(venc.reduce((s,a)=>s+aclSaldo(a),0))+'. Aplícalos en un consumo o anúlalos.','Revisar',()=>irA('caja',()=>{cajaTab='reservas';}),'caja');
+    // ── Apartados: el sistema avisa, nadie tiene que acordarse ──
+    const apV=apVencidos(), apPV=apPorVencer(3), apL=apListos();
+    if(apV.length) add('alta',apV.length+' apartado(s) VENCIDO(S)',
+      fmt(apV.reduce((a,v)=>a+apAbonado(v.id),0))+' ya abonados y '+fmt(apV.reduce((a,v)=>a+apSaldo(v),0))+' sin cobrar. Llama al cliente; si no viene, pásalo a saldo a favor.',
+      'Ver',()=>irA('caja',()=>{cajaTab='apartados';apTab='vencidos';}),'caja');
+    if(apPV.length) add('media',apPV.length+' apartado(s) vencen en 3 días o menos',
+      apPV.slice(0,3).map(v=>(apCliente(v).nombre||'')+' ('+fmt(apSaldo(v))+')').join(', ')+(apPV.length>3?'…':'')+'. Mándales el recordatorio por WhatsApp.',
+      'Ver',()=>irA('caja',()=>{cajaTab='apartados';apTab='abiertos';}),'caja');
+    if(apL.length) add('media',apL.length+' apartado(s) pagado(s) sin retirar',
+      'Ya cancelaron el saldo pero no se han llevado el producto. Al entregarlo hay que facturarlo desde la pestaña Apartados.',
+      'Ver',()=>irA('caja',()=>{cajaTab='apartados';apTab='listos';}),'caja');
     if(admin&&!RES.ts&&!RES.cargando&&view==='inicio') setTimeout(()=>resCargar().then(()=>{ if(view==='inicio') render(); }),0);
     const rp=RES.list.filter(r=>resUtil(r)&&r.fecha<hoyA&&r.disp>0.004);
     if(admin&&rp.length) add('media',rp.length+' reserva(s) pagada(s) sin facturar','Funciones de los últimos 7 días: '+fmt(rp.reduce((s,r)=>s+r.disp,0))+'. Si el cliente asistió y consumió, falta emitir la factura.','Revisar',()=>irA('caja',()=>{cajaTab='reservas';resTabVer='pasadas';}),'caja');
@@ -12215,10 +12914,11 @@ setInterval(()=>{ if(navigator.onLine && sriCola().some(x=>!x.requiereRevision))
 // Abre el formulario del comprador ANTES de cobrar: si los datos estan mal,
 // no se cobra. Recien con datos validos se cobra (flujo normal del POS) y
 // luego se pide la factura por el id de la venta ya guardada.
+
 function sriCobrarYFacturar(total){
   if(sriOcupado || cobrando) return;
   if(!sriConfigurado()){ alert('La facturación electrónica aún no está configurada.\nCobra normalmente y registra la factura como antes.'); return; }
-  const _antPre=resCompradorDePagos(modoParcial?pagosParciales:[]);
+  const _antPre=resCompradorDePagos(modoParcial?pagosParciales:[])||apCompradorDeMesa(T.find(x=>x.id===selT));
   abrirModalSri({ titulo:'Cobrar '+fmt(total)+' y emitir factura', total, prellenar:_antPre, alConfirmar: async (comprador)=>{
     sriOcupado = true;
     try{

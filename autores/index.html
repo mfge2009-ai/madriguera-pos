@@ -130,7 +130,7 @@ function pintar(){
   const a=D.autor||{}, c=D.condiciones||{}, t=D.totales||{}, ct=D.contrato||{};
   const nombre=String(a.nombre||'').trim();
   const pila=nombre.split(' ')[0]||'';
-  const obras=D.obras||[], ventas=D.ventas||[], liqs=D.liquidaciones||[];
+  const obras=D.obras||[], ventas=D.ventas||[], liqs=D.liquidaciones||[], devs=D.devoluciones||[];
 
   const hoy=new Date();
   const estadoObra=o=>{
@@ -184,9 +184,19 @@ function pintar(){
         <td>${fecha(l.fecha)}</td><td class="c">${+l.unidades||0}</td><td class="n"><b>${fmt(l.pagoAutor)}</b></td></tr>`).join('')}</tbody></table>
   </div>`:''}
 
+  ${devs.length?`<div class="card">
+    <h2>Ejemplares devueltos</h2>
+    <div class="sub" style="margin-bottom:8px">Constancia de los ejemplares que ya retiró. El acta firmada queda en su poder y aquí.</div>
+    <table class="t"><thead><tr><th>Acta</th><th>Fecha</th><th class="c">Ej.</th></tr></thead>
+      <tbody>${devs.map(d=>`<tr>
+        <td><b>${esc(d.numero)}</b>
+          <div class="mini">${(d.lineas||[]).map(l=>esc(l.titulo)+' × '+(+l.cantidad||0)).join('<br>')}${d.motivo?'<br>'+esc(d.motivo):''}</div></td>
+        <td>${fecha(d.fecha)}</td><td class="c">${+d.unidades||0}</td></tr>`).join('')}</tbody></table>
+  </div>`:''}
+
   <div class="card">
     <h2>¿Algo no cuadra?</h2>
-    <div class="sub">Si ves una venta que no reconoces, un ejemplar que ya retiraste o un precio distinto al que acordamos, escríbenos y lo revisamos contigo antes de la próxima liquidación.</div>
+    <div class="sub">Si ves una venta que no reconoces, un ejemplar que ya retiraste que no aparece como devuelto, o un precio distinto al que acordamos, escríbenos y lo revisamos contigo antes de la próxima liquidación.</div>
   </div>`;
 
   $('pie').innerHTML = `Datos actualizados al ${esc(fechaHora(D.actualizado))}.<br>${esc((D.casa&&D.casa.nombre)||'')} · ${esc((D.casa&&D.casa.direccion)||'')}<br>Enlace privado: no lo compartas.`;
