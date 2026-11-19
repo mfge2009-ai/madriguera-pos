@@ -7556,6 +7556,12 @@ let repFechaHasta='';
 let repFechaDia='';
 let repCarga=null;
 let repExcelPreparando=false;
+// 18-nov-2026 · reportes rapidos: el filtro de categoria deja de ser decorativo
+// y el ranking de proveedores cubre todas las categorias, no solo libros.
+let repVistaRapida='';        // '' | 'sincosto' | 'sinproveedor'
+let repVerTodo=false;         // quita el tope de filas de las listas
+let repCmpCarga=null;         // carga del periodo anterior para comparar
+let repComprasPedidas=false;  // bitacora pedida para cruzar compras vs ventas
 
 function fechaValidaReporte(fecha){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(fecha))return false;
@@ -7604,6 +7610,45 @@ function mesesPendientesReportes(rango){
     dia.setMonth(dia.getMonth()+1);
   }
   return meses;
+}
+// Periodo inmediatamente anterior, de la misma cantidad de dias.
+function rangoAnterior(rango){
+  if(!rango)return null;
+  const dia=d=>new Date(d+'T12:00:00');
+  const largo=Math.round((dia(rango.hasta)-dia(rango.desde))/86400000)+1;
+  const hasta=new Date(dia(rango.desde)); hasta.setDate(hasta.getDate()-1);
+  const desde=new Date(hasta); desde.setDate(desde.getDate()-(largo-1));
+  return {desde:localISO(desde).slice(0,10),hasta:localISO(hasta).slice(0,10)};
+}
+// Barras de la tendencia: una por dia, o una por semana si el rango es largo.
+function barrasDelRango(rango){
+  const dia=d=>new Date(d+'T12:00:00');
+  const largo=Math.round((dia(rango.hasta)-dia(rango.desde))/86400000)+1;
+  const paso=largo>45?7:1, barras=[];
+  for(let i=0;i<largo;i+=paso){
+    const d=dia(rango.desde); d.setDate(d.getDate()+i);
+    const f=dia(rango.desde); f.setDate(f.getDate()+Math.min(i+paso-1,largo-1));
+    barras.push({desde:localISO(d).slice(0,10),hasta:localISO(f).slice(0,10),
+      l:d.toLocaleDateString('es-EC',{day:'numeric',month:'short'}),t:0,n:0});
+  }
+  return {barras,paso,largo};
+}
+// La comparacion solo se calcula si el periodo anterior YA esta en memoria: un
+// cero por mes no cargado se leeria como una caida del 100%.
+function comparacionLista(rango){
+  const prev=rangoAnterior(rango);
+  return prev&&!mesesPendientesReportes(prev).length?prev:null;
+}
+function cargarComparacion(rango){
+  const prev=rangoAnterior(rango); if(!prev)return;
+  const meses=mesesPendientesReportes(prev); if(!meses.length)return;
+  const clave=claveRangoReportes(prev);
+  if(repCmpCarga===clave)return;
+  repCmpCarga=clave;
+  (async()=>{
+    for(const mes of meses){ if(!await cargarMes(mes))break; }
+    if(view==='reportes')render();
+  })();
 }
 const claveRangoReportes=r=>r? r.desde+'/'+r.hasta : '';
 function prepararPeriodoReportes(rango){
@@ -7721,13 +7766,21 @@ function rReportes(){
   const imap={};
   ventas.forEach(s=>s.items?.forEach(i=>{
     const k=i.name;
-    if(!imap[k])imap[k]={name:i.name,qty:0,rev:0,cat:''};
-    imap[k].qty+=i.qty;imap[k].rev+=i.price*i.qty;
-    // Get category from products
+    if(!imap[k])imap[k]={name:i.name,qty:0,rev:0,cat:'',cost:0,costQty:0,isbn:'',prov:''};
+    const it=imap[k];
+    it.qty+=i.qty;it.rev+=i.price*i.qty;
+    // La categoria CONGELADA en la venta manda; el catalogo vivo solo cubre
+    // renglones antiguos. Antes se leia p.category y un producto eliminado o
+    // recategorizado se caia del filtro sin aviso.
+    it.cat=catDeItem(i);
     const p=P.find(x=>x.id===i.productId||x.name===i.name);
-    if(p)imap[k].cat=p.category;
+    const cu=(typeof i.cost==='number')?i.cost:((typeof p?.cost==='number')?p.cost:null);
+    if(cu!==null){it.cost+=cu*i.qty;it.costQty+=i.qty;}
+    if(!it.isbn)it.isbn=i.isbn||p?.code||'';
+    if(!it.prov)it.prov=infoLibroItem(i).proveedor;
   }));
-  let items=Object.values(imap).sort((a,b)=>b.rev-a.rev);
+  const itemsTodos=Object.values(imap).sort((a,b)=>b.rev-a.rev);
+  let items=itemsTodos;
   if(repCatFilter!=='Todos') items=items.filter(i=>i.cat===repCatFilter);
 
   // By payment method
@@ -7765,18 +7818,8 @@ function rReportes(){
   }));
   const catList=Object.entries(catMap).sort((a,b)=>b[1].rev-a[1].rev);
 
-  // Libros vendidos por proveedor (incluye consignados)
-  const provMap={};
-  ventas.forEach(s=>s.items?.forEach(i=>{
-    const inf=infoLibroItem(i);
-    if(inf.cat!=='Libros'&&inf.cat!=='Consignados')return;
-    if(!provMap[inf.proveedor])provMap[inf.proveedor]={qty:0,rev:0,titulos:new Set()};
-    provMap[inf.proveedor].qty+=i.qty;
-    provMap[inf.proveedor].rev+=i.price*i.qty;
-    provMap[inf.proveedor].titulos.add(i.name);
-  }));
-  const provList=Object.entries(provMap).sort((a,b)=>b[1].rev-a[1].rev);
-
+  // (El ranking de proveedores lo arma mapaProveedores en el panel del corte:
+  //  cubre todas las categorias, normaliza el nombre y reparte el descuento.)
   // IVA y negocio (Ecuador: Libros 0%, resto 15%)
   let revLibreria=0, revCafeteria=0;
   ventas.forEach(s=>s.items?.forEach(i=>{
@@ -7788,23 +7831,76 @@ function rReportes(){
   const baseCafeteria=revCafeteria/1.15;
   const ivaCafeteria=revCafeteria-baseCafeteria;
 
-  // Daily trend (last 14 days or range)
-  const days=[];
-  for(let i=13;i>=0;i--){
-    const d=new Date();d.setDate(d.getDate()-i);
-    const ds=localISO(d).slice(0,10);
-    const dv=ventas.filter(s=>s.date.startsWith(ds));
-    days.push({l:d.toLocaleDateString('es-EC',{day:'numeric',month:'short'}),t:dv.reduce((a,x)=>a+x.total,0),n:dv.length});
-  }
+  // Tendencia del PERIODO ELEGIDO. Antes se armaba desde hoy hacia atras 14
+  // dias sobre ventas ya filtradas por rango: con 'Mes anterior' las 14 barras
+  // salian en cero y el grafico mentia.
+  const {barras:days,paso:pasoTend}=barrasDelRango(rango);
+  ventas.forEach(s=>{
+    const d=(s.date||'').slice(0,10);
+    const b=days.find(x=>d>=x.desde&&d<=x.hasta);
+    if(b){b.t+=+s.total||0;b.n++;}
+  });
   const maxD=Math.max(...days.map(d=>d.t),1);
 
   // Gastos by category
   const gCatMap={};
   gastos.forEach(g=>{if(!gCatMap[g.cat])gCatMap[g.cat]=0;gCatMap[g.cat]+=g.total;});
 
-  const cats=['Todos',...Object.keys(CAT_COLORS)];
+  // Las categorias salen de lo vendido en el periodo mas el catalogo, igual que
+  // en Inventario y Catalogo. Antes salian de CAT_COLORS (lista fija de 9), asi
+  // que 'Autores ecuatorianos' y 'Otro' no se podian elegir.
+  const cats=['Todos',...[...new Set([
+    ...Object.keys(catMap),
+    ...Object.keys(CAT_COLORS),
+    ...P.map(p=>p&&p.category).filter(Boolean)
+  ])].sort((a,b)=>a.localeCompare(b,'es'))];
 
-  return `<div>${cabecera}${rCorteProveedor()}
+  // ── Cifras por categoria ────────────────────────────────────────────────
+  // Se calculan sobre los renglones repartiendo el descuento de la venta en
+  // proporcion al renglon, con la misma rutina del corte de proveedor
+  // (descuentosCorte), para que "Libros" del reporte cuadre con "Libros" del
+  // corte en lugar de diferir por los descuentos.
+  const brutoNetoCat=(lista,cat)=>{
+    let bruto=0,desc=0,qty=0,ped=0;
+    for(const s of lista){
+      const its=s.items||[];
+      const brutos=its.map(i=>repCentavos((+i.price||0)*(+i.qty||0)));
+      const descs=descuentosCorte(s,brutos);
+      let toco=false;
+      its.forEach((i,pos)=>{
+        if(cat!=='Todos'&&catDeItem(i)!==cat)return;
+        bruto+=brutos[pos];desc+=descs[pos];qty+=+i.qty||0;toco=true;
+      });
+      if(toco)ped++;
+    }
+    return {bruto:bruto/100,desc:desc/100,neto:(bruto-desc)/100,qty,ped};
+  };
+  const catAct=brutoNetoCat(ventas,repCatFilter);
+  const catDatos=repCatFilter!=='Todos'?(catMap[repCatFilter]||{rev:0,qty:0,cost:0,costRev:0,costQty:0}):null;
+  const revTotalCats=catList.reduce((a,[,d])=>a+d.rev,0);
+  const prevRango=comparacionLista(rango);
+  const prevVentas=prevRango?S.filter(s=>isVenta(s)&&getRangeFilter(prevRango)(s)):null;
+  const catPrev=prevVentas?brutoNetoCat(prevVentas,repCatFilter):null;
+  const prevTotal=prevVentas?prevVentas.reduce((a,x)=>a+(+x.total||0),0):null;
+  const varPct=(a,b)=>(b>0?((a-b)/b*100):null);
+  const flecha=v=>v===null?'':(v>=0?'▲ ':'▼ ')+Math.abs(v).toFixed(0)+'%';
+  const colorVar=v=>v===null?'var(--text3)':(v>=0?'var(--grn)':'var(--red)');
+  const sinCosto=itemsTodos.filter(i=>i.costQty<i.qty);
+  const sinProv=itemsTodos.filter(i=>!repClaveProveedor(i.prov));
+
+  return `<div>${cabecera}
+    <!-- Reportes rápidos -->
+    <div class="card" style="margin-bottom:12px;padding:10px 12px">
+      <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:7px;text-transform:uppercase">Reportes rápidos</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${catList.length?`<button class="btn btn-g btn-sm" data-rapido="topcat" style="font-size:10.5px">🏆 ${esc(catList[0][0])} · ${fmt(catList[0][1].rev)}</button>`:''}
+        <button class="btn btn-g btn-sm" data-rapido="topprov" style="font-size:10.5px">🚚 Top proveedor</button>
+        <button class="btn btn-g btn-sm" data-rapido="sincosto" style="font-size:10.5px${repVistaRapida==='sincosto'?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">⚠ Sin costo · ${sinCosto.length}</button>
+        <button class="btn btn-g btn-sm" data-rapido="sinproveedor" style="font-size:10.5px${repVistaRapida==='sinproveedor'?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">⚠ Sin proveedor · ${sinProv.length}</button>
+        ${(repCatFilter!=='Todos'||repVistaRapida||repVerTodo)?`<button class="btn btn-g btn-sm" data-rapido="limpiar" style="font-size:10.5px">✕ Quitar filtros</button>`:''}
+      </div>
+    </div>
+
     <div style="margin-bottom:14px">
       <div style="font-size:10px;color:var(--text3);font-weight:700;margin-bottom:6px;text-transform:uppercase">Filtrar por categoría</div>
       <div style="display:flex;gap:5px;flex-wrap:wrap">
@@ -7812,16 +7908,44 @@ function rReportes(){
       </div>
     </div>
 
+    ${repCatFilter==='Todos'?'':`<!-- Resumen de la categoría elegida -->
+    <div class="card" style="margin-bottom:12px;border-left:3px solid var(--acc)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="font-weight:700;font-size:13px">${esc(repCatFilter)} · ${rango.desde} al ${rango.hasta}</div>
+        <button class="btn btn-acc btn-sm" id="bexport-cat" style="font-size:10.5px">↓ CSV de la categoría</button>
+      </div>
+      <div class="sg3" style="margin-bottom:8px">
+        <div class="scard"><div class="slbl">Venta neta</div><div class="sval">${fmt(catAct.neto)}</div><div class="ssub">bruto ${fmt(catAct.bruto)}${catAct.desc>0?' · dscto '+fmt(catAct.desc):''}</div></div>
+        <div class="scard"><div class="slbl">Unidades</div><div class="sval">${catAct.qty}</div><div class="ssub">en ${catAct.ped} pedido(s)</div></div>
+        <div class="scard"><div class="slbl">Ticket prom.</div><div class="sval">${fmt(catAct.ped?catAct.neto/catAct.ped:0)}</div><div class="ssub">${revTotalCats>0?(catDatos.rev/revTotalCats*100).toFixed(0):0}% de la venta</div></div>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;padding-top:7px;border-top:.5px solid var(--border)">
+        <span style="color:var(--text3)">Costo: <b style="color:var(--text)">${catDatos.costQty?fmt(catDatos.cost):'sin registrar'}</b></span>
+        ${catDatos.costQty?`<span style="color:var(--text3)">Utilidad: <b style="color:${catDatos.costRev-catDatos.cost>=0?'var(--grn)':'var(--red)'}">${fmt(catDatos.costRev-catDatos.cost)}</b></span>
+        <span style="color:var(--text3)">Margen: <b style="color:var(--text)">${catDatos.costRev>0?((catDatos.costRev-catDatos.cost)/catDatos.costRev*100).toFixed(0):0}%</b>${catDatos.costQty<catDatos.qty?` <span style="font-size:9.5px;color:var(--amber)">solo ${catDatos.costQty} de ${catDatos.qty} uds tienen costo</span>`:''}</span>`:
+        `<span style="font-size:10.5px;color:var(--amber)">Carga el costo en Catálogo → Editar para ver utilidad y margen.</span>`}
+      </div>
+      <div style="margin-top:8px;padding-top:7px;border-top:.5px solid var(--border);font-size:11.5px">
+        ${catPrev?`Período anterior (${prevRango.desde} al ${prevRango.hasta}): ${fmt(catPrev.neto)} · ${catPrev.qty} uds · <b style="color:${colorVar(varPct(catAct.neto,catPrev.neto))}">${varPct(catAct.neto,catPrev.neto)===null?'sin base para comparar':flecha(varPct(catAct.neto,catPrev.neto))}</b>`
+        :`<span style="color:var(--text3)">Comparación con el período anterior sin cargar.</span> <button class="btn btn-g btn-sm" id="bcargar-cmp" style="font-size:10px;padding:2px 8px;margin-left:4px">Cargar comparación</button>`}
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:8px">El descuento de cada venta se reparte en proporción al renglón, igual que en el corte de proveedor.</div>
+    </div>`}
+
+    ${repVistaRapida?rListaTrabajo(repVistaRapida,sinCosto,sinProv):''}
+
     <!-- KPIs -->
     <div class="sg3" style="margin-bottom:12px">
-      <div class="scard"><div class="slbl">Ventas</div><div class="sval">${fmt(tTotal)}</div><div class="ssub">${ventas.length} pedidos</div></div>
+      <div class="scard"><div class="slbl">Ventas</div><div class="sval">${fmt(tTotal)}</div><div class="ssub">${ventas.length} pedidos${prevTotal!==null&&varPct(tTotal,prevTotal)!==null?` · <span style="color:${colorVar(varPct(tTotal,prevTotal))}">${flecha(varPct(tTotal,prevTotal))}</span>`:''}</div></div>
       <div class="scard"><div class="slbl">Ticket prom.</div><div class="sval">${fmt(ventas.length?tTotal/ventas.length:0)}</div></div>
       <div class="scard"><div class="slbl">Gastos</div><div class="sval" style="color:var(--red)">${fmt(tGastos)}</div><div class="ssub">Neto: ${fmt(tTotal-tGastos)}</div></div>
     </div>
 
-    <!-- Tendencia diaria -->
+    ${rCorteProveedor()}
+
+    <!-- Tendencia del período -->
     <div class="card" style="margin-bottom:12px">
-      <div style="font-weight:600;font-size:12px;margin-bottom:10px">Tendencia de ventas (últimos 14 días)</div>
+      <div style="font-weight:600;font-size:12px;margin-bottom:10px">Tendencia de ventas · ${rango.desde} al ${rango.hasta}${pasoTend>1?' · por semana':''}</div>
       <div style="display:flex;align-items:flex-end;gap:3px;height:70px;padding:4px 0 2px">
         ${days.map(d=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
           <div style="width:100%;background:var(--acc);border-radius:2px 2px 0 0;min-height:${d.t>0?'3px':'1px'};height:${Math.max((d.t/maxD)*60,d.t>0?3:1)}px;opacity:${d.t>0?1:.25}"></div>
@@ -7849,9 +7973,10 @@ function rReportes(){
     <div class="card" style="margin-bottom:12px">
       <div style="font-weight:600;font-size:12px;margin-bottom:10px">Ventas por categoría</div>
       ${catList.length===0?`<div style="color:var(--text3);font-size:12px;text-align:center;padding:16px">Sin datos</div>`:
-        catList.map(([cat,d])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
-          <span>${cat}</span>
+        catList.map(([cat,d])=>`<div data-catfilter="${esc(cat)}" title="Ver el reporte de ${esc(cat)}" style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px;cursor:pointer">
+          <span>${esc(cat)}${repCatFilter===cat?' <b style="color:var(--acc)">●</b>':''}</span>
           <div style="display:flex;gap:12px">
+            <span style="color:var(--text3)">${revTotalCats>0?(d.rev/revTotalCats*100).toFixed(0):0}%</span>
             <span style="color:var(--text3)">${d.qty} uds</span>
             <span style="font-weight:700;min-width:58px;text-align:right">${fmt(d.rev)}</span>
           </div>
@@ -7878,23 +8003,6 @@ function rReportes(){
         </div>`;}).join('')}
     </div>
 
-    <!-- Libros por proveedor -->
-    <div class="card" style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div style="font-weight:600;font-size:12px">📚 Libros vendidos por proveedor</div>
-        ${provList.length>0?`<button class="btn btn-acc btn-sm" id="bexport-libros" style="font-size:10.5px">↓ CSV detalle</button>`:''}
-      </div>
-      ${provList.length===0?`<div style="color:var(--text3);font-size:12px;text-align:center;padding:16px">Sin ventas de libros en este período</div>`:
-        provList.map(([prov,d])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
-          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(prov)}</span>
-          <div style="display:flex;gap:12px;flex-shrink:0">
-            <span style="color:var(--text3)">${d.titulos.size} título${d.titulos.size!==1?'s':''}</span>
-            <span style="color:var(--text3)">${d.qty} uds</span>
-            <span style="font-weight:700;min-width:58px;text-align:right">${fmt(d.rev)}</span>
-          </div>
-        </div>`).join('')}
-    </div>
-
     <!-- Productos vendidos -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="font-size:12px;font-weight:700">Productos vendidos (${items.length})</div>
@@ -7904,7 +8012,7 @@ function rReportes(){
     </div>
     <div class="card" style="margin-bottom:12px">
       ${items.length===0?`<div style="color:var(--text3);font-size:12px;text-align:center;padding:16px">Sin ventas en este período</div>`:''}
-      ${items.slice(0,50).map((item,idx)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
+      ${items.slice(0,repVerTodo?items.length:50).map((item,idx)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
         <div style="min-width:0;flex:1">
           <span style="font-weight:${idx<3?'700':'400'}">${idx<3?'★ ':''} ${esc(item.name)}</span>
           ${item.cat?`<span style="font-size:10px;color:var(--text3);margin-left:6px">${item.cat}</span>`:''}
@@ -7914,7 +8022,8 @@ function rReportes(){
           <span style="font-weight:700;min-width:58px;text-align:right">${fmt(item.rev)}</span>
         </div>
       </div>`).join('')}
-      ${items.length>50?`<div style="text-align:center;padding:10px;font-size:11px;color:var(--text3)">Mostrando 50 de ${items.length}. Exporta CSV para ver todos.</div>`:''}
+      ${items.length>50&&!repVerTodo?`<div style="text-align:center;padding:10px;font-size:11px;color:var(--text3)">Mostrando 50 de ${items.length}. <button class="btn btn-g btn-sm" data-rapido="vertodo" style="font-size:10px;padding:2px 8px">Ver todos</button></div>`:''}
+      ${itemsTodos.length>items.length?`<div style="text-align:center;padding:6px;font-size:10px;color:var(--text3)">${itemsTodos.length-items.length} producto(s) de otras categorías quedan fuera por el filtro.</div>`:''}
     </div>
 
     <!-- Detalle de ventas del período -->
@@ -7924,7 +8033,7 @@ function rReportes(){
         <span style="font-size:10px;color:var(--text3);font-weight:400">Toca 🗑 para anular</span>
       </div>
       ${ventas.length===0?`<div style="color:var(--text3);font-size:12px;text-align:center;padding:16px">Sin ventas en el período</div>`:
-        ventas.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,60).map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
+        ventas.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,repVerTodo?ventas.length:60).map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
           <div style="min-width:0;flex:1">
             <span style="font-weight:600">${esc(v.tableName||'Sin mesa')}</span>
             <span style="color:var(--text3);margin-left:6px;font-size:10px">${new Date(v.date).toLocaleString('es-EC',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})} · ${v.paymentMethod||''} · ${v.items?v.items.length:0} ít.</span>
@@ -7934,27 +8043,8 @@ function rReportes(){
             <button class="banular" data-saleid="${v.id}" style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px 4px;opacity:.6" title="Anular venta">🗑</button>
           </div>
         </div>`).join('')}
-      ${ventas.length>60?`<div style="text-align:center;padding:8px;font-size:10px;color:var(--text3)">Mostrando 60 de ${ventas.length}. Usa filtros para acotar.</div>`:''}
+      ${ventas.length>60&&!repVerTodo?`<div style="text-align:center;padding:8px;font-size:10px;color:var(--text3)">Mostrando 60 de ${ventas.length}. <button class="btn btn-g btn-sm" data-rapido="vertodo" style="font-size:10px;padding:2px 8px">Ver todos</button></div>`:''}
     </div>
-
-    <!-- Ventas individuales con opción anular -->
-    ${ventas.length>0?`<div class="card" style="margin-bottom:12px">
-      <div style="font-weight:600;font-size:12px;margin-bottom:10px">Ventas del período (${ventas.length}) — toca 🗑 para anular</div>
-      <div style="max-height:280px;overflow-y:auto">
-      ${ventas.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,40).map(v=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:.5px solid var(--border);font-size:12px">
-        <div style="min-width:0;flex:1">
-          <span style="font-weight:600">${esc(v.tableName||'Sin mesa')}</span>
-          <span style="color:var(--text3);margin-left:6px;font-size:10px">${new Date(v.date).toLocaleString('es-EC',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} · ${v.paymentMethod||''}</span>
-          <div style="color:var(--text3);font-size:10px">${esc((v.items||[]).map(i=>i.qty+'x '+i.name).join(', ').slice(0,60))}</div>
-        </div>
-        <div style="text-align:right;flex-shrink:0;margin-left:8px;display:flex;align-items:center;gap:8px">
-          <span style="font-weight:700">${fmt(v.total)}</span>
-          <button onclick="anularVenta('${v.id}')" style="background:none;border:1px solid var(--red);color:var(--red);border-radius:5px;padding:3px 7px;cursor:pointer;font-size:11px" title="Anular venta">🗑</button>
-        </div>
-      </div>`).join('')}
-      ${ventas.length>40?`<div style="text-align:center;padding:8px;font-size:10px;color:var(--text3)">Mostrando 40 de ${ventas.length}</div>`:''}
-      </div>
-    </div>`:''}
 
     <!-- Ventas anuladas -->
     ${S.filter(s=>s.anulada&&s.date&&filter(s)).length>0?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--red)">
@@ -8036,6 +8126,34 @@ function rReportes(){
   </div>`;
 }
 
+// Listas de trabajo de los reportes rapidos. Cierran las dos brechas de datos
+// que hoy dejan vacios el margen por categoria y el corte por proveedor.
+function rListaTrabajo(modo,sinCosto,sinProv){
+  const lista=modo==='sincosto'?sinCosto:sinProv;
+  const titulo=modo==='sincosto'?'Vendidos sin costo registrado':'Vendidos sin proveedor asignado';
+  const porque=modo==='sincosto'
+    ?'Sin costo no hay utilidad ni margen: estas unidades quedan fuera del cálculo. Cárgalo en Catálogo → Editar, o por CSV.'
+    :'Sin proveedor el renglón cae en «Filas sin proveedor» del corte y no entra en el ranking. El campo es «Autor / Proveedor» en Catálogo → Editar.';
+  const tope=repVerTodo?lista.length:60;
+  return `<div class="card" style="margin-bottom:12px;border-left:3px solid var(--amber)">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+      <div style="font-weight:700;font-size:12px">${titulo} · ${lista.length}</div>
+      <div style="display:flex;gap:6px">
+        ${lista.length?`<button class="btn btn-acc btn-sm" id="bexport-trabajo" style="font-size:10.5px">↓ CSV</button>`:''}
+        <button class="btn btn-g btn-sm" data-rapido="limpiar" style="font-size:10.5px">Cerrar</button>
+      </div>
+    </div>
+    <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">${porque}</div>
+    ${lista.length===0?`<div style="font-size:12px;color:var(--grn);text-align:center;padding:12px">✓ Nada pendiente en este período.</div>`:
+      lista.slice(0,tope).map(i=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:.5px solid var(--border);font-size:11.5px">
+        <div style="min-width:0;flex:1"><b>${esc(i.name)}</b>
+          <div style="font-size:10px;color:var(--text3)">${esc(i.cat||'—')}${i.isbn?' · '+esc(i.isbn):''}${modo==='sincosto'&&i.costQty?' · '+i.costQty+'/'+i.qty+' uds con costo':''}${modo==='sinproveedor'?'':' · '+esc(i.prov)}</div></div>
+        <div style="text-align:right;flex-shrink:0"><div style="font-weight:700">${i.qty} uds</div><div style="font-size:10px;color:var(--text3)">${fmt(i.rev)}</div></div>
+      </div>`).join('')}
+    ${lista.length>tope?`<div style="text-align:center;padding:8px;font-size:10.5px;color:var(--text3)">Mostrando ${tope} de ${lista.length}. <button class="btn btn-g btn-sm" data-rapido="vertodo" style="font-size:10px;padding:2px 8px">Ver todos</button></div>`:''}
+  </div>`;
+}
+
 function descargarRespaldo(){
   const backup={
     fecha:localISO(),
@@ -8098,7 +8216,7 @@ function descuentosCorte(venta,brutos){
   return resultado;
 }
 
-function mapaProveedores(ventas){
+function mapaProveedores(ventas,catFiltro){
   const porId=new Map(), porISBN=new Map();
   for(const p of P){
     if(!p)continue;
@@ -8114,6 +8232,7 @@ function mapaProveedores(ventas){
     const brutos=items.map(i=>repCentavos((+i.price||0)*(+i.qty||0)));
     const descuentos=descuentosCorte(s,brutos);
     items.forEach((i,pos)=>{
+      if(catFiltro&&catFiltro!=='Todos'&&catDeItem(i)!==catFiltro)return;
       const id=String(i.productId??'');
       const codigoGuardado=String(i.isbn??'').trim();
       const isbn=repISBN(codigoGuardado);
@@ -8192,6 +8311,7 @@ function rCorteProveedor(){
         <label for="rep-prov-sel">Proveedor</label><select id="rep-prov-sel"></select>
       </div>
     </div>
+    <div id="rep-prov-ranking" style="margin-bottom:12px"></div>
     <div id="rep-prov-resultado"></div>
     <details id="rep-prov-pendientes" hidden style="margin-top:10px">
       <summary style="cursor:pointer;font-size:12px;font-weight:600"></summary>
@@ -8209,12 +8329,12 @@ function tablaCorteProveedor(columnas,filas,primeraNumerica){
   </table></div>`;
 }
 
-function attachCorteProveedor(panel,rango,ventas){
+function attachCorteProveedor(panel,rango,ventas,catFiltro){
   const buscador=panel.querySelector('#rep-prov-q');
   const selector=panel.querySelector('#rep-prov-sel');
   const resultado=panel.querySelector('#rep-prov-resultado');
   const revision=panel.querySelector('#rep-prov-pendientes');
-  const {grupos,pendientes}=mapaProveedores(ventas);
+  const {grupos,pendientes}=mapaProveedores(ventas,catFiltro);
   const proveedores=[...grupos.values()].sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
   let mostrado=null;
   const actualizar=()=>{
@@ -8265,13 +8385,85 @@ function attachCorteProveedor(panel,rango,ventas){
   revision.ontoggle=revisar;
   revisar();
   actualizar();
+
+  // ── Ranking del periodo ───────────────────────────────────────────────
+  // Antes el unico ranking visible era el de libros, agrupado por cadena cruda
+  // (OCEANO y Oceano salian como dos proveedores) y sin descuentos. Este usa
+  // mapaProveedores: cubre todas las categorias, normaliza el nombre y reparte
+  // el descuento al centavo.
+  const ranking=panel.querySelector('#rep-prov-ranking');
+  const compras=comprasPorProveedor(rango);
+  const porVenta=[...proveedores].sort((a,b)=>b.neto-a.neto);
+  const totalNeto=porVenta.reduce((a,g)=>a+g.neto,0);
+  const pintarRanking=()=>{
+    if(!ranking)return;
+    if(!porVenta.length){
+      ranking.innerHTML=`<div role="status" style="font-size:12px;color:var(--text2)">Sin ventas con proveedor identificado en este período${catFiltro&&catFiltro!=='Todos'?' para '+esc(catFiltro):''}.${pendientes.length?' Hay '+pendientes.length+' fila(s) sin proveedor (ver abajo).':''}</div>`;
+      return;
+    }
+    const tope=repVerTodo?porVenta.length:12;
+    const th=(t,der)=>`<th style="text-align:${der?'right':'left'};padding:4px 6px;border-bottom:1px solid var(--border);white-space:nowrap">${t}</th>`;
+    const td=(t,der,extra)=>`<td style="text-align:${der?'right':'left'};padding:4px 6px;border-bottom:.5px solid var(--border)${extra||''}">${t}</td>`;
+    ranking.innerHTML=`
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-weight:700;font-size:12px">Ranking del período · ${porVenta.length} proveedor(es)${catFiltro&&catFiltro!=='Todos'?' · '+esc(catFiltro):''}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-acc btn-sm" data-provacc="ranking" style="font-size:10.5px">↓ CSV ranking</button>
+          <button class="btn btn-g btn-sm" data-provacc="libros" style="font-size:10.5px">↓ CSV libros</button>
+          ${compras?'':`<button class="btn btn-g btn-sm" data-provacc="compras" style="font-size:10.5px">Cruzar con compras</button>`}
+        </div>
+      </div>
+      <div style="overflow-x:auto" tabindex="0" role="region" aria-label="Ranking de proveedores">
+      <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <thead><tr>${th('Proveedor')}${th('Ítems',1)}${th('Uds vend.',1)}${compras?th('Uds ingr.',1):''}${th('Venta neta',1)}${th('%',1)}</tr></thead>
+        <tbody>${porVenta.slice(0,tope).map(g=>{
+          const c=compras?compras.get(g.clave):null;
+          return `<tr data-provfila="${esc(g.clave)}" title="Ver el corte de ${esc(g.nombre)}" style="cursor:pointer;background:${g.clave===repProvSel?'var(--acl)':'transparent'}">
+            ${td(esc(g.nombre)+(g.consignado?' <span style="font-size:9px;color:var(--text3)">consig.</span>':''))}
+            ${td(g.resumen.length,1)}
+            ${td(g.unidades,1)}
+            ${compras?td(c?c.uds:'—',1,c?'':';color:var(--text3)'):''}
+            ${td(fmt(g.neto/100),1,';font-weight:700')}
+            ${td((totalNeto>0?(g.neto/totalNeto*100):0).toFixed(0)+'%',1)}
+          </tr>`;}).join('')}</tbody>
+      </table></div>
+      ${porVenta.length>tope?`<div style="text-align:center;padding:6px;font-size:10.5px;color:var(--text3)">Mostrando ${tope} de ${porVenta.length}. <button class="btn btn-g btn-sm" data-provacc="vertodo" style="font-size:10px;padding:2px 8px">Ver todos</button></div>`:''}
+      ${compras?`<div style="font-size:10px;color:var(--text3);margin-top:6px">«Uds ingr.» son las unidades recibidas en Ingreso de mercadería del mismo período, agrupadas por el proveedor del documento. La Bitácora no guarda el valor de compra, así que el cruce es en unidades.</div>`:''}
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">Toca una fila para ver su corte con detalle y Excel.</div>`;
+  };
+  ranking.onclick=e=>{
+    const boton=e.target.closest('[data-provacc]');
+    if(boton){
+      const acc=boton.dataset.provacc;
+      if(acc==='ranking')return descargarCSVRanking(porVenta,rango,compras,catFiltro);
+      if(acc==='libros')return csvLibrosProveedor();
+      if(acc==='vertodo'){repVerTodo=true;render();return;}
+      if(acc==='compras'){
+        const ini=new Date(rango.desde+'T12:00:00').getTime();
+        const dias=Math.max(1,Math.ceil((Date.now()-ini)/86400000)+1);
+        boton.disabled=true; boton.textContent='Leyendo Bitácora…';
+        repComprasPedidas=true;
+        Promise.resolve(cargarBitacora(dias)).then(()=>{ if(view==='reportes')render(); });
+        return;
+      }
+      return;
+    }
+    const fila=e.target.closest('[data-provfila]');
+    if(fila){
+      repProvSel=fila.dataset.provfila; repProvQ='';
+      if(buscador)buscador.value='';
+      actualizar(); pintarRanking();
+      resultado.scrollIntoView({behavior:'smooth',block:'nearest'});
+    }
+  };
+  pintarRanking();
 }
 
 function actualizarReportesEnVivo(){
   const panel=document.getElementById('rep-proveedor'), rango=rangoReportes();
   if(panel&&rango&&!mesesPendientesReportes(rango).length){
     const filter=getRangeFilter(rango);
-    attachCorteProveedor(panel,rango,S.filter(s=>isVenta(s)&&filter(s)));
+    attachCorteProveedor(panel,rango,S.filter(s=>isVenta(s)&&filter(s)),repCatFilter);
   }
 }
 function nombreArchivoCorte(grupo,rango){
@@ -8346,6 +8538,98 @@ function descargarCSVCorte(grupo,rango){
   const a=document.createElement('a');
   a.href=url; a.download=nombreArchivoCorte(grupo,rango)+'.csv'; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+// Descarga con el mismo formato del corte: BOM, separador ; y antepone ' a lo
+// que Excel leeria como formula.
+function repBajarCSV(rows,nombre){
+  const csv='﻿'+rows.map(r=>r.map(v=>{
+    const t=String(v==null?'':v);
+    return '"'+(/^\s*[=+@-]/.test(t)&&Number.isNaN(Number(t))?"'":'')+t.replace(/"/g,'""')+'"';
+  }).join(';')).join('\n');
+  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  const a=document.createElement('a');
+  a.href=url; a.download=nombre+'.csv'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+// Unidades ingresadas por proveedor en el periodo, desde la Bitacora. Devuelve
+// null si la bitacora no esta cargada o no alcanza el inicio del periodo: un
+// cero ahi se leeria como "no compro nada".
+function comprasPorProveedor(rango){
+  if(typeof BIT==='undefined'||!bitCargado)return null;
+  if(!bitDesde||bitDesde>rango.desde)return null;
+  const m=new Map();
+  for(const b of BIT){
+    if(!b||b.evento!=='ingreso_mercaderia')continue;
+    const d=String(b.fecha||'').slice(0,10);
+    if(d<rango.desde||d>rango.hasta)continue;
+    const clave=repClaveProveedor(b.proveedor); if(!clave)continue;
+    const uds=(b.lineas||[]).reduce((a,l)=>a+(+l.recibido||0),0);
+    const fila=m.get(clave)||{uds:0,docs:0,nombre:String(b.proveedor||'').trim()};
+    fila.uds+=uds; fila.docs++; m.set(clave,fila);
+  }
+  return m;
+}
+function descargarCSVRanking(lista,rango,compras,catFiltro){
+  const cab=['Proveedor','Items','Unidades vendidas','Venta bruta','Descuento','Venta neta','% del periodo'];
+  if(compras)cab.push('Unidades ingresadas','Documentos de ingreso');
+  const total=lista.reduce((a,g)=>a+g.neto,0);
+  const rows=[cab];
+  lista.forEach(g=>{
+    const r=[g.nombre,g.resumen.length,g.unidades,(g.bruto/100).toFixed(2),(g.descuento/100).toFixed(2),
+      (g.neto/100).toFixed(2),(total>0?(g.neto/total*100):0).toFixed(1)];
+    if(compras){const c=compras.get(g.clave);r.push(c?c.uds:'',c?c.docs:'');}
+    rows.push(r);
+  });
+  rows.push([]);
+  rows.push(['TOTAL','',lista.reduce((a,g)=>a+g.unidades,0),'','',(total/100).toFixed(2),'100.0']);
+  rows.push([]);
+  rows.push(['Periodo',rango.desde+' al '+rango.hasta]);
+  rows.push(['Categoria',catFiltro&&catFiltro!=='Todos'?catFiltro:'Todas']);
+  repBajarCSV(rows,'madriguera_ranking_proveedores_'+rango.desde+'_'+rango.hasta);
+}
+function descargarCSVCategoria(rango,cat){
+  const filter=getRangeFilter(rango);
+  const ventas=S.filter(s=>isVenta(s)&&filter(s));
+  const rows=[['Fecha','Hora','Mesa','Producto','ISBN/Codigo','Proveedor','Editorial','Categoria',
+    'Unidades','Precio unitario','Venta bruta','Descuento','Venta neta','Costo unitario','Metodo de pago','Cajero']];
+  let uds=0,bruto=0,desc=0,costo=0;
+  for(const s of ventas){
+    const its=s.items||[];
+    const brutos=its.map(i=>repCentavos((+i.price||0)*(+i.qty||0)));
+    const descs=descuentosCorte(s,brutos);
+    its.forEach((i,pos)=>{
+      if(cat!=='Todos'&&catDeItem(i)!==cat)return;
+      const inf=infoLibroItem(i);
+      const p=P.find(x=>x.id===i.productId||x.name===i.name);
+      const cu=(typeof i.cost==='number')?i.cost:((typeof p?.cost==='number')?p.cost:null);
+      rows.push([new Date(s.date).toLocaleDateString('es-EC'),String(s.date).slice(11,16),
+        s.tableName||'',i.name,inf.isbn,inf.proveedor,inf.editorial,catDeItem(i),
+        +i.qty||0,(+i.price||0).toFixed(2),(brutos[pos]/100).toFixed(2),(descs[pos]/100).toFixed(2),
+        ((brutos[pos]-descs[pos])/100).toFixed(2),cu===null?'':cu.toFixed(2),
+        s.paymentMethod||'',s.user||'']);
+      uds+=+i.qty||0; bruto+=brutos[pos]; desc+=descs[pos];
+      if(cu!==null)costo+=cu*(+i.qty||0);
+    });
+  }
+  if(rows.length===1)return alert('No hay ventas de esa categoria en el periodo seleccionado.');
+  rows.push([]);
+  rows.push(['TOTAL','','','','','','','',uds,'',(bruto/100).toFixed(2),(desc/100).toFixed(2),
+    ((bruto-desc)/100).toFixed(2),costo?costo.toFixed(2):'','','']);
+  rows.push([]);
+  rows.push(['Categoria',cat]);
+  rows.push(['Periodo',rango.desde+' al '+rango.hasta]);
+  rows.push(['Nota','El descuento de cada venta se reparte en proporcion al renglon.']);
+  repBajarCSV(rows,'madriguera_categoria_'+String(cat).replace(/[^a-zA-Z0-9]+/g,'_')+'_'+rango.desde+'_'+rango.hasta);
+}
+function descargarCSVTrabajo(modo,lista,rango){
+  const rows=[['Producto','Categoria','ISBN/Codigo','Proveedor','Unidades vendidas','Venta',
+    modo==='sincosto'?'Unidades con costo':'Estado']];
+  lista.forEach(i=>rows.push([i.name,i.cat,i.isbn,i.prov,i.qty,i.rev.toFixed(2),
+    modo==='sincosto'?i.costQty:'sin proveedor']));
+  rows.push([]);
+  rows.push(['Periodo',rango.desde+' al '+rango.hasta]);
+  repBajarCSV(rows,'madriguera_'+(modo==='sincosto'?'sin_costo':'sin_proveedor')+'_'+rango.desde+'_'+rango.hasta);
 }
 
 function fichaProducto(ventas,q){
@@ -8450,7 +8734,73 @@ function attachReportes(){
     a.click();URL.revokeObjectURL(url);
   });
   // CSV: detalle de libros vendidos con proveedor y editorial + resumen
-  mc.querySelector('#bexport-libros')?.addEventListener('click',()=>{
+  mc.querySelector('#bexport-libros')?.addEventListener('click',()=>csvLibrosProveedor());
+
+  // ── Reportes rapidos ───────────────────────────────────────────────────
+  mc.querySelectorAll('[data-rapido]').forEach(el=>el.addEventListener('click',()=>{
+    const acc=el.dataset.rapido, rango=rangoReportes();
+    if(acc==='limpiar'){ repCatFilter='Todos'; repVistaRapida=''; repVerTodo=false; return render(); }
+    if(acc==='vertodo'){ repVerTodo=true; return render(); }
+    if(acc==='sincosto'||acc==='sinproveedor'){
+      repVistaRapida=repVistaRapida===acc?'':acc; return render();
+    }
+    if(!rango)return;
+    if(acc==='topcat'){
+      const filter=getRangeFilter(rango);
+      const m={};
+      S.filter(s=>isVenta(s)&&filter(s)).forEach(s=>(s.items||[]).forEach(i=>{
+        const c=catDeItem(i); m[c]=(m[c]||0)+(+i.price||0)*(+i.qty||0);
+      }));
+      const top=Object.entries(m).sort((a,b)=>b[1]-a[1])[0];
+      if(!top)return alert('Sin ventas en el período seleccionado.');
+      repCatFilter=top[0]; repVistaRapida=''; return render();
+    }
+    if(acc==='topprov'){
+      const filter=getRangeFilter(rango);
+      const {grupos}=mapaProveedores(S.filter(s=>isVenta(s)&&filter(s)),repCatFilter);
+      const top=[...grupos.values()].sort((a,b)=>b.neto-a.neto)[0];
+      if(!top)return alert('Sin ventas con proveedor identificado en este período.\n\nUsa «Sin proveedor» para ver qué productos hay que completar.');
+      repProvSel=top.clave; repProvQ=''; repVistaRapida='';
+      render();
+      setTimeout(()=>document.getElementById('rep-proveedor')?.scrollIntoView({behavior:'smooth',block:'start'}),80);
+      return;
+    }
+  }));
+  mc.querySelector('#bexport-cat')?.addEventListener('click',()=>{
+    const rango=rangoReportes();
+    if(rango)descargarCSVCategoria(rango,repCatFilter);
+  });
+  mc.querySelector('#bcargar-cmp')?.addEventListener('click',el=>{
+    const rango=rangoReportes();
+    if(!rango)return;
+    const b=mc.querySelector('#bcargar-cmp');
+    if(b){ b.disabled=true; b.textContent='Cargando…'; }
+    cargarComparacion(rango);
+  });
+  mc.querySelector('#bexport-trabajo')?.addEventListener('click',()=>{
+    const rango=rangoReportes();
+    if(!rango||!repVistaRapida)return;
+    const filter=getRangeFilter(rango);
+    const imap={};
+    S.filter(s=>isVenta(s)&&filter(s)).forEach(s=>(s.items||[]).forEach(i=>{
+      const k=i.name;
+      if(!imap[k])imap[k]={name:i.name,qty:0,rev:0,cat:'',cost:0,costQty:0,isbn:'',prov:''};
+      const it=imap[k];
+      it.qty+=+i.qty||0; it.rev+=(+i.price||0)*(+i.qty||0); it.cat=catDeItem(i);
+      const p=P.find(x=>x.id===i.productId||x.name===i.name);
+      const cu=(typeof i.cost==='number')?i.cost:((typeof p?.cost==='number')?p.cost:null);
+      if(cu!==null)it.costQty+=+i.qty||0;
+      if(!it.isbn)it.isbn=i.isbn||p?.code||'';
+      if(!it.prov)it.prov=infoLibroItem(i).proveedor;
+    }));
+    const todos=Object.values(imap).sort((a,b)=>b.rev-a.rev);
+    const lista=repVistaRapida==='sincosto'?todos.filter(i=>i.costQty<i.qty):todos.filter(i=>!repClaveProveedor(i.prov));
+    descargarCSVTrabajo(repVistaRapida,lista,rango);
+  });
+}
+
+function csvLibrosProveedor(){
+  {
     const filter=getRangeFilter();
     const ventas=S.filter(s=>isVenta(s)&&filter(s));
     const rows=[['Fecha','Hora','Título','ISBN/Código','Editorial','Proveedor','Cantidad','Precio Unit.','Total','Cajero']];
@@ -8481,7 +8831,7 @@ function attachReportes(){
     const periodo=repPeriodo==='custom'?`${repFechaDesde}_${repFechaHasta}`:repPeriodo;
     a.download=`madriguera_libros_proveedor_${periodo}_${localISO().slice(0,10)}.csv`;
     a.click();URL.revokeObjectURL(url);
-  });
+  }
 }
 
 // ── FACTURAS ─────────────────────────────────────────────────
