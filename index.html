@@ -991,6 +991,7 @@ const BIT_ETIQUETAS={
   cierre_caja:'Cierre de caja',
   cierre_caja_sin_conteo:'CIERRE DE CAJA SIN CONTEO',
   accion_admin:'Accion de administracion',
+  item_anulado:'ITEM ANULADO EN MESA',
   producto_eliminado:'PRODUCTO ELIMINADO',
   precios_actualizados:'Actualización de precios por lista del proveedor',
   inventario_inicial:'Inventario inicial: conteo físico aplicado al POS',
@@ -1173,9 +1174,9 @@ function attachBitacora(){
   if(ee) ee.addEventListener('change',()=>{ bitEvento=ee.value; render(); });
   const cs=mc.querySelector('#bit-csv');
   if(cs) cs.addEventListener('click',()=>{
-    const rows=[['Fecha','Evento','Accion','Mesa','Productos','Opero (cuenta)','Turno','Autorizo','Motivo','Correo del intento']];
+    const rows=[['Fecha','Evento','Accion','Mesa','Productos','Valor','Opero (cuenta)','Turno','Autorizo','Motivo','Correo del intento']];
     bitFiltrada().forEach(b=>{const d=detalleDelRegistro(b)||{};
-      rows.push([b.fecha||'',BIT_ETIQUETAS[b.evento]||b.evento||'',b.accion||'',d.mesa||'',d.texto||'',b.usuario||'',b.turno||'',b.autorizadoPor||'',b.motivo||'',b.correoIntento||'']);});
+      rows.push([b.fecha||'',BIT_ETIQUETAS[b.evento]||b.evento||'',b.accion||'',d.mesa||b.mesa||'',d.texto||b.producto||'',(typeof b.valor==='number')?b.valor.toFixed(2):'',b.usuario||'',b.turno||'',b.autorizadoPor||'',b.motivo||'',b.correoIntento||'']);});
     const csv='\uFEFF'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\n');
     const a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
@@ -5247,8 +5248,65 @@ function avisoSinCierre(){
 //  pantalla, el cierre, el historial y la reconstruccion.
 // ═══════════════════════════════════════════════════════════════
 const CJ_TOL=1.00;   // diferencia (USD) a partir de la cual la explicacion es obligatoria
-let cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false};
+let cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false,lotes:{},lotesIni:null,obsConc:''};
 const _r2=n=>Math.round((+n||0)*100)/100;
+// ── CIERRE DE LOTE: conciliacion de los medios que no son efectivo ──
+// 23-nov-2026. El arqueo solo cubria el efectivo. Una venta cobrada en efectivo
+// y registrada como transferencia sale del efectivo esperado, asi que la caja
+// cuadra igual con el dinero ya sustraido, y nadie verifica jamas que el cobro
+// haya ingresado. Ahora, al cerrar el turno, se cierra el lote del datafono y se
+// escribe el total de cada medio tal como lo entrega el banco: la diferencia
+// queda calculada, explicada y guardada dentro del cierre y en la bitacora.
+const CJ_CONC_TOL=0.01;   // diferencia (USD) tolerada en un lote
+let _cjUltPorMetodo={};   // porMetodo del ultimo cuadre dibujado
+function cjConciliacion(porMetodo){
+  const pm=porMetodo||{};
+  return PAY.filter(m=>m!=='Efectivo').map(m=>({metodo:m,pos:_r2(+pm[m]||0)}))
+    .filter(x=>x.pos>0.004)
+    .map(x=>{
+      const raw=(cjD.lotes&&cjD.lotes[x.metodo]!==undefined)?String(cjD.lotes[x.metodo]).trim():'';
+      const n=raw===''?NaN:_cjNum(raw);
+      const vacio=(raw===''||isNaN(n));
+      const ini=(cjD.lotesIni&&cjD.lotesIni[x.metodo]!==undefined)?String(cjD.lotesIni[x.metodo]).trim():'';
+      const ni=ini===''?NaN:_cjNum(ini);
+      const loteIni=isNaN(ni)?null:_r2(ni);
+      return {metodo:x.metodo,pos:x.pos,lote:vacio?null:_r2(n),dif:vacio?null:_r2(n-x.pos),vacio,
+              loteIni, cambio:(!vacio&&loteIni!==null&&Math.abs(loteIni-_r2(n))>0.004)};
+    });
+}
+function cjConcDescuadres(f){ return f.filter(x=>!x.vacio&&Math.abs(x.dif)>CJ_CONC_TOL); }
+// Paso 3: se escribe el lote SIN ver lo que el POS registro.
+function cjConcCiegoHTML(porMetodo){
+  const f=cjConciliacion(porMetodo);
+  if(!f.length) return '';
+  return `<div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px">
+    <div style="font-weight:700;font-size:12px;margin-bottom:4px">Cierre de lote · otros medios de pago</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:9px">Cierra el lote del datáfono y reúne los comprobantes de transferencia. Escribe el total de cada medio tal como lo entrega el banco. Igual que con el efectivo, <b>no verás lo que registró el POS hasta guardar</b>.</div>
+    ${f.map((x,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:.5px solid var(--border)">
+      <div style="flex:1;min-width:0;font-size:12px"><b>${esc(x.metodo)}</b></div>
+      <input id="cj-loteC-${i}" data-cjlote="${esc(x.metodo)}" type="number" step="0.01" min="0" value="${x.vacio?'':x.lote}" placeholder="Total del lote" style="width:132px;padding:6px 8px;font-size:12px;text-align:right">
+    </div>`).join('')}
+    <div style="font-size:11px;color:var(--text3);margin-top:8px">Si un medio no se puede conciliar ahora, déjalo en blanco: queda como pendiente y se avisa en Inicio.</div>
+  </div>`;
+}
+function cjConcHTML(porMetodo){
+  const f=cjConciliacion(porMetodo);
+  if(!f.length) return '';
+  const desc=cjConcDescuadres(f), pend=f.filter(x=>x.vacio).length;
+  return `<div style="background:var(--bg3);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px">
+    <div style="font-weight:700;font-size:12px;margin-bottom:4px">Cierre de lote · otros medios de pago</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:9px">Cierra el lote del datáfono y revisa los comprobantes de transferencia. Escribe el total de cada medio tal como lo entrega el banco: el sistema calcula la diferencia.</div>
+    ${f.map((x,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:.5px solid var(--border)">
+      <div style="flex:1;min-width:0;font-size:12px"><b>${esc(x.metodo)}</b><div style="font-size:10.5px;color:var(--text3)">POS ${fmt(x.pos)}</div></div>
+      <input id="cj-lote-${i}" data-cjlote="${esc(x.metodo)}" data-cjpos="${x.pos}" data-cjdif="cj-dif-${i}" type="number" step="0.01" min="0" value="${x.vacio?'':x.lote}" placeholder="Total del lote" style="width:118px;padding:6px 8px;font-size:12px;text-align:right">
+      <div id="cj-dif-${i}" style="width:82px;text-align:right;font-size:12px;font-weight:700;color:${x.vacio?'var(--text3)':(Math.abs(x.dif)<=CJ_CONC_TOL?'var(--grn)':'var(--red)')}">${x.vacio?'—':(x.dif>0?'+':'')+fmt(x.dif)}</div>
+    </div>`).join('')}
+    ${desc.length?`<div class="fg" style="margin:10px 0 0"><label>Explicación de la diferencia <b style="color:var(--red)">(obligatoria)</b></label>
+      <input id="cj-obsconc" value="${esc(cjD.obsConc||'')}" placeholder="¿Por qué el lote no coincide con el POS?"></div>`:''}
+    ${f.filter(x=>x.cambio).length?`<div style="font-size:11px;color:var(--amb);margin-top:8px">Primer lote registrado: ${f.filter(x=>x.cambio).map(x=>esc(x.metodo)+' '+fmt(x.loteIni)).join(' · ')} (queda guardado en el cierre).</div>`:''}
+    ${pend?`<div style="font-size:11px;color:var(--amb);margin-top:8px">${pend} medio(s) sin conciliar. Se puede cerrar el turno, pero queda registrado como pendiente y se avisa en Inicio.</div>`:''}
+  </div>`;
+}
 const _cjNum=v=>{ const s=String(v??'').trim().replace(',','.'); if(s==='') return NaN; const n=parseFloat(s); return isFinite(n)?_r2(n):NaN; };
 function cjAperturas(){ return S.filter(x=>x&&x.esApertura&&x.v===2&&x.date).sort((a,b)=>a.date.localeCompare(b.date)); }
 function cjCierres(){ return S.filter(x=>x&&x.esCierre&&x.date).sort((a,b)=>a.date.localeCompare(b.date)); }
@@ -5387,6 +5445,7 @@ function rCuadre(){
   const est=estadoCaja();
   if(est.e==='cerrada') return rCjApertura();
   const c=cjCalcular(est);
+  _cjUltPorMetodo=c.porMetodo;
   const pend=est.e==='pendiente';
   const cab = pend
     ? `<div style="background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);padding:11px 13px;border-radius:var(--rs);font-size:12px;line-height:1.5;margin-bottom:12px">
@@ -5413,6 +5472,7 @@ function rCuadre(){
       ${cjDenomHTML()}
       <div class="fg" style="margin-bottom:12px"><label>Efectivo contado ($)</label>
         <input id="cj-conteo" type="number" step="0.01" min="0" value="${esc(cjD.conteo)}" placeholder="Total contado" style="font-size:16px;font-weight:700"></div>
+      ${cjConcCiegoHTML(c.porMetodo)}
       <button class="btn btn-acc btn-full" style="padding:10px" id="cj-ver">Ver resultado →</button>
       ${pend&&MI_ROL==='admin'?`<button class="btn btn-g btn-full btn-sm" style="margin-top:10px" id="cj-sinconteo">Cerrar sin conteo (solo administración, queda en la bitácora)</button>`:''}`;
   } else {
@@ -5444,7 +5504,8 @@ function rCuadre(){
       <div style="display:flex;justify-content:space-between;padding:11px 13px;border-radius:var(--rs);${bg};border:1px solid;font-weight:700;font-size:14px;margin-bottom:12px">
         <span>${ok?'Cuadra':dif>0?'Sobrante':'Faltante'}</span><span style="color:${col}">${dif>0?'+':''}${fmt(dif)}</span></div>
       ${c.anulPrevias.length?`<div style="background:var(--abg);border:1px solid var(--abrd);color:var(--amb);padding:9px 11px;border-radius:var(--rs);font-size:11.5px;margin-bottom:12px">Durante este turno se anularon ventas en efectivo de turnos ya cerrados por ${fmt(c.anulPrevias.reduce((a,x)=>a+efectivoDe(x),0))}. Si devolviste ese dinero de la caja, explica la diferencia con eso.</div>`:''}
-      ${otros.length?`<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Otros cobros del turno (para cuadrar con el datáfono y el banco): ${otros.map(([m,t])=>esc(m)+' '+fmt(t)).join(' · ')}</div>`:''}
+      ${cjConcHTML(c.porMetodo)}
+      ${(()=>{const otr=otros.filter(([m])=>PAY.indexOf(m)<0);return otr.length?`<div style="font-size:11px;color:var(--text3);margin-bottom:12px">Cobros que no entran a este cuadre (el dinero se recibió antes): ${otr.map(([m,t])=>esc(m)+' '+fmt(t)).join(' · ')}</div>`:'';})()}
       ${cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo?`<div style="font-size:11px;color:var(--amb);margin-bottom:10px">Primer conteo: ${fmt(cjD.conteoInicial)} (queda registrado).</div>`:''}
       <div class="fgrid">
         <div class="fg"><label>Retiro / depósito ($)</label><input id="cj-retiro" type="number" step="0.01" min="0" value="${esc(cjD.retiro)}" placeholder="0.00"></div>
@@ -6584,6 +6645,27 @@ function attachCuadre(mc){
     if(distinto!==!!mc.querySelector('#cj-obs-ap')) render();
   });
   mc.querySelector('#cj-det')?.addEventListener('click',e=>{e.preventDefault();cjD.verDetalle=!cjD.verDetalle;render();});
+  // Lote por medio de pago: la diferencia se actualiza en la celda, sin
+  // redibujar (redibujar en cada tecla se comia el clic en «Confirmar cierre»).
+  mc.querySelectorAll('[data-cjlote]').forEach(el=>{
+    el.addEventListener('input',e=>{
+      if(!cjD.lotes) cjD.lotes={};
+      cjD.lotes[el.dataset.cjlote]=e.target.value;
+      const cel=document.getElementById(el.dataset.cjdif); if(!cel) return;
+      const pos=+el.dataset.cjpos||0, raw=String(e.target.value).trim(), n=raw===''?NaN:_cjNum(raw);
+      if(raw===''||isNaN(n)){ cel.textContent='\u2014'; cel.style.color='var(--text3)'; return; }
+      const d=_r2(n-pos);
+      cel.textContent=(d>0?'+':'')+fmt(d);
+      cel.style.color=Math.abs(d)<=CJ_CONC_TOL?'var(--grn)':'var(--red)';
+    });
+    // Al salir del campo solo se redibuja si aparece o desaparece la explicacion
+    el.addEventListener('change',()=>{
+      if(cjD.fase!=='resultado') return;
+      const hay=cjConcDescuadres(cjConciliacion(_cjUltPorMetodo)).length>0;
+      if(hay!==!!mc.querySelector('#cj-obsconc')) render();
+    });
+  });
+  mc.querySelector('#cj-obsconc')?.addEventListener('input',e=>{cjD.obsConc=e.target.value;});
   cjDenomAttach(mc);
   mc.querySelector('#cj-ver')?.addEventListener('click',()=>{
     const est=estadoCaja();
@@ -6591,6 +6673,7 @@ function attachCuadre(mc){
     const n=_cjNum(cjD.conteo);
     if(isNaN(n)||n<0){ alert('Escribe el total del efectivo que contaste (0 si la caja está vacía).'); return; }
     if(cjD.conteoInicial===null) cjD.conteoInicial=n;
+    if(!cjD.lotesIni) cjD.lotesIni=Object.assign({},cjD.lotes||{});
     cjD.fase='resultado'; render();
   });
   mc.querySelector('#cj-recontar')?.addEventListener('click',()=>{cjD.fase='contar';render();});
@@ -6622,7 +6705,7 @@ async function cjAbrir(){
       date:localISO(),user:turnoUser,userAuth:authUser(),total:0,closed:false};
     await saveVenta(ap);
     bitacora('apertura_caja',{accion:'Abrio la caja con '+fmt(f)+(Math.abs(dif)>0.005?' (difiere '+fmt(dif)+' del ultimo cierre)':''),monto:f,diferencia:dif,obs:ap.obs});
-    cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false};
+    cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false,lotes:{},lotesIni:null,obsConc:''};
     render();
   } finally { _cjOcupado=false; }
 }
@@ -6636,6 +6719,7 @@ async function cjCerrar(sinConteo){
   if(isNaN(fondo)) fondo=0;
   const esperado=_r2(fondo+c.efV+c.efI-c.efG);
   let conteo=null, dif=null, retiro=0, obs=(cjD.obs||'').trim(), autor=null, motivo='';
+  let conc=null, concObs='';
   if(sinConteo){
     autor=await pedirAutorizacionAdmin('Cerrar la caja del '+est.dia+' sin conteo');
     if(!autor) return;
@@ -6649,6 +6733,14 @@ async function cjCerrar(sinConteo){
     const r=_cjNum(cjD.retiro); retiro=isNaN(r)?0:r;
     if(retiro>conteo+0.005){ alert('El retiro no puede ser mayor que el efectivo contado.'); return; }
     if(Math.abs(dif)>CJ_TOL&&obs.length<4){ alert('Hay una diferencia de '+fmt(dif)+'. Escribe en la observación por qué no cuadra.'); return; }
+    // Cierre de lote: la diferencia se explica antes de cerrar; lo que quede sin
+    // conciliar se guarda como pendiente y se avisa en Inicio.
+    conc=cjConciliacion(c.porMetodo); concObs=(cjD.obsConc||'').trim();
+    const _cDesc=cjConcDescuadres(conc), _cPend=conc.filter(x=>x.vacio);
+    if(_cDesc.length&&concObs.length<4){
+      alert('El lote no coincide con el POS en:\n\n'+_cDesc.map(x=>'\u2022 '+x.metodo+': POS '+fmt(x.pos)+', lote '+fmt(x.lote)+' ('+(x.dif>0?'+':'')+fmt(x.dif)+')').join('\n')+'\n\nEscribe la explicaci\u00f3n de la diferencia.');
+      return; }
+    if(_cPend.length&&!confirm('Quedan medios SIN CONCILIAR: '+_cPend.map(x=>x.metodo+' ('+fmt(x.pos)+')').join(', ')+'.\n\nEl cierre se guarda igual, pero queda constancia de que el lote no se cerr\u00f3 y se avisar\u00e1 en Inicio.\n\n\u00bfContinuar?')) return;
     if(!confirm('¿Confirmar el cierre?\n\nDebería haber: '+fmt(esperado)+'\nContado: '+fmt(conteo)+'\nDiferencia: '+(dif>0?'+':'')+fmt(dif)+'\nRetiro: '+fmt(retiro)+'\nQueda en caja: '+fmt(conteo-retiro))) return;
   }
   _cjOcupado=true;
@@ -6669,6 +6761,10 @@ async function cjCerrar(sinConteo){
       inicio:fondo,sueltos:0,conteo,conteoInicial:(cjD.conteoInicial!==null&&cjD.conteoInicial!==conteo)?cjD.conteoInicial:null,
       efectivoEsperado:c.efV,gastosEfectivo:c.efG,ingresosEfectivo:c.efI,nIngresosEf:c.ingresos.length,esperadoEnCaja:esperado,diferencia:dif,
       retiro,fondoSiguiente:sinConteo?null:_r2(conteo-retiro),
+      conciliacion:conc?conc.map(x=>({metodo:x.metodo,pos:x.pos,lote:x.lote,dif:x.dif,
+        loteInicial:x.cambio?x.loteIni:null})):null,
+      conciliacionObs:concObs||null,
+      conciliacionPendiente:conc?conc.filter(x=>x.vacio).map(x=>x.metodo):null,
       desglose:sinConteo?null:cjDesglose(),
       porMetodo:Object.fromEntries(Object.entries(c.porMetodo).map(([k,v])=>[k,_r2(v)])),
       ventasTotal:c.tot,nVentas:c.ventas.length,nGastosEf:c.gastos.length,ids:c.ids,
@@ -6676,8 +6772,10 @@ async function cjCerrar(sinConteo){
       abiertaPor:ap.user||'',responsable:turnoUser,userAuth:authUser(),obs,total:0,closed:false};
     await saveVenta(rec);
     bitacora(sinConteo?'cierre_caja_sin_conteo':'cierre_caja',{accion:sinConteo?('Cerro la caja del '+est.dia+' SIN conteo: '+motivo):('Cerro la caja: esperado '+fmt(esperado)+', contado '+fmt(conteo)+', diferencia '+fmt(dif)),
-      esperado,conteo,diferencia:dif,retiro,obs});
-    cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false};
+      esperado,conteo,diferencia:dif,retiro,obs,
+      lotes:conc?conc.map(x=>x.metodo+': POS '+fmt(x.pos)+' / lote '+(x.vacio?'SIN CONCILIAR':fmt(x.lote)+' (dif '+(x.dif>0?'+':'')+fmt(x.dif)+')')).join(' | '):'',
+      conciliacionObs:concObs||''});
+    cjD={fondo:null,fondoDia:null,conteo:'',conteoInicial:null,retiro:'',obs:'',fase:'contar',verDetalle:false,lotes:{},lotesIni:null,obsConc:''};
     render();
     if(!sinConteo) alert('✓ Caja cerrada. Diferencia: '+(dif>0?'+':'')+fmt(dif)+'\nQueda en caja: '+fmt(conteo-retiro));
   } finally { _cjOcupado=false; }
@@ -8079,12 +8177,12 @@ function rReportes(){
       </div>`).join('')}
     </div>`:''}
     ${cancels.length>0?`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--red);padding-left:14px">
-      <div style="font-weight:700;font-size:12px;margin-bottom:10px;color:var(--red)">⚠ Cancelaciones (${cancels.length})</div>
+      <div style="font-weight:700;font-size:12px;margin-bottom:10px;color:var(--red)">⚠ Cancelaciones (${cancels.length})${(()=>{const v=_r2(cancels.reduce((a,x)=>a+(+x.valor||0),0));return v>0?' · '+fmt(v):'';})()}</div>
       ${cancels.map(x=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--border);font-size:12px">
         <div style="min-width:0;flex:1"><span style="font-weight:600">${esc(x.prodName)}</span><span style="color:var(--text3);margin-left:8px">${esc(x.motivo)}</span></div>
         <div style="text-align:right;flex-shrink:0;margin-left:8px">
-          <div style="color:var(--red);font-weight:700">-${x.qty} uds</div>
-          <div style="font-size:10px;color:var(--text3)">${esc(x.mesa)} · ${new Date(x.date).toLocaleDateString('es-EC')} · ${esc(x.user||'')}</div>
+          <div style="color:var(--red);font-weight:700">-${x.qty} uds${+x.valor>0?' · '+fmt(+x.valor):''}</div>
+          <div style="font-size:10px;color:var(--text3)">${esc(x.mesa)} · ${new Date(x.date).toLocaleDateString('es-EC')} · ${esc(x.userAuth||x.user||'')}${x.comandado===true?' · <b style="color:var(--red)">ya comandado</b>':''}</div>
         </div>
       </div>`).join('')}
     </div>`:''}
@@ -12293,6 +12391,39 @@ function iniAlertas(){
   if(admin){
     try{ asistAlertas().forEach(a=>add(a.sev,a.txt,a.desc,'Ver',()=>irA('asistencia',()=>{asistTab=a.tipo==='solicitud'?'personal':a.tipo==='sin_ubicacion'?'config':'hoy';}),'asistencia')); }catch(e){}
   }
+  // ── 23-nov-2026: anulaciones de items y lotes sin conciliar ──────
+  // La fuga no esta en anular ni en cobrar con tarjeta: esta en que nadie lo
+  // mire el mismo dia. Las anulaciones de HOY se avisan siempre (tambien a la
+  // caja: saber que se ve es la mitad del control); el acumulado del mes y los
+  // lotes solo a administracion, que es quien decide si hay un patron.
+  try{
+    const _hoyAn=today(), _mesAn=_hoyAn.slice(0,7);
+    const _an=S.filter(x=>x&&x.esCancelacion&&x.date);
+    const _anH=_an.filter(x=>String(x.date).slice(0,10)===_hoyAn);
+    const _vH=_r2(_anH.reduce((a,x)=>a+(+x.valor||0),0));
+    const _cH=_anH.filter(x=>x.comandado===true).length;
+    if(_anH.length) add((_vH>=20||_anH.length>=5)?'alta':'media',
+      _anH.length+' ítem(s) anulado(s) hoy'+(_vH>0?' · '+fmt(_vH):''),
+      (_cH?_cH+' ya estaba(n) en cocina. ':'')+'Revise el motivo y la cuenta que lo anuló: '+
+      _anH.slice(0,3).map(x=>x.prodName+' ('+(x.userAuth||x.user||'')+')').join(', ')+(_anH.length>3?'…':''),
+      'Ver',()=>irA('reportes'),null);
+    if(admin){
+      const _anM=_an.filter(x=>String(x.date).slice(0,7)===_mesAn&&String(x.date).slice(0,10)!==_hoyAn);
+      const _vM=_r2(_anM.reduce((a,x)=>a+(+x.valor||0),0));
+      if(_vM>=30) add('media','Anulaciones de este mes por '+fmt(_vM),
+        _anM.length+' ítem(s) anulado(s) antes de hoy. Compare por persona y por motivo antes de que se vuelva costumbre.',
+        'Ver',()=>irA('reportes'),null);
+      const _cie=cjCierres().filter(c=>c&&String(c.date||'')>=_mesAn);
+      const _cDif=_cie.filter(c=>Array.isArray(c.conciliacion)&&c.conciliacion.some(x=>x&&x.dif!==null&&x.dif!==undefined&&Math.abs(+x.dif||0)>1));
+      if(_cDif.length) add('alta',_cDif.length+' cierre(s) con diferencia en el lote',
+        'El total del datáfono o de las transferencias no coincide con lo registrado en el POS. Una venta en efectivo anotada como transferencia aparece exactamente así.',
+        'Ver',()=>irA('caja',()=>{cajaTab='cierre';}),'caja');
+      const _cSin=_cie.filter(c=>Array.isArray(c.conciliacionPendiente)&&c.conciliacionPendiente.length);
+      if(_cSin.length) add('media',_cSin.length+' cierre(s) con el lote sin conciliar',
+        'Quedó sin registrar el total de: '+[...new Set(_cSin.flatMap(c=>c.conciliacionPendiente))].join(', ')+'. Sin ese dato no hay forma de detectar un cobro desviado.',
+        'Ver',()=>irA('caja',()=>{cajaTab='cierre';}),'caja');
+    }
+  }catch(e){}
   try{
     const largas=T.filter(t=>t.openedAt&&t.order&&t.order.length&&(Date.now()-new Date(t.openedAt).getTime())>60*60000);
     if(largas.length) add('baja',largas.length+' mesa(s) abierta(s) hace más de 1 hora',largas.slice(0,4).map(t=>t.name).join(', '),'Ver mesas',()=>irA('monitor'),'monitor');
@@ -12416,12 +12547,32 @@ let selectedCancelMotivo = '';
         ? (document.getElementById('cancel-obs').value.trim() || 'Otro')
         : selectedCancelMotivo;
       var lid=cancelModal.lid, item=cancelModal.item, table=cancelModal.table;
+      // ── CONTROL INTERNO (23-nov-2026) ──────────────────────────────
+      // Un item que YA salio a cocina y se anula es la via mas corta para
+      // servir sin cobrar. Antes este registro se firmaba con turnoUser (el
+      // selector de cajero, que se cambia en dos clics), no guardaba el valor
+      // y no entraba en la bitacora: no habia nada que revisar. Ahora lleva la
+      // cuenta real de Firebase, el precio y el importe, y queda en la
+      // bitacora, que nadie puede modificar ni borrar, ni la administracion.
+      // No se pide clave: con una sola persona en caja eso paralizaria el
+      // servicio. El control es la rendicion de cuentas, igual que en el resto
+      // del sistema, mas la alerta del mismo dia en Inicio.
+      var _comandado=(table.comandas||[]).some(function(cmd){
+        return (cmd.items||[]).some(function(ci){ return ci.lid===lid; }); });
+      var _precio=+item.price||0, _qtyAn=+item.qty||0, _valorAn=_r2(_precio*_qtyAn);
       cocinaAnular(table.id, lid, item, motivo);
       // Register cancellation
       var cancRec={id:'canc'+Date.now(), esCancelacion:true, prodName:item.name,
-        qty:item.qty, motivo:motivo, mesa:table.name,
-        date:localISO(), user:turnoUser, total:0, closed:false};
+        prodId:String(item.productId||''), variante:item.variant||null,
+        qty:item.qty, precio:_precio, valor:_valorAn, comandado:_comandado,
+        motivo:motivo, mesa:table.name,
+        date:localISO(), user:turnoUser, userAuth:authUser(), total:0, closed:false};
       S.push(cancRec);
+      bitacora('item_anulado',{
+        accion:'Anulo '+_qtyAn+' x "'+item.name+'" en '+table.name+' por '+fmt(_valorAn)+
+               (_comandado?' (YA COMANDADO a cocina)':' (antes de comandar)')+': '+motivo,
+        producto:item.name, productoId:String(item.productId||''), cantidad:_qtyAn,
+        precio:_precio, valor:_valorAn, comandado:_comandado, mesa:table.name, motivo:motivo});
       // Remove item from order
       table.order = table.order.filter(function(i){ return i.lid!==lid; });
       // Also remove from comandas record so it doesn't show as sent
